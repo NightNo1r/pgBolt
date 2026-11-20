@@ -13,25 +13,18 @@ internal sealed class FetchRecorder
     private long _failed;
     private long _sent;
 
-    public void Sent()
-    {
-        lock (_gate)
-        {
-            if (_active) { _sent++; }
-        }
-    }
-
     public void Begin()
     {
         lock (_gate) _active = true;
     }
 
-    public void Fetch(TimeSpan elapsed, int? jobs)
+    public void Fetch(TimeSpan elapsed, int? jobs, int sends)
     {
         lock (_gate)
         {
             if (!_active) { return; }
             _fetch.Record(elapsed.Ticks / TimeSpan.TicksPerMicrosecond);
+            _sent += sends;
             if (jobs is null) { _failed++; }
             else if (jobs == 0) { _empty++; }
         }

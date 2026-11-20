@@ -26,13 +26,22 @@ internal sealed class HostCluster : IAsyncDisposable
         {
             foreach (var name in ApplicationNames)
             {
+                // У хоста один диспетчер. Все попытки одного FetchAsync учитываются в окне его завершения.
+                var sends = 0;
                 var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
                 builder.Services.AddSingleton(ctx);
                 builder.Services.AddPgBolt(o => Configure(o, connectionString, 20, name, schema, mode));
                 builder.Services.AddPgBoltServer("load", s =>
                 {
                     s.Workers = 32;
-                    if (ctx.Fetches is { } fetches) { s.FetchMeasured = fetches.Fetch; }
+                    if (ctx.Fetches is { } fetches)
+                    {
+                        s.FetchMeasured = (elapsed, jobs) =>
+                        {
+                            fetches.Fetch(elapsed, jobs, sends);
+                            sends = 0;
+                        };
+                    }
                     if (ctx.Queues == QueueProfile.Limited)
                     {
                         s.Queue("default", q => q.ClusterMaxConcurrency = s.Workers);
@@ -47,7 +56,7 @@ internal sealed class HostCluster : IAsyncDisposable
                 if (ctx.Fetches is { } recorder)
                 {
                     var store = host.Services.GetRequiredService<Postgres.Storage.PgBoltStore>();
-                    store.DequeueExecuting = recorder.Sent;
+                    store.DequeueExecuting = () => sends++;
                     if (ctx.Queues == QueueProfile.Limited) { store.QueueLockMeasured = recorder.QueueLock; }
                 }
                 await host.StartAsync(ct);
