@@ -21,6 +21,14 @@ public sealed class OptionsParserTests
     }
 
     [Fact]
+    public void LimitedQueueOnlyForPartitions()
+    {
+        Assert.Null(OptionsParser.Parse(["partitions", "--queue-profile", "limited"]).Error);
+        Assert.NotNull(OptionsParser.Parse(["sustained", "--queue-profile", "limited"]).Error);
+        Assert.NotNull(OptionsParser.Parse(["partitions", "--queue-profile", "other"]).Error);
+    }
+
+    [Fact]
     public void Sustained_defaults()
     {
         var o = Ok("sustained");

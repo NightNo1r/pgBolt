@@ -47,6 +47,7 @@ internal static class OptionsParser
         ["--ramp-step-duration"] = [Scenario.Ramp],
         ["--ramp-max"] = [Scenario.Ramp],
         ["--partitions"] = [Scenario.Partitions],
+        ["--queue-profile"] = [Scenario.Partitions],
         ["--indexes"] = [Scenario.Partitions],
         ["--phase1"] = [Scenario.Vacuum],
         ["--hold-xmin"] = [Scenario.Vacuum],
@@ -101,6 +102,12 @@ internal static class OptionsParser
             Modes = ParseModes(values.GetValueOrDefault("--mode"), scenario, connection, bouncer),
             Connection = connection,
             BouncerConnection = bouncer,
+            Queues = values.GetValueOrDefault("--queue-profile") switch
+            {
+                null or "standard" => QueueProfile.Standard,
+                "limited" => QueueProfile.Limited,
+                var raw => throw new FormatException($"--queue-profile: ожидается standard|limited, получено {raw}."),
+            },
             PgProfile = values.GetValueOrDefault(PgProfileFlag) switch
             {
                 null or "bench" => PostgresProfile.Bench,

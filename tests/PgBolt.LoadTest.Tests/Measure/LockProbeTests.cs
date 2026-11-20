@@ -11,13 +11,21 @@ namespace PgBolt.LoadTest.Tests.Measure;
 [Collection("Load")]
 public sealed class LockProbeTests(PostgresFixture pg)
 {
-    [Fact]
-    public async Task Dequeue_locks_grow_with_partitions()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DequeueProbeTracksProductSql(bool generic)
     {
-        var (at15, at60) = await TotalsAt15And60Async(StatementClasses.Dequeue);
-
-        // Custom plan dequeue блокирует каждую партицию и её индексы: не меньше 4 отношений на партицию.
-        Assert.True(at60 - at15 >= 4 * 45, $"при 15 партициях {at15}, при 60 — {at60}");
+        var (at15, at60) = await TotalsAt15And60Async(StatementClasses.Dequeue, generic ? PlanKind.Generic : PlanKind.Custom);
+        // Та же проба нужна для парных прогонов с контрольной V002, где выдача открывает все партиции.
+        if (PgBoltMigrations.All.Any(m => m.Name == "read_jobs"))
+        {
+            Assert.InRange(at60, at15 - 2, at15 + 2);
+        }
+        else
+        {
+            Assert.True(at60 - at15 >= 45);
+        }
     }
 
     [Fact]
@@ -49,16 +57,20 @@ public sealed class LockProbeTests(PostgresFixture pg)
         Assert.Equal(0L, await cmd.ExecuteScalarAsync(ct));
     }
 
-    private async Task<(long At15, long At60)> TotalsAt15And60Async(string statement)
+    private async Task<(long At15, long At60)> TotalsAt15And60Async(string statement, PlanKind? plan = null)
     {
         var ct = TestContext.Current.CancellationToken;
         await using var db = await TestDb.CreateAsync(pg, ConnectionMode.Direct, partitionDaysAhead: 14);
         var s = Statement(db, statement);
         var probe = new LockProbe(db.ConnectionString);
 
-        var at15 = (await probe.MeasureAsync(s.Sql, s.Bind, ct)).Total;
+        var store = new PgBoltStore(db.DataSource, db.Schema, usePreparedStatements: false);
+        Task<LockCount> Measure() => statement == StatementClasses.Dequeue
+            ? probe.MeasureDequeueAsync(store, s.Sql, s.Bind, plan, ct)
+            : probe.MeasureAsync(s.Sql, s.Bind, ct);
+        var at15 = (await Measure()).Total;
         await new PartitionManager(db.Admin, db.Schema, 80, TimeSpan.FromSeconds(5)).EnsureAsync(59, ct);
-        var at60 = (await probe.MeasureAsync(s.Sql, s.Bind, ct)).Total;
+        var at60 = (await Measure()).Total;
         return (at15, at60);
     }
 

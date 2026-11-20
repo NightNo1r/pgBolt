@@ -70,6 +70,7 @@ internal static class ReportWriter
             ["rate", Invariant($"{options.Rate}/с")],
             ["Прогрев", Invariant($"{options.Warmup.TotalSeconds} с")],
             ["Окно замера", Invariant($"{options.Duration.TotalSeconds} с на комбинацию")],
+            ["--queue-profile", Kebab(options.Queues)],
             ["Ёмкость таблицы блокировок", Invariant($"{lockTableCapacity}")],
         ]);
 
@@ -95,6 +96,8 @@ internal static class ReportWriter
                 Kebab(r.Mode), Kebab(r.Indexes), Invariant($"{r.P}"), .. StatementCells(s.Key, s.Value),
                 Ms(s.Value.Stats?.MeanPlanTime), Ms(s.Value.Stats?.MeanExecTime),
             ]) ?? []));
+
+        FetchTable(md, results);
 
         Section(md, "Порог P");
         md.AppendLine("Наименьшее P матрицы, с которого режим и набор индексов нарушают SLO 1 или 2.").AppendLine();
@@ -126,9 +129,26 @@ internal static class ReportWriter
     /// <summary>Statement, план, блокировки вне fast-path и всего, измерены они или оценены.</summary>
     private static string[] StatementCells(string statement, StatementResult s) =>
     [
-        statement, s.Plan == PlanKind.Generic ? "generic" : "custom", Invariant($"{s.Locks.NonFastPath}"),
-        Invariant($"{s.Locks.Total}"), s.LowerBound ? "нижняя оценка" : "измерение",
+        statement, s.Locks is null ? NoData : s.Plan == PlanKind.Generic ? "generic" : "custom",
+        s.Locks?.NonFastPath.ToString() ?? NoData, s.Locks?.Total.ToString() ?? NoData,
+        s.Locks is null ? NoData : s.LowerBound ? "нижняя оценка" : "измерение",
     ];
+
+    private static void FetchTable(StringBuilder md, IEnumerable<CombinationResult> results)
+    {
+        Section(md, "Выдача задач");
+        Table(md, ["Режим", "P", "Индексы", "Вызовов", "Пустых", "С задачами", "Ошибок", "p99 вызова, мс",
+            "Замеров advisory lock", "p99 lock, мс", "Отправок в БД", "Отправок/вызов"], results.Select(r =>
+        {
+            var f = r.Fetches;
+            return new[] { Kebab(r.Mode), Invariant($"{r.P}"), Kebab(r.Indexes),
+                f?.Duration.Count.ToString() ?? NoData, f?.Empty.ToString() ?? NoData,
+                (f?.Duration.Count - f?.Empty - f?.Failed)?.ToString() ?? NoData, f?.Failed.ToString() ?? NoData,
+                Ms(f?.Duration.Count > 0 ? f.Duration.P99Ms : null), f?.QueueLock.Count.ToString() ?? NoData,
+                Ms(f?.QueueLock.Count > 0 ? f.QueueLock.P99Ms : null), f?.Sent.ToString() ?? NoData,
+                f?.Duration.Count > 0 ? Invariant($"{(double)f.Sent / f.Duration.Count:F3}") : NoData };
+        }));
+    }
 
     private static string Kebab<T>(T value) where T : Enum =>
         Regex.Replace(value.ToString(), "(?<!^)([A-Z])", "-$1").ToLowerInvariant();
@@ -265,9 +285,11 @@ internal static class ReportWriter
 
         if (m.Combination?.Statements is { } probed)
         {
+            FetchTable(md, [m.Combination]);
+            md.AppendLine("Время read_jobs включено во внешний dequeue. Счётчик отправок включает повторные ExecuteReaderAsync и исключает подготовку соединения. Сервер исполняет queue_lock и dequeue_limited в одном пакете.").AppendLine();
             Section(md, "Блокировки statement'ов");
             Table(md, ["Statement", "План", "Вне fast-path", "Всего", "Оценка"],
-                probed.Select(p => StatementCells(p.Key, p.Value)));
+                probed.Where(p => p.Value.Locks is not null).Select(p => StatementCells(p.Key, p.Value)));
         }
 
         var s = d.Samples;

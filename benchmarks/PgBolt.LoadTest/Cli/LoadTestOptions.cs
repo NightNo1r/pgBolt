@@ -1,5 +1,7 @@
 namespace PgBolt.LoadTest.Cli;
 
+internal enum QueueProfile { Standard, Limited }
+
 internal enum Scenario { Sustained, Ramp, Partitions, Vacuum }
 
 /// <summary>Способ подключения нагрузки к БД; <c>*Prepared</c> — с авто-подготовкой statement'ов Npgsql.</summary>
@@ -21,6 +23,7 @@ internal sealed record LoadTestOptions
     public required IReadOnlyList<LoadMode> Modes { get; init; }
     public string? Connection { get; init; }
     public string? BouncerConnection { get; init; }
+    public QueueProfile Queues { get; init; }
     public PostgresProfile PgProfile { get; init; } = PostgresProfile.Bench;
     public string Out { get; init; } = "benchmarks/PgBolt.LoadTest/results";
     public int Rate { get; init; } = 10_000;

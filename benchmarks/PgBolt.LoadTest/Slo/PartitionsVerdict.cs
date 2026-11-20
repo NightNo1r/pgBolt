@@ -8,7 +8,7 @@ namespace PgBolt.LoadTest.Slo;
 /// и блокировки до нагрузки. <see cref="LowerBound"/> — блокировки generic plan вычислены как нижняя оценка, а не
 /// измерены; <see cref="Plan"/> — план в режимах <c>*-prepared</c>, <c>null</c> — statement не подготавливается.
 /// </summary>
-internal sealed record StatementResult(StatementClassStats? Stats, LockCount Locks, bool LowerBound, PlanKind? Plan);
+internal sealed record StatementResult(StatementClassStats? Stats, LockCount? Locks, bool LowerBound, PlanKind? Plan);
 
 /// <summary>
 /// Итог одной комбинации матрицы <c>partitions</c>: вердикты SLO 1 и 2, был ли упор в CPU стенда (комбинация
@@ -20,7 +20,7 @@ internal sealed record StatementResult(StatementClassStats? Stats, LockCount Loc
 internal sealed record CombinationResult(int P, IndexSet Indexes, LoadMode Mode, Verdict Slo1, Verdict Slo2,
     bool CpuBound, double? ImmediateP99Ms = null, IReadOnlyDictionary<string, StatementResult>? Statements = null,
     int? LockManagerWaitsMax = null, double? LockManagerWaitsMean = null, long? StorageErrors = null,
-    string? Failure = null)
+    string? Failure = null, FetchSummary? Fetches = null)
 {
     /// <summary>SLO 1 или 2 нарушен; «нет данных» нарушением не считается.</summary>
     public bool Violated => Slo1 == Verdict.Fail || Slo2 == Verdict.Fail;

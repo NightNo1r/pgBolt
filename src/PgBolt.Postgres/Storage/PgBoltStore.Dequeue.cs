@@ -52,7 +52,7 @@ public sealed partial class PgBoltStore
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(max);
         return QueryAsync<IReadOnlyList<LeasedJob>>(DequeueSql, ps => BindDequeue(ps, queue, max, serverId, lease),
-            async (r, c) => await r.ReadAllAsync(static r => ReadLeasedJob(r, 0), c), ct);
+            async (r, c) => await r.ReadAllAsync(static r => ReadLeasedJob(r, 0), c), ct, DequeueExecuting);
     }
 
     internal static void BindDequeue(NpgsqlParameterCollection ps, string queue, int max, Guid serverId, TimeSpan lease)

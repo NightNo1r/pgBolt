@@ -71,7 +71,11 @@ dotnet run -c Release --project benchmarks/PgBolt.LoadTest -- partitions
 dotnet run -c Release --project benchmarks/PgBolt.LoadTest -- partitions --mode all --partitions 15,20 --indexes current --rate 500 --warmup 5s --duration 20s --out /tmp/pgbolt-load
 ```
 
-Сбой одной комбинации не обрывает матрицу: она получает строку «Сбой» в сводке, прогон продолжается и в конце возвращает код 2. Режимы `*-prepared` определяют тип плана каждого statement'а (custom или generic); блокировки generic plan вычисляются как нижняя оценка. `bouncer-prepared` требует `max_prepared_statements > 0` у PgBouncer. У своего контейнера он всегда 200. Внешний PgBouncer стенд не проверяет (канала к админ-консоли нет) и только пишет в отчёт предупреждение «не проверен»; если там значение 0, комбинации `bouncer-prepared` завершатся сбоем `prepared statement "…" does not exist` и прогон вернёт код 2.
+Сбой одной комбинации не обрывает матрицу: она получает строку «Сбой» в сводке, прогон продолжается и в конце возвращает код 2. Режимы `*-prepared` определяют тип плана каждого statement'а (custom или generic); для ack и enqueue блокировки generic plan оцениваются снизу. `bouncer-prepared` требует `max_prepared_statements > 0` у PgBouncer. У своего контейнера он всегда 200. Внешний PgBouncer стенд не проверяет (канала к админ-консоли нет) и только пишет в отчёт предупреждение «не проверен»; если там значение 0, комбинации `bouncer-prepared` завершатся сбоем `prepared statement "…" does not exist` и прогон вернёт код 2.
+
+Для проверки лимитированной выдачи добавьте `--queue-profile limited`. Все задачи попадают в `default`, два хоста по 32 воркера делят кластерный лимит 32. По умолчанию профиль `standard` сохраняет очереди `default` и `critical` без лимита.
+
+Блокировки dequeue стенд измеряет при выдаче 32 задач одних суток и до отката транзакции. В подготовленных режимах измеряется повторное выполнение выбранного плана. Отчёт объединяет длительности FetchAsync обоих хостов за окно замера и показывает p99, пустые, непустые и неуспешные вызовы, число отправок в БД и серверный p99 ожидания advisory lock. Для вложенного SELECT нужен `pg_stat_statements.track=all`. Стенд включает его в своём контейнере. Время `read_jobs` уже входит во время внешней выдачи.
 
 ### vacuum
 
@@ -115,6 +119,7 @@ dotnet run -c Release --project benchmarks/PgBolt.LoadTest -- sustained --connec
 | `--hold-xmin <t>` | `vacuum` | 5 мин | Фаза удержания xmin |
 | `--phase3 <t>` | `vacuum` | 10 мин | Фаза восстановления |
 | `--queue-reloptions "k=v,..."` | `vacuum` | — | `ALTER TABLE queue SET (...)` до прогона |
+| `--queue-profile <профиль>` | `partitions` | `standard` | `limited` для одной очереди с кластерным лимитом 32. |
 | `--pg-profile <профиль>` | `sustained`, `partitions`, `vacuum` | `bench` | Выберите `stock` для штатных настроек PostgreSQL или `bench` для `shared_buffers=1GB` и `max_wal_size=4GB`. Флаг применяется к контейнеру стенда. |
 | `--pg-setting "k=v,..."` | `sustained`, `vacuum` | — | Явные параметры контейнера PostgreSQL перекрывают параметры профиля. Вместе с `--connection` — ошибка. |
 

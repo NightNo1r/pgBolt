@@ -119,11 +119,32 @@ public sealed class SmokeTests : IDisposable
         Assert.InRange(code, 0, 1);
         var combinations = Directory.GetFiles(_out, "*-partitions-direct-p*-current.md");
         Assert.Equal(2, combinations.Length);
-        Assert.Matches(ExtraExecutionsCounted, await File.ReadAllTextAsync(combinations[0], ct));
+        var ordinary = await File.ReadAllTextAsync(combinations[0], ct);
+        Assert.Matches(ExtraExecutionsCounted, ordinary);
+        Assert.Matches(@"(?m)^\| dequeue \| [1-9]\d* \|", ordinary);
+        Assert.Matches(@"(?m)^\| direct \| \d+ \| current \| [1-9]\d* \| \d+ \| [1-9]\d* \| 0 \| [\d.]+ \| 0 \| нет данных \| [1-9]\d* \|", ordinary);
+        if (Postgres.Schema.PgBoltMigrations.All.Any(m => m.Name == "read_jobs"))
+        {
+            Assert.Matches(@"(?m)^\| read_jobs \| [1-9]\d* \|", ordinary);
+        }
         var summary = await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(_out, "*-partitions-summary.md")), ct);
         Assert.Matches(@"\| Ёмкость таблицы блокировок \| \d+ \|", summary);
         Assert.Matches(@"(?m)^\| direct \| current \| 15 \|", summary);
         Assert.Matches(@"(?m)^\| direct \| current \| 20 \|", summary);
+    }
+
+    [Fact]
+    public async Task LimitedStockUsesTimedLock()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var code = await Program.RunAsync(["partitions", "--mode", "bouncer", "--partitions", "15", "--indexes", "current",
+            "--pg-profile", "stock", "--queue-profile", "limited", "--rate", "500", "--warmup", "5s", "--duration", "20s",
+            "--out", _out], ct);
+        Assert.InRange(code, 0, 1);
+        var report = await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(_out, "*-p15-current.md")), ct);
+        Assert.Matches(@"(?m)^\| dequeue_limited \| [1-9]\d* \|", report);
+        Assert.Matches(@"(?m)^\| queue_lock \| [1-9]\d* \|", report);
+        Assert.Matches(@"(?m)^\| bouncer \| 15 \| current \| [1-9]\d* \| \d+ \| [1-9]\d* \| 0 \| [\d.]+ \| [1-9]\d* \| [\d.]+ \|", report);
     }
 
     [Fact]

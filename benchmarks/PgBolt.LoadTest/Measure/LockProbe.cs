@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Npgsql;
+using PgBolt.LoadTest.Cli;
 using PgBolt.LoadTest.Env;
 using PgBolt.Postgres.Storage;
 
@@ -14,8 +15,7 @@ internal enum PlanKind { Custom, Generic }
 /// <summary>
 /// Блокировки statement'ов горячего пути без нагрузки, на отдельном прямом соединении. Планировщик блокирует
 /// отношения, оставшиеся после отсечения партиций, и их индексы до конца транзакции, поэтому <c>EXPLAIN</c> в
-/// транзакции показывает блокировки планирования, не выполняя statement. Блокировки исполнителя (маршрутизация
-/// вставки в партицию) в счёт не входят.
+/// транзакции показывает блокировки планирования ack/enqueue. Dequeue исполняется с реальной пачкой до отката.
 /// </summary>
 internal sealed class LockProbe(string directConnectionString)
 {
@@ -28,6 +28,7 @@ internal sealed class LockProbe(string directConnectionString)
     public const string ConnectionPurpose = "locks";
 
     private const string PreparedName = "pgbolt_lock_probe";
+    private const string ProbeQueue = "pgbolt_lock_probe";
     private const int BatchSize = 32;
 
     private static readonly Regex NamedParameter = new(@"(?<![@\w])@(\w+)", RegexOptions.CultureInvariant);
@@ -37,7 +38,7 @@ internal sealed class LockProbe(string directConnectionString)
     /// 32 задачи с id текущих суток. Параметры связывает продуктовый код.
     /// </summary>
     public static IReadOnlyList<(string Statement, string Sql, Action<NpgsqlParameterCollection> Bind)> HotPath(
-        PgBoltStore store)
+        PgBoltStore store, QueueProfile queues = QueueProfile.Standard)
     {
         var server = Guid.CreateVersion7();
         var ids = Enumerable.Range(0, BatchSize).Select(_ => Guid.CreateVersion7()).ToArray();
@@ -46,8 +47,9 @@ internal sealed class LockProbe(string directConnectionString)
             [.. Enumerable.Repeat("{}", BatchSize)], new DateTime?[BatchSize], new string?[BatchSize]);
         return
         [
-            (StatementClasses.Dequeue, store.DequeueSql,
-                ps => PgBoltStore.BindDequeue(ps, "default", BatchSize, server, TimeSpan.FromMinutes(1))),
+            (queues == QueueProfile.Limited ? StatementClasses.DequeueLimited : StatementClasses.Dequeue,
+                queues == QueueProfile.Limited ? store.DequeueLimitedSql : store.DequeueSql,
+                ps => PgBoltStore.BindDequeue(ps, ProbeQueue, BatchSize, server, TimeSpan.FromMinutes(1))),
             (StatementClasses.Ack, store.AckSql, ps => PgBoltStore.BindAck(ps, ids, leaseIds, server)),
             (StatementClasses.Enqueue, store.EnqueueSql, ps => PgBoltStore.BindEnqueue(ps, batch)),
         ];
@@ -68,6 +70,74 @@ internal sealed class LockProbe(string directConnectionString)
             await explain.ExecuteNonQueryAsync(ct);
         }
 
+        return await CountLocksAsync(conn, tx, ct);
+    }
+
+    // Определения читаются только при выполнении. Подготовка пачки на другом соединении сохраняет чистоту pg_locks.
+    public async Task<LockCount> MeasureDequeueAsync(PgBoltStore store, string sql, Action<NpgsqlParameterCollection> bind,
+        PlanKind? plan, CancellationToken ct)
+    {
+        var ids = Enumerable.Range(0, BatchSize).Select(_ => Guid.CreateVersion7()).ToArray();
+        var seed = new EnqueueBatch("load", ProbeQueue, 0, 3, null, null, TimeSpan.Zero, ids,
+            [.. Enumerable.Repeat("{}", BatchSize)], new DateTime?[BatchSize], new string?[BatchSize]);
+        await using var conn = await StandConnection.OpenAsync(directConnectionString, ConnectionPurpose, ct);
+        await store.EnqueueAsync(seed, null, ct);
+        try
+        {
+            if (sql == store.DequeueLimitedSql)
+            {
+                await store.SetConcurrencyOverrideAsync(ProbeQueue, BatchSize, null, ct);
+            }
+            await using var read = new NpgsqlCommand(sql, conn);
+            bind(read.Parameters);
+            if (plan.HasValue)
+            {
+                await read.PrepareAsync(ct);
+            }
+
+            // Первое выполнение строит план. Повтор в новой транзакции показывает блокировки готового плана.
+            for (var pass = 0; ; pass++)
+            {
+                await using var tx = await conn.BeginTransactionAsync(ct);
+                if (plan.HasValue)
+                {
+                    await ExecuteAsync(conn, plan == PlanKind.Generic ? "SET LOCAL plan_cache_mode = force_generic_plan"
+                        : "SET LOCAL plan_cache_mode = force_custom_plan", ct);
+                }
+                var rows = 0;
+                await using (var reader = await read.ExecuteReaderAsync(ct))
+                {
+                    var id = reader.GetOrdinal("id");
+                    while (await reader.ReadAsync(ct))
+                    {
+                        if (!reader.IsDBNull(id)) rows++;
+                    }
+                }
+                if (rows != BatchSize)
+                {
+                    throw new InvalidOperationException($"Проба выдала {rows} задач из {BatchSize}.");
+                }
+                if (!plan.HasValue || pass > 0)
+                {
+                    return await CountLocksAsync(conn, tx, ct);
+                }
+                await tx.RollbackAsync(ct);
+            }
+        }
+        finally
+        {
+            // Обе строки каждой пробной задачи удаляются одной неявной транзакцией до прогрева нагрузки.
+            await using var clean = new NpgsqlCommand($"DELETE FROM {store.Schema}.queue WHERE job_id = ANY(@ids); " +
+                $"DELETE FROM {store.Schema}.jobs WHERE id = ANY(@ids); " +
+                $"DELETE FROM {store.Schema}.queue_settings WHERE queue = @queue", conn);
+            clean.Parameters.AddWithValue("ids", ids);
+            clean.Parameters.AddWithValue("queue", ProbeQueue);
+            await clean.ExecuteNonQueryAsync(CancellationToken.None);
+        }
+    }
+
+    private static async Task<LockCount> CountLocksAsync(NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct)
+    {
         await using var count = new NpgsqlCommand("""
             SELECT count(*) FILTER (WHERE NOT fastpath), count(*) FROM pg_locks
             WHERE pid = pg_backend_pid() AND locktype = 'relation' AND relation <> 'pg_locks'::regclass
@@ -76,7 +146,6 @@ internal sealed class LockProbe(string directConnectionString)
         await r.ReadAsync(ct);
         var result = new LockCount(r.GetInt64(0), r.GetInt64(1));
         await r.CloseAsync();
-        await tx.RollbackAsync(ct);
         return result;
     }
 
@@ -119,15 +188,9 @@ internal sealed class LockProbe(string directConnectionString)
         }
     }
 
-    /// <summary>
-    /// Нижняя оценка блокировок generic plan. Перед выполнением он блокирует все отношения range table — все
-    /// <paramref name="partitions"/> партиций <c>jobs</c> и <paramref name="otherRelations"/> прочих таблиц, — затем
-    /// индексы index scan'ов в партициях, переживших начальное отсечение: у ack и enqueue — PK
-    /// <paramref name="survivingPartitions"/> партиций; у dequeue начального отсечения нет (ключ партиции известен
-    /// только при выполнении), поэтому PK всех партиций. Индексы, которые открывает изменение строк, не учтены.
-    /// </summary>
-    public static long GenericLowerBound(string statement, int partitions, int otherRelations, int survivingPartitions) =>
-        partitions + otherRelations + (statement == StatementClasses.Dequeue ? partitions : survivingPartitions);
+    /// <summary>Для ack и enqueue generic plan открывает все дочерние таблицы и PK переживших отсечение.</summary>
+    public static long GenericLowerBound(int partitions, int otherRelations, int survivingPartitions) =>
+        partitions + otherRelations + survivingPartitions;
 
     /// <summary>
     /// Ёмкость общей таблицы блокировок по параметрам сервера:

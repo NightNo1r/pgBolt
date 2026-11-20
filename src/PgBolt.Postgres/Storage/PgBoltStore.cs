@@ -28,6 +28,9 @@ public sealed partial class PgBoltStore
 
     public string Schema { get; }
 
+    // Стенд считает отправленные команды и пакеты, включая повторные попытки.
+    internal Action? DequeueExecuting { get; set; }
+
     private string Render(string template) => template.Replace("{schema}", Schema, StringComparison.Ordinal);
 
     private async Task PrepareAsync(NpgsqlCommand cmd, CancellationToken ct)
@@ -40,13 +43,14 @@ public sealed partial class PgBoltStore
         _retryOnConflict ? DbRetry.RunAsync(op, ct) : op(ct);
 
     private Task<T> QueryAsync<T>(string sql, Action<NpgsqlParameterCollection> bind,
-        Func<NpgsqlDataReader, CancellationToken, Task<T>> read, CancellationToken ct) =>
+        Func<NpgsqlDataReader, CancellationToken, Task<T>> read, CancellationToken ct, Action? executing = null) =>
         RunAsync(async c =>
         {
             await using var conn = await _dataSource.OpenConnectionAsync(c);
             await using var cmd = new NpgsqlCommand(sql, conn);
             bind(cmd.Parameters);
             await PrepareAsync(cmd, c);
+            executing?.Invoke();
             await using var reader = await cmd.ExecuteReaderAsync(c);
             return await read(reader, c);
         }, ct);

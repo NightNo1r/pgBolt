@@ -49,7 +49,7 @@ public sealed class PostgresCommandTests
         // PostgreSQL выбирает параметры производительности, стенд включает только диагностику.
         var settings = Pairs(PostgresCommand.Build(parsed.Options!, trackPlanning: true));
         Assert.Equal(["shared_preload_libraries=pg_stat_statements", "track_io_timing=on",
-            "pg_stat_statements.track_planning=on"], settings);
+            "pg_stat_statements.track_planning=on", "pg_stat_statements.track=all"], settings);
     }
 
     [Fact]

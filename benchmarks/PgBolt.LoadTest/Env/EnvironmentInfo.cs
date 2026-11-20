@@ -13,7 +13,7 @@ internal static class EnvironmentInfo
     private static readonly string[] Settings =
     [
         "shared_buffers", "max_connections", "max_wal_size", "max_locks_per_transaction", "autovacuum_naptime",
-        "autovacuum", "autovacuum_max_workers", "autovacuum_vacuum_cost_delay", "pg_stat_statements.track_planning",
+        "autovacuum", "autovacuum_max_workers", "autovacuum_vacuum_cost_delay", "pg_stat_statements.track_planning", "pg_stat_statements.track",
         "shared_preload_libraries", "track_io_timing", "fsync", "full_page_writes", "synchronous_commit",
     ];
 
@@ -43,6 +43,10 @@ internal static class EnvironmentInfo
 
         // Профиль объясняет происхождение настроек; выше записаны значения, прочитанные с сервера.
         info.Add(("--pg-profile", options.Connection is null ? options.PgProfile.ToString().ToLowerInvariant() : "external"));
+        if (options.Scenario == Scenario.Partitions)
+        {
+            info.Add(("--queue-profile", options.Queues.ToString().ToLowerInvariant()));
+        }
         info.Add(("--pg-setting", string.Join(",", options.PgSettings.Select(p => $"{p.Key}={p.Value}"))));
 
         await using (var cmd = new NpgsqlCommand("""

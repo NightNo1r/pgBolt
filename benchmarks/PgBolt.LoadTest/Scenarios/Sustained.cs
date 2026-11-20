@@ -118,13 +118,17 @@ internal sealed class SteadyRun : IDisposable
         var bouncer = mode is LoadMode.Bouncer or LoadMode.BouncerPrepared;
         _connection = bouncer ? env.BouncerConnectionString! : env.DirectConnectionString;
         // Генерация идёт прогрев и окно замера; запас 10 % и секунда потока — потолок накопленных токенов.
-        Ctx = new RunContext((long)((options.Rate * (options.Warmup + options.Duration).TotalSeconds + options.Rate) * 1.1));
+        Ctx = new RunContext((long)((options.Rate * (options.Warmup + options.Duration).TotalSeconds + options.Rate) * 1.1), options.Queues)
+        {
+            Fetches = options.Scenario == Scenario.Partitions ? new FetchRecorder() : null,
+        };
         Counters = new MeterCounters();
         _statements = new StatementsReader(env.DirectConnectionString);
         Sampler = new Sampler(env.DirectConnectionString, schema, bouncer ? env.Console : null,
             [.. HostCluster.ApplicationNames, Producer.ApplicationName], () => options.Rate, () => Ctx.Executed);
     }
 
+    public FetchSummary? Fetches { get; private set; }
     public RunContext Ctx { get; }
     public MeterCounters Counters { get; }
     public Sampler Sampler { get; }
@@ -182,7 +186,9 @@ internal sealed class SteadyRun : IDisposable
             await _statements.ResetAsync();
             Ctx.Immediate.ResetTotal();
             Ctx.Delayed.ResetTotal();
+            Ctx.Fetches?.Begin();
             await (measure?.Invoke(collector) ?? collector.CloseWindowsAsync(Windows, MeasureStart, MeasureEnd, ct));
+            Fetches = Ctx.Fetches?.End();
             var result = (Ctx.Immediate.Total(), Ctx.Delayed.Total(), await _statements.ReadAsync());
             if (afterMeasure is not null) await afterMeasure(collector, producer);
             return result;

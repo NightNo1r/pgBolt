@@ -19,7 +19,7 @@ internal sealed class Partitions : IScenario
     // Таблицы range table statement'а, кроме партиций jobs: родитель jobs и queue, у ack ещё completions.
     private static readonly Dictionary<string, int> OtherRelations = new()
     {
-        [StatementClasses.Dequeue] = 2, [StatementClasses.Ack] = 3, [StatementClasses.Enqueue] = 2,
+        [StatementClasses.Ack] = 3, [StatementClasses.Enqueue] = 2,
     };
 
     // У ack и enqueue с id одних суток начальное отсечение оставляет одну партицию.
@@ -127,18 +127,26 @@ internal sealed class Partitions : IScenario
         try
         {
             await run.PrepareAsync(partitions, indexes, ct);
-            await ProbeLocksAsync(env.DirectConnectionString, schema, mode, partitions, probes, ct);
+            await ProbeLocksAsync(env.DirectConnectionString, schema, mode, options.Queues, partitions, probes, ct);
             var (immediate, delayed, summary) = await run.WarmupAndMeasureAsync(null, null, ct);
 
             var data = run.Data(immediate, delayed, null);
             var verdicts = SloEvaluator.Partitions(data);
             var measured = SloEvaluator.SamplesIn(data.Samples, data.MeasureStart, data.MeasureEnd);
+            var statements = probes.ToDictionary(p => p.Key, p => p.Value with { Stats = summary.Classes?.GetValueOrDefault(p.Key) });
+            foreach (var extra in new[] { StatementClasses.ReadJobs, StatementClasses.QueueLock })
+            {
+                if (summary.Classes?.GetValueOrDefault(extra) is { } stats)
+                {
+                    statements[extra] = new StatementResult(stats, null, false, null);
+                }
+            }
             var result = new CombinationResult(partitions, indexes, mode,
                 verdicts.Single(v => v.Number == 1).Result, verdicts.Single(v => v.Number == 2).Result,
                 SloEvaluator.IsCpuBound(data), immediate.Count > 0 ? immediate.P99Ms : null,
-                probes.ToDictionary(p => p.Key, p => p.Value with { Stats = summary.Classes?.GetValueOrDefault(p.Key) }),
+                statements,
                 measured.Max(s => s.LockManagerWaits), measured.Average(s => s.LockManagerWaits),
-                run.Counters.Snapshot().StorageErrorsTotal, run.Sampler.Exhausted ? $"срез: {SteadyRun.SamplerLost}" : null);
+                run.Counters.Snapshot().StorageErrorsTotal, run.Sampler.Exhausted ? $"срез: {SteadyRun.SamplerLost}" : null, run.Fetches);
             await IScenario.ReportAsync(options.Out,
                 run.Model(data, verdicts, summary, warnings, aborted: false, result) with
                 {
@@ -161,23 +169,27 @@ internal sealed class Partitions : IScenario
     /// <summary>
     /// Блокировки dequeue, ack и enqueue до нагрузки. Без prepare Npgsql шлёт безымянный statement — custom plan,
     /// блокировки измеряются. В режимах <c>*-prepared</c> сначала определяется план: custom — измерение, generic —
-    /// нижняя оценка (напрямую его блокировки не измерить: построение generic plan блокирует индексы всех партиций,
-    /// а <c>EXPLAIN EXECUTE</c> готового плана не открывает индексы, которые откроет выполнение).
+    /// нижняя оценка для ack/enqueue. У dequeue учитываются также блокировки внутреннего чтения реальных задач.
     /// </summary>
     private static async Task ProbeLocksAsync(string directConnectionString, string schema, LoadMode mode,
-        int partitions, Dictionary<string, StatementResult> probes, CancellationToken ct)
+        QueueProfile queues, int partitions, Dictionary<string, StatementResult> probes, CancellationToken ct)
     {
         // Хранилище нужно только ради SQL схемы прогона: источник данных не открывает соединений.
         await using var dataSource = NpgsqlDataSource.Create(directConnectionString);
         var store = new PgBoltStore(dataSource, schema, usePreparedStatements: false);
         var probe = new LockProbe(directConnectionString);
         var prepared = mode is LoadMode.DirectPrepared or LoadMode.BouncerPrepared;
-        foreach (var (statement, sql, bind) in LockProbe.HotPath(store))
+        foreach (var (statement, sql, bind) in LockProbe.HotPath(store, queues))
         {
             PlanKind? plan = prepared ? await probe.DetectPlanAsync(sql, bind, ct) : null;
-            if (plan == PlanKind.Generic)
+            if (statement is StatementClasses.Dequeue or StatementClasses.DequeueLimited)
             {
-                var bound = LockProbe.GenericLowerBound(statement, partitions, OtherRelations[statement], SurvivingPartitions);
+                var locks = await probe.MeasureDequeueAsync(store, sql, bind, plan, ct);
+                probes[statement] = new StatementResult(null, locks, false, plan);
+            }
+            else if (plan == PlanKind.Generic)
+            {
+                var bound = LockProbe.GenericLowerBound(partitions, OtherRelations[statement], SurvivingPartitions);
                 probes[statement] = new StatementResult(null,
                     new LockCount(Math.Max(0, bound - LockProbe.FastPathSlots), bound), true, plan);
             }

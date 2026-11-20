@@ -1,9 +1,21 @@
+using PgBolt.LoadTest.Cli;
 using PgBolt.LoadTest.Load;
 
 namespace PgBolt.LoadTest.Tests.Load;
 
 public sealed class ProfileBTests
 {
+    [Fact]
+    public void LimitedPreservesJobMix()
+    {
+        var standard = new ProfileB(new Random(42));
+        var limited = new ProfileB(new Random(42), QueueProfile.Limited);
+        for (var i = 0; i < 1000; i++)
+        {
+            Assert.Equal(standard.Next(i) with { Queue = "default" }, limited.Next(i));
+        }
+    }
+
     [Fact]
     public void Distribution_matches_profile()
     {

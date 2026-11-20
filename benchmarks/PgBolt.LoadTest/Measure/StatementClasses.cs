@@ -8,6 +8,8 @@ internal static class StatementClasses
 {
     public const string Dequeue = "dequeue";
     public const string DequeueLimited = "dequeue_limited";
+    public const string ReadJobs = "read_jobs";
+    public const string QueueLock = "queue_lock";
     public const string Ack = "ack";
     public const string Outcome = "outcome";
     public const string Heartbeat = "heartbeat";
@@ -21,6 +23,8 @@ internal static class StatementClasses
     [
         (Dequeue, "FROM c WHERE q.job_id = c.job_id"),
         (DequeueLimited, "AS room"),
+        (ReadJobs, ".jobs AS leased_jobs WHERE id = ANY("),
+        (QueueLock, "pg_advisory_xact_lock(hashtextextended("),
         (Ack, "AS acked"),
         (Outcome, "AS signals FROM ev"),                      // повтор и окончательный отказ
         (Heartbeat, "AS server_present"),

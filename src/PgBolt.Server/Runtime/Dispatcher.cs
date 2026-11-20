@@ -123,15 +123,20 @@ internal sealed partial class Dispatcher
                         var pollBeforeSlot = q.PollBeforeSlot;
                         q.PollBeforeSlot = null;
                         IReadOnlyList<LeasedJob> jobs;
+                        var measure = _options.FetchMeasured;
+                        var started = fetchStartedAt;
                         try
                         {
                             using var timeout = new CancellationTokenSource(_options.HeartbeatInterval, _clock.Time);
+                            if (measure is not null) { started = _clock.Now; }
                             var result = await _fetch.FetchAsync(name, n, timeout.Token);
+                            measure?.Invoke(_clock.Elapsed(started), result.Jobs.Count);
                             jobs = result.Jobs;
                             q.LimitReached = result.LimitReached;
                         }
                         catch (Exception e)
                         {
+                            measure?.Invoke(_clock.Elapsed(started), null);
                             _metrics.StorageError(StorageOperations.Dequeue);
                             errorPause = NextErrorPause(errorPause);
                             pausedUntil = _clock.Add(_clock.Now, errorPause);

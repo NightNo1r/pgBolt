@@ -23,6 +23,10 @@ internal static class PostgresCommand
         settings["shared_preload_libraries"] = "pg_stat_statements";
         settings["track_io_timing"] = "on";
         settings["pg_stat_statements.track_planning"] = trackPlanning ? "on" : "off";
+        if (trackPlanning)
+        {
+            settings["pg_stat_statements.track"] = "all";
+        }
         foreach (var (key, value) in options.PgSettings)
         {
             settings[key] = value;
