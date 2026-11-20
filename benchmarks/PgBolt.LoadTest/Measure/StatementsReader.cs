@@ -10,6 +10,10 @@ internal sealed record StatementClassStats(
 /// <summary>Сводка <c>pg_stat_statements</c> по классам; <see cref="Classes"/> = <c>null</c> — расширение недоступно.</summary>
 internal sealed record StatementsSummary(IReadOnlyDictionary<string, StatementClassStats>? Classes)
 {
+    // Ноль планирований допустим для готового generic plan; выключенный track_planning даёт null.
+    public List<string> MissingStats(IEnumerable<string> expected) => expected
+        .Where(name => Classes?.GetValueOrDefault(name) is not { Calls: > 0, TotalPlanTime: not null }).ToList();
+
     public static readonly StatementsSummary NoData = new((IReadOnlyDictionary<string, StatementClassStats>?)null);
 }
 

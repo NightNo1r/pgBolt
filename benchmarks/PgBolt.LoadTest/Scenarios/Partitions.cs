@@ -134,19 +134,18 @@ internal sealed class Partitions : IScenario
             var verdicts = SloEvaluator.Partitions(data);
             var measured = SloEvaluator.SamplesIn(data.Samples, data.MeasureStart, data.MeasureEnd);
             var statements = probes.ToDictionary(p => p.Key, p => p.Value with { Stats = summary.Classes?.GetValueOrDefault(p.Key) });
-            foreach (var extra in new[] { StatementClasses.ReadJobs, StatementClasses.QueueLock })
+            var missing = summary.MissingStats(statements.Keys);
+            var failure = missing.Count > 0 ? $"Нет статистики SQL: {string.Join(", ", missing)}." : null;
+            if (run.Sampler.Exhausted)
             {
-                if (summary.Classes?.GetValueOrDefault(extra) is { } stats)
-                {
-                    statements[extra] = new StatementResult(stats, null, false, null);
-                }
+                failure = $"Срез: {SteadyRun.SamplerLost}. {failure}".TrimEnd();
             }
             var result = new CombinationResult(partitions, indexes, mode,
                 verdicts.Single(v => v.Number == 1).Result, verdicts.Single(v => v.Number == 2).Result,
                 SloEvaluator.IsCpuBound(data), immediate.Count > 0 ? immediate.P99Ms : null,
                 statements,
                 measured.Max(s => s.LockManagerWaits), measured.Average(s => s.LockManagerWaits),
-                run.Counters.Snapshot().StorageErrorsTotal, run.Sampler.Exhausted ? $"срез: {SteadyRun.SamplerLost}" : null, run.Fetches);
+                run.Counters.Snapshot().StorageErrorsTotal, failure, run.Fetches);
             await IScenario.ReportAsync(options.Out,
                 run.Model(data, verdicts, summary, warnings, aborted: false, result) with
                 {
@@ -174,7 +173,7 @@ internal sealed class Partitions : IScenario
     private static async Task ProbeLocksAsync(string directConnectionString, string schema, LoadMode mode,
         QueueProfile queues, int partitions, Dictionary<string, StatementResult> probes, CancellationToken ct)
     {
-        // Хранилище нужно только ради SQL схемы прогона: источник данных не открывает соединений.
+        // Подготовка пробных задач и измерение выполняются на разных соединениях.
         await using var dataSource = NpgsqlDataSource.Create(directConnectionString);
         var store = new PgBoltStore(dataSource, schema, usePreparedStatements: false);
         var probe = new LockProbe(directConnectionString);
@@ -184,6 +183,14 @@ internal sealed class Partitions : IScenario
             PlanKind? plan = prepared ? await probe.DetectPlanAsync(sql, bind, ct) : null;
             if (statement is StatementClasses.Dequeue or StatementClasses.DequeueLimited)
             {
+                if (sql.Contains(".read_jobs(", StringComparison.Ordinal))
+                {
+                    probes[StatementClasses.ReadJobs] = new StatementResult(null, null, false, null);
+                }
+                if (statement == StatementClasses.DequeueLimited)
+                {
+                    probes[StatementClasses.QueueLock] = new StatementResult(null, null, false, null);
+                }
                 var locks = await probe.MeasureDequeueAsync(store, sql, bind, plan, ct);
                 probes[statement] = new StatementResult(null, locks, false, plan);
             }

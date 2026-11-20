@@ -253,6 +253,18 @@ internal static class SloEvaluator
             ? verdicts.Select(v => v with { Mark = v.Mark is null ? StandMark : $"{v.Mark}, {StandMark}" }).ToList()
             : verdicts;
 
+    // Один измеренный провал достаточен для отказа. Для успеха нужны все показатели.
+    internal static Verdict VacuumStatus(IEnumerable<Verdict> verdicts)
+    {
+        var result = Verdict.Pass;
+        foreach (var value in verdicts)
+        {
+            if (value == Verdict.Fail) { return Verdict.Fail; }
+            if (value == Verdict.NoData) { result = Verdict.NoData; }
+        }
+        return result;
+    }
+
     private static Verdict Result(bool holds) => holds ? Verdict.Pass : Verdict.Fail;
 
     private static SloVerdict NoData(int number, string name, string threshold) =>

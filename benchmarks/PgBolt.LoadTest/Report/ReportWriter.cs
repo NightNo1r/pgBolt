@@ -220,7 +220,7 @@ internal static class ReportWriter
             Section(md, "Входы выбора параметров autovacuum");
             if (m.VacuumOutcome is { } v)
                 Table(md, ["SLO 7–9", "Пик размера queue в фазе 1, МБ", "p99 немедл. фазы 1, мс"],
-                    [[v.Slo7To9 ? "да" : "нет", Invariant($"{v.PeakSizeBytes / 1_048_576:F1}"), Invariant($"{v.P99Ms:F1}")]]);
+                    [[v.Slo7To9 switch { Verdict.Pass => "да", Verdict.Fail => "нет", _ => NoData }, Invariant($"{v.PeakSizeBytes / 1_048_576:F1}"), Invariant($"{v.P99Ms:F1}")]]);
             else
                 md.AppendLine(NoData).AppendLine();
         }
@@ -286,6 +286,7 @@ internal static class ReportWriter
         if (m.Combination?.Statements is { } probed)
         {
             FetchTable(md, [m.Combination]);
+            if (m.Combination.Failure is { } failure) { md.AppendLine(failure).AppendLine(); }
             md.AppendLine("Время read_jobs включено во внешний dequeue. Счётчик отправок включает повторные ExecuteReaderAsync и исключает подготовку соединения. Сервер исполняет queue_lock и dequeue_limited в одном пакете.").AppendLine();
             Section(md, "Блокировки statement'ов");
             Table(md, ["Statement", "План", "Вне fast-path", "Всего", "Оценка"],

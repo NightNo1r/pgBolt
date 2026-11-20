@@ -4,11 +4,18 @@ namespace PgBolt.LoadTest.Tests.Slo;
 
 public sealed class VacuumWinnerTests
 {
-    private static readonly ModeOutcome Met = new(true, 1_000, 100);
-    private static readonly ModeOutcome NotMet = new(false, 1_000, 100);
+    private static readonly ModeOutcome Met = new(Verdict.Pass, 1_000, 100);
+    private static readonly ModeOutcome NotMet = new(Verdict.Fail, 1_000, 100);
 
     private static VacuumCandidate Current(ModeOutcome bouncer, ModeOutcome direct) => new("current", bouncer, direct);
     private static VacuumCandidate Baseline(ModeOutcome bouncer, ModeOutcome direct) => new("cost_delay=0", bouncer, direct);
+
+    [Fact]
+    public void IncompleteRunCannotWin()
+    {
+        var incomplete = Met with { Slo7To9 = Verdict.NoData };
+        Assert.Throws<InvalidOperationException>(() => VacuumWinner.Choose(Current(Met, Met), Baseline(Met, incomplete)));
+    }
 
     [Fact]
     public void Meeting_slo_wins_over_not_meeting()

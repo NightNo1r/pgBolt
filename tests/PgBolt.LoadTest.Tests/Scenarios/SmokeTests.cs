@@ -91,7 +91,9 @@ public sealed class SmokeTests : IDisposable
         // Фаза 1 короче 3 мин: последняя минута перекрылась бы с отрезком 60–120 с.
         Assert.Matches(@"(?m)^\| 7 \|.*\| нет данных \| нет данных \|", slo);
         Assert.Matches(@"(?m)^\| reloptions queue \| [^|]*autovacuum_vacuum_cost_delay=0", text);
-        Assert.Matches(@"(?m)^\| (да|нет) \| \d+\.\d \| \d+\.\d \|$", Section(text, "Входы выбора параметров autovacuum"));
+        var expected = slo.Split('\n').Any(line => Regex.IsMatch(line, @"^\| [789] \|") && line.Contains("| FAIL |"))
+            ? "нет" : "нет данных";
+        Assert.Matches($@"(?m)^\| {expected} \| \d+\.\d \| \d+\.\d \|$", Section(text, "Входы выбора параметров autovacuum"));
         Assert.Matches(ExtraExecutionsCounted, text);
         Assert.Matches(@"(?m)^\| Размер БД в конце прогона, МБ \| \d+\.\d \|$", text);
     }
