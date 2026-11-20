@@ -47,6 +47,8 @@ dotnet run -c Release --project benchmarks/PgBolt.LoadTest -- sustained --mode b
 
 Режимы `direct` и `bouncer` по умолчанию (`both`) идут по очереди на одном наборе контейнеров, у каждого свой отчёт.
 
+Для измерения со штатными параметрами памяти и WAL запустите `sustained --mode direct --pg-profile stock`. Для парного сравнения через PgBouncer используйте `sustained --mode bouncer --pg-profile stock`, затем тот же вызов с `--pg-setting autovacuum_naptime=10s`. Каждый вызов поднимает свежий контейнер. Прежний профиль воспроизводится с `--pg-profile bench` или без флага.
+
 ### ramp
 
 Поиск максимального устойчивого потока: поток растёт ступенями от `--ramp-start` на `--ramp-step` каждые `--ramp-step-duration` до `--ramp-max`, без прогрева и дренажа. Рост останавливается на первой ступени с нарушением. Ступень оценивается по окнам 10 с, начинающимся не раньше трети ступени (при 60 с — последние 40 с): SLO 1 (с недогрузом) в каждом окне и p99 SLO 2 по ним вместе. Результат — максимальный устойчивый rate и то, что нарушено первым: SLO 1, SLO 2, «enqueue» (недогруз) или «стенд» (упор в CPU стенда; тогда rate помечается «ограничено стендом»).
@@ -113,7 +115,8 @@ dotnet run -c Release --project benchmarks/PgBolt.LoadTest -- sustained --connec
 | `--hold-xmin <t>` | `vacuum` | 5 мин | Фаза удержания xmin |
 | `--phase3 <t>` | `vacuum` | 10 мин | Фаза восстановления |
 | `--queue-reloptions "k=v,..."` | `vacuum` | — | `ALTER TABLE queue SET (...)` до прогона |
-| `--pg-setting "k=v,..."` | `vacuum` | — | Параметры сервера своего контейнера PostgreSQL; вместе с `--connection` — ошибка |
+| `--pg-profile <профиль>` | `sustained`, `partitions`, `vacuum` | `bench` | Выберите `stock` для штатных настроек PostgreSQL или `bench` для `shared_buffers=1GB` и `max_wal_size=4GB`. Флаг применяется к контейнеру стенда. |
+| `--pg-setting "k=v,..."` | `sustained`, `vacuum` | — | Явные параметры контейнера PostgreSQL перекрывают параметры профиля. Вместе с `--connection` — ошибка. |
 
 Длительности — число с единицей `s`, `m` или `h` (`30s`, `2m`, `1h`). Длительность окна замера, фаз и ступени кратна 10 с (по окнам 10 с считаются SLO), прогрев — любая. Флаг вне своих сценариев, неизвестный флаг, флаг без значения и недопустимое сочетание — ошибка разбора (код 2, текст ошибки в stderr).
 
@@ -153,7 +156,7 @@ dotnet run -c Release --project benchmarks/PgBolt.LoadTest -- sustained --connec
 
 Отчёт прогона (`.md`):
 
-- параметры прогона и окружение: модель CPU и число ядер, CPU и память Docker, версии PostgreSQL и PgBouncer, ключевые параметры сервера, `--pg-setting`, reloptions `queue` и `completions`, версия .NET, коммит;
+- параметры прогона и окружение: ресурсы хоста и Docker, версии PostgreSQL и PgBouncer, `--pg-profile` (`external` для внешней БД), `--pg-setting`, фактические настройки памяти, WAL, autovacuum, диагностики и гарантий записи, reloptions `queue` и `completions`, версия .NET, коммит;
 - таблица SLO: порог, значение, PASS/FAIL/«нет данных», пометки «enqueue» и «ограничено стендом»;
 - результат `ramp` (максимальный устойчивый rate и что нарушено первым) или входы выбора параметров autovacuum (`vacuum`);
 - перцентили задержки старта немедленных и отложенных задач (p50, p90, p99, p99.9, max) и число переполнений гистограммы;

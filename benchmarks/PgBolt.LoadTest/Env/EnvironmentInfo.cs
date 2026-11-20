@@ -13,7 +13,8 @@ internal static class EnvironmentInfo
     private static readonly string[] Settings =
     [
         "shared_buffers", "max_connections", "max_wal_size", "max_locks_per_transaction", "autovacuum_naptime",
-        "autovacuum_max_workers", "autovacuum_vacuum_cost_delay", "pg_stat_statements.track_planning",
+        "autovacuum", "autovacuum_max_workers", "autovacuum_vacuum_cost_delay", "pg_stat_statements.track_planning",
+        "shared_preload_libraries", "track_io_timing", "fsync", "full_page_writes", "synchronous_commit",
     ];
 
     /// <param name="console">Админ-консоль своего PgBouncer; <c>null</c> — версии PgBouncer нет.</param>
@@ -40,6 +41,8 @@ internal static class EnvironmentInfo
                 info.Add((r.GetString(0), r.IsDBNull(1) ? NoData : r.GetString(1)));
         }
 
+        // Профиль объясняет происхождение настроек; выше записаны значения, прочитанные с сервера.
+        info.Add(("--pg-profile", options.Connection is null ? options.PgProfile.ToString().ToLowerInvariant() : "external"));
         info.Add(("--pg-setting", string.Join(",", options.PgSettings.Select(p => $"{p.Key}={p.Value}"))));
 
         await using (var cmd = new NpgsqlCommand("""

@@ -37,6 +37,29 @@ public sealed class PostgresCommandTests
         Assert.DoesNotContain("pg_stat_statements.track_planning=on", Pairs(PostgresCommand.Build(Vacuum(), trackPlanning: false)));
     }
 
+    [Theory]
+    [InlineData("sustained")]
+    [InlineData("vacuum")]
+    [InlineData("partitions")]
+    public void StockUsesServerDefaults(string scenario)
+    {
+        var parsed = OptionsParser.Parse([scenario, "--pg-profile", "stock"]);
+        Assert.Null(parsed.Error);
+
+        // PostgreSQL выбирает параметры производительности, стенд включает только диагностику.
+        var settings = Pairs(PostgresCommand.Build(parsed.Options!, trackPlanning: true));
+        Assert.Equal(["shared_preload_libraries=pg_stat_statements", "track_io_timing=on",
+            "pg_stat_statements.track_planning=on"], settings);
+    }
+
+    [Fact]
+    public void BenchMatchesOriginalDefaults()
+    {
+        var parsed = OptionsParser.Parse(["vacuum", "--pg-profile", "bench"]);
+        Assert.Null(parsed.Error);
+        Assert.Equal(PostgresCommand.Build(Vacuum(), false), PostgresCommand.Build(parsed.Options!, false));
+    }
+
     [Fact]
     public void Pg_setting_becomes_dash_c_pair_and_overrides_default()
     {

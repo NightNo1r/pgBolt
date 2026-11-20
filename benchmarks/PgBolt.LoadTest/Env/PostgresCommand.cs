@@ -12,16 +12,21 @@ internal static class PostgresCommand
     /// </summary>
     public static IReadOnlyList<string> Build(LoadTestOptions options, bool trackPlanning)
     {
-        var settings = new Dictionary<string, string>
+        var settings = new Dictionary<string, string>();
+        // В штатном профиле память и WAL настраивает сам PostgreSQL.
+        if (options.PgProfile == PostgresProfile.Bench)
         {
-            ["shared_buffers"] = "1GB",
-            ["max_wal_size"] = "4GB",
-            ["shared_preload_libraries"] = "pg_stat_statements",
-            ["track_io_timing"] = "on",
-            ["pg_stat_statements.track_planning"] = trackPlanning ? "on" : "off",
-        };
+            settings["shared_buffers"] = "1GB";
+            settings["max_wal_size"] = "4GB";
+        }
+
+        settings["shared_preload_libraries"] = "pg_stat_statements";
+        settings["track_io_timing"] = "on";
+        settings["pg_stat_statements.track_planning"] = trackPlanning ? "on" : "off";
         foreach (var (key, value) in options.PgSettings)
+        {
             settings[key] = value;
+        }
 
         return [.. settings.SelectMany(s => new[] { "-c", $"{s.Key}={s.Value}" })];
     }
