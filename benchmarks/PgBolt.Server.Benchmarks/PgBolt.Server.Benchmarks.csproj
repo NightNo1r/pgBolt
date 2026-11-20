@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Накладные расходы JobRunner на одну задачу. Не тестовый проект: dotnet test его не запускает. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PgBolt.Server.Benchmarks</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PgBolt.Server\PgBolt.Server.csproj" />
+  </ItemGroup>
+</Project>

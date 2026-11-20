@@ -1,0 +1,24 @@
+<h1>Очереди</h1>
+@if (Context.CanAct)
+{
+    @* Изменения из других процессов: этот кэш и серверы процесса — сразу, остальное — по интервалу и TTL. *@
+    <p class="pgbolt-actions">
+        <button type="button" hx-post="actions/queues/cache/reset" hx-swap="none">Сбросить кэш настроек</button>
+        <span class="muted">другие поды подхватят изменения в пределах QueueSettingsRefreshInterval и TTL их кэша</span>
+    </p>
+}
+<div class="pgbolt-table-wrap">
+    <table>
+        <thead>
+            <tr><th>Очередь</th><th>Scheduled</th><th>Enqueued</th><th>Processing</th><th>Awaiting</th><th>Серверы</th><th>Снимок</th><th>Лимит</th><th>Вес</th>@if (Context.CanAct) { <th></th> }</tr>
+        </thead>
+        <tbody hx-get="queues/rows" hx-trigger="every @((long)Context.RefreshInterval.TotalMilliseconds)ms, pgbolt:refresh" hx-swap="innerHTML" hx-target="this" data-pgbolt-poll>
+            <QueueRows Queues="Queues" Context="Context" />
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<QueueLine> Queues { get; set; } = [];
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+}

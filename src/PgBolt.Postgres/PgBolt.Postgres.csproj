@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>PgBolt.Postgres</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="Cronos" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PgBolt.Abstractions\PgBolt.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Schema\Migrations\*.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="PgBolt.Postgres.Tests" />
+    <InternalsVisibleTo Include="PgBolt.Testing" />
+    <InternalsVisibleTo Include="PgBolt.E2E.Tests" />
+    <InternalsVisibleTo Include="PgBolt.Server" />
+    <InternalsVisibleTo Include="PgBolt.Server.Tests" />
+    <InternalsVisibleTo Include="PgBolt.Dashboard" />
+    <InternalsVisibleTo Include="PgBolt.Dashboard.Tests" />
+    <InternalsVisibleTo Include="PgBolt.Server.Benchmarks" />
+    <InternalsVisibleTo Include="PgBolt.LoadTest" />
+    <InternalsVisibleTo Include="PgBolt.LoadTest.Tests" />
+  </ItemGroup>
+</Project>

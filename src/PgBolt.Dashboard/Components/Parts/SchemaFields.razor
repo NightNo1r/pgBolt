@@ -1,0 +1,67 @@
+@* Поля args формы «Поставить» (§8): имя поля — args.{Path}, объекты — fieldset (рекурсивно), ошибки — у поля. *@
+@using PgBolt.Dashboard.Forms
+@using Microsoft.AspNetCore.Http
+@foreach (var f in Fields)
+{
+    var name = "args." + f.Path;
+    var value = Values?[name].ToString() ?? "";
+    var required = f.Required && !f.Nullable;
+    if (f.Kind == FieldKind.Object)
+    {
+        <fieldset>
+            <legend>@f.Name</legend>
+            <SchemaFields Fields="f.Children" Values="Values" Errors="Errors" />
+        </fieldset>
+    }
+    else
+    {
+        <label>
+            @if (f.Kind == FieldKind.Boolean)
+            {
+                <input type="checkbox" name="@name" value="true" checked="@(value == "true")"><span>@f.Name</span>
+            }
+            else
+            {
+                <span>@f.Name</span>
+                @switch (f.Kind)
+                {
+                    case FieldKind.Enum:
+                        <select name="@name" required="@required">
+                            @if (!required)
+                            {
+                                <option value=""></option>
+                            }
+                            @foreach (var option in f.EnumValues.OfType<string>())
+                            {
+                                <option value="@option" selected="@(option == value)">@option</option>
+                            }
+                        </select>
+                        break;
+                    case FieldKind.Integer:
+                        <input type="number" step="1" name="@name" value="@value" required="@required">
+                        break;
+                    case FieldKind.Number:
+                        <input type="number" step="any" name="@name" value="@value" required="@required">
+                        break;
+                    case FieldKind.DateTime:
+                        <input type="text" name="@name" value="@value" required="@required" placeholder="2026-10-05T12:00:00Z">
+                        break;
+                    default:
+                        <input type="text" name="@name" value="@value" required="@required">
+                        break;
+                }
+            }
+            @Pages.EnqueuePage.FieldErrors(Errors, name)
+        </label>
+    }
+}
+
+@code {
+    [Parameter] public IReadOnlyList<FormField> Fields { get; set; } = [];
+
+    /// <summary>Отправленные значения (повтор формы с ошибками); null — пустая форма.</summary>
+    [Parameter] public IFormCollection? Values { get; set; }
+
+    /// <summary>Ошибки по имени поля формы (args.{Path}).</summary>
+    [Parameter] public IReadOnlyList<FieldError> Errors { get; set; } = [];
+}

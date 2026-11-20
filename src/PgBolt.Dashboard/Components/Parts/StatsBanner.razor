@@ -1,0 +1,13 @@
+@switch (Freshness.Kind)
+{
+    case StatsFreshnessKind.NotRunning:
+        <div class="pgbolt-banner">снимок не обновляется: ни один процесс не выполняет обслуживание (<code>RunMaintenance</code>)</div>
+        break;
+    case StatsFreshnessKind.Failing:
+        <div class="pgbolt-banner">последний проход снимка статистики завершился ошибкой:<pre>@Freshness.Error</pre></div>
+        break;
+}
+
+@code {
+    [Parameter] public StatsFreshness Freshness { get; set; } = null!;
+}

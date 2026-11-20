@@ -1,0 +1,9 @@
+<section class="pgbolt-error">
+    <h1>Ошибка @Status</h1>
+    <p>@Message</p>
+</section>
+
+@code {
+    [Parameter] public int Status { get; set; }
+    [Parameter] public string Message { get; set; } = "";
+}

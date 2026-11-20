@@ -1,0 +1,13 @@
+@* Заглушка после удаления расписания: заменяет строку (<tr>) или карточку (<article>) — цель hx-target кнопки. *@
+@if (Card)
+{
+    <article class="pgbolt-card"><p class="muted">расписание удалено</p></article>
+}
+else
+{
+    <tr><td colspan="@Pages.RecurringListPage.ActColumns" class="muted">расписание удалено</td></tr>
+}
+
+@code {
+    [Parameter] public bool Card { get; set; }
+}

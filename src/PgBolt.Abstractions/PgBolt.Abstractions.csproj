@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>PgBolt</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <PropertyGroup>
+    <PackageId>PgBolt.Abstractions</PackageId>
+    <Description>PgBolt job contracts, client API, source generator and analyzers.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="PgBolt.Abstractions.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PgBolt.Generators\PgBolt.Generators.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <ProjectReference Include="..\PgBolt.Generators.CodeFixes\PgBolt.Generators.CodeFixes.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <None Include="$(RepoRoot)src/PgBolt.Generators/bin/$(Configuration)/netstandard2.0/PgBolt.Generators.dll"
+          Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    <None Include="$(RepoRoot)src/PgBolt.Generators.CodeFixes/bin/$(Configuration)/netstandard2.0/PgBolt.Generators.CodeFixes.dll"
+          Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    <None Include="build/PgBolt.Abstractions.props" Pack="true" PackagePath="buildTransitive/PgBolt.Abstractions.props" />
+  </ItemGroup>
+</Project>

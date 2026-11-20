@@ -1,0 +1,33 @@
+@using System.Globalization
+<dl class="pgbolt-totals">
+    <div><dt>Succeeded</dt><dd>@Points.Sum(p => p.Succeeded)</dd></div>
+    <div><dt>Failed</dt><dd>@Points.Sum(p => p.Failed)</dd></div>
+    <div><dt>Retried</dt><dd>@Points.Sum(p => p.Retried)</dd></div>
+</dl>
+@* Столбцы — только succeeded и failed: окно с одними retried — «нет данных». *@
+@if (Points.All(p => p.Succeeded == 0 && p.Failed == 0))
+{
+    <p class="muted">нет данных</p>
+}
+else
+{
+    // Высоты — целые: double в атрибуте зависел бы от культуры (12,5).
+    var max = Math.Max(1, Points.Max(p => p.Succeeded + p.Failed));
+    <svg class="pgbolt-chart" viewBox="0 0 @(Points.Count * 10) 100" preserveAspectRatio="none" role="img">
+        @for (var i = 0; i < Points.Count; i++)
+        {
+            var p = Points[i];
+            var ok = (int)Math.Round(p.Succeeded * 100.0 / max);
+            var fail = (int)Math.Round((p.Succeeded + p.Failed) * 100.0 / max) - ok;
+            <g>
+                <title>@p.BucketUtc.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture): succeeded @p.Succeeded, failed @p.Failed, retried @p.Retried</title>
+                <rect class="ok" x="@(i * 10 + 1)" y="@(100 - ok)" width="8" height="@ok"></rect>
+                <rect class="fail" x="@(i * 10 + 1)" y="@(100 - ok - fail)" width="8" height="@fail"></rect>
+            </g>
+        }
+    </svg>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<ThroughputPoint> Points { get; set; } = [];
+}

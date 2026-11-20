@@ -1,0 +1,30 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PgBolt.Abstractions/PgBolt.Abstractions.csproj" />
+    <Project Path="src/PgBolt.Generators/PgBolt.Generators.csproj" />
+    <Project Path="src/PgBolt.Generators.CodeFixes/PgBolt.Generators.CodeFixes.csproj" />
+    <Project Path="src/PgBolt.Postgres/PgBolt.Postgres.csproj" />
+    <Project Path="src/PgBolt.Server/PgBolt.Server.csproj" />
+    <Project Path="src/PgBolt.Dashboard/PgBolt.Dashboard.csproj" />
+    <Project Path="src/PgBolt.OpenTelemetry/PgBolt.OpenTelemetry.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PgBolt.Testing/PgBolt.Testing.csproj" />
+    <Project Path="tests/PgBolt.Abstractions.Tests/PgBolt.Abstractions.Tests.csproj" />
+    <Project Path="tests/PgBolt.Postgres.Tests/PgBolt.Postgres.Tests.csproj" />
+    <Project Path="tests/PgBolt.Server.Tests/PgBolt.Server.Tests.csproj" />
+    <Project Path="tests/PgBolt.Dashboard.Tests/PgBolt.Dashboard.Tests.csproj" />
+    <Project Path="tests/PgBolt.OpenTelemetry.Tests/PgBolt.OpenTelemetry.Tests.csproj" />
+    <Project Path="tests/PgBolt.Generators.Tests/PgBolt.Generators.Tests.csproj" />
+    <Project Path="tests/PgBolt.LoadTest.Tests/PgBolt.LoadTest.Tests.csproj" />
+    <Project Path="tests/E2E/PgBolt.E2E.Contracts/PgBolt.E2E.Contracts.csproj" />
+    <Project Path="tests/E2E/PgBolt.E2E.JobsA/PgBolt.E2E.JobsA.csproj" />
+    <Project Path="tests/E2E/PgBolt.E2E.JobsB/PgBolt.E2E.JobsB.csproj" />
+    <Project Path="tests/E2E/PgBolt.E2E.Tests/PgBolt.E2E.Tests.csproj" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/PgBolt.Benchmarks/PgBolt.Benchmarks.csproj" />
+    <Project Path="benchmarks/PgBolt.Server.Benchmarks/PgBolt.Server.Benchmarks.csproj" />
+    <Project Path="benchmarks/PgBolt.LoadTest/PgBolt.LoadTest.csproj" />
+  </Folder>
+</Solution>

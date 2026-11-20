@@ -1,0 +1,19 @@
+<tr>
+    <td><a href="recurring/item?id=@Uri.EscapeDataString(Row.Id)">@Row.Id</a>@if (Row.Paused) { <span class="muted"> пауза</span> }</td>
+    <td>@Row.Type</td>
+    <td>@Row.Cron</td>
+    <td>@Row.TimeZone</td>
+    <td>@Row.Owner</td>
+    <td><Time Utc="Row.NextFireAt" /></td>
+    <td><Time Utc="Row.LastFireAt" />@if (Row.LastJobId is { } last) { <text> </text><a href="jobs/@last">задача</a> }</td>
+    <td>@if (Row.LastError is { } error) { <pre>@error</pre> }</td>
+    @if (Context.CanAct)
+    {
+        <td><RecurringActions Id="@Row.Id" Paused="Row.Paused" Owner="@Row.Owner" View="row" Context="Context" /></td>
+    }
+</tr>
+
+@code {
+    [Parameter] public RecurringRow Row { get; set; } = null!;
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+}

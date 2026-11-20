@@ -1,0 +1,86 @@
+@using System.Text.Encodings.Web
+@using System.Text.Json
+<article class="pgbolt-card">
+    <h1>@Job.Name <StateBadge State="Job.State" /></h1><JobActions Id="Job.Id.Value" State="Job.State" View="card" Context="Context" />
+    <dl class="pgbolt-props">
+        <dt>Id</dt><dd>@Job.Id</dd>
+        <dt>Очередь</dt><dd>@Job.Queue</dd>
+        <dt>Приоритет</dt><dd>@Job.Priority</dd>
+        <dt>Попытка</dt><dd>@Job.Attempt / @Job.MaxAttempts</dd>
+        <dt>Создана</dt><dd><Time Utc="Job.CreatedAt.UtcDateTime" /></dd>
+        <dt>Запуск</dt><dd><Time Utc="Job.RunAt?.UtcDateTime" /></dd>
+        <dt>Начата</dt><dd><Time Utc="Job.StartedAt?.UtcDateTime" /></dd>
+        <dt>Завершена</dt><dd><Time Utc="Job.FinishedAt?.UtcDateTime" /></dd>
+        <dt>Сервер</dt><dd>@Job.ServerId</dd>
+        <dt>Unique key</dt><dd>@Job.UniqueKey</dd>
+        @if (Job.CancellationRequested)
+        {
+            <dt>Отмена</dt><dd>запрошена</dd>
+        }
+        @if (Job.RecurringJobId is { } recurring)
+        {
+            <dt>Расписание</dt><dd><a href="recurring/item?id=@Uri.EscapeDataString(recurring)">@recurring</a> <Time Utc="Job.ScheduledAt?.UtcDateTime" /></dd>
+        }
+        @if (Job.ParentId is { } parent)
+        {
+            <dt>Родитель</dt><dd><a href="jobs/@parent">@parent</a></dd>
+        }
+        else if (Job.ParentBatchId is { } parentBatch)
+        {
+            <dt>Родитель</dt><dd><a href="batches/@parentBatch">@parentBatch</a></dd>
+        }
+        @if (Job.BatchId is { } batch)
+        {
+            <dt>Batch</dt><dd><a href="batches/@batch">@batch</a></dd>
+        }
+        @if (Job.Continuation is { } condition)
+        {
+            <dt>Условие</dt><dd>@condition</dd>
+        }
+    </dl>
+    <h2>Аргументы</h2>
+    <pre>@Json(Job.Args)</pre>
+    <h2>События</h2>
+    @if (Job.Events.Count == 0)
+    {
+        <p class="muted">событий нет</p>
+    }
+    else
+    {
+        <div class="pgbolt-table-wrap">
+            <table>
+                <thead>
+                    <tr><th>Событие</th><th>Время</th><th>Сервер</th><th>Попытка</th><th>Сообщение</th><th>Исключение</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var e in Job.Events)
+                    {
+                        <tr>
+                            <td>@e.Kind</td>
+                            <td><Time Utc="e.At.UtcDateTime" /></td>
+                            <td>@e.ServerId</td>
+                            <td>@e.Attempt</td>
+                            <td>@if (e.Message is { } message) { <pre>@message</pre> }</td>
+                            <td>@if (e.Exception is { } exception) { <pre>@exception</pre> }</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    <h2>Продолжения</h2>
+    <ul hx-get="jobs/@Job.Id/continuations" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">загрузка…</li></ul>
+    <h2>Batch-продолжения</h2>
+    <ul hx-get="jobs/@Job.Id/batch-continuations" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">загрузка…</li></ul>
+</article>
+
+@code {
+    // Без экранирования HTML-символов и кириллицы: разметку экранирует Razor.
+    internal static readonly JsonSerializerOptions Indented = new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    [Parameter] public JobInfo Job { get; set; } = null!;
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+
+    /// <summary>Args с отступами — текстом в &lt;pre&gt;.</summary>
+    internal static string Json(JsonElement args) => JsonSerializer.Serialize(args, Indented);
+}

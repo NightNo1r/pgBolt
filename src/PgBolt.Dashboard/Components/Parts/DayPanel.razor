@@ -1,0 +1,6 @@
+<h2>Последние 24 часа</h2>
+<ThroughputChart Points="Points" />
+
+@code {
+    [Parameter] public IReadOnlyList<ThroughputPoint> Points { get; set; } = [];
+}

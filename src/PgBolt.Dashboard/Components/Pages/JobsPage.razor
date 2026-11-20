@@ -1,0 +1,115 @@
+@using System.Globalization
+@using Microsoft.AspNetCore.WebUtilities
+<h1>Задачи</h1>
+<nav class="pgbolt-tabs">
+    @foreach (var k in Enum.GetValues<JobState>())
+    {
+        <a href="jobs/@k.ToString().ToLowerInvariant()" aria-current="@(k == Kind ? "page" : null)">@k</a>
+    }
+</nav>
+@if (Kind is JobState.Failed or JobState.Cancelled)
+{
+    <p class="muted">переходы за @(Context.EventsRetention is { } r ? r.TotalDays.ToString("0.##", CultureInfo.InvariantCulture) + " сут" : "всё время хранения")</p>
+}
+@if (Page is null)
+{
+    <p>Выберите очередь:</p>
+    <ul>
+        @foreach (var q in Queues ?? [])
+        {
+            <li><a href="jobs/enqueued?queue=@Uri.EscapeDataString(q.Name)" hx-push-url="true">@q.Name</a></li>
+        }
+    </ul>
+    @if (Queues is not { Count: > 0 })
+    {
+        <p class="muted">очередей нет</p>
+    }
+}
+else
+{
+    <form class="pgbolt-filter" method="get" action="jobs/@Name" hx-push-url="true">
+        <input name="queue" value="@Queue" placeholder="очередь">
+        <input name="type" value="@Type" placeholder="тип">
+        <button>Применить</button>
+        <a href="@BaseUrl">обновить</a>
+    </form>
+    @if (Context.CanAct)
+    {
+        @* Контейнер чекбоксов ids: цель и свап — у каждой кнопки свои (наследование htmx отключено), type="button" — без нативного submit. *@
+        <form class="pgbolt-bulk">
+            <p>
+                <button type="button" class="danger" hx-post="actions/jobs/cancel" hx-target="#bulk-result" hx-swap="innerHTML">отменить выбранные</button>
+                <button type="button" hx-post="actions/jobs/trigger" hx-target="#bulk-result" hx-swap="innerHTML">запустить выбранные</button>
+                <button type="button" hx-post="actions/jobs/requeue" hx-target="#bulk-result" hx-swap="innerHTML">перезапустить выбранные</button>
+            </p>
+            @Table
+        </form>
+        <div id="bulk-result"></div>
+    }
+    else
+    {
+        @Table
+    }
+    @if (Page.Rows.Count == 0)
+    {
+        <p class="muted">задач нет</p>
+    }
+    <Pager Next="@Page.Next" ScannedTo="Page.ScannedTo" BaseUrl="@BaseUrl" />
+}
+
+@code {
+    [Parameter] public JobState Kind { get; set; }
+    [Parameter] public string? Queue { get; set; }
+    [Parameter] public string? Type { get; set; }
+
+    /// <summary>null — вкладка Enqueued без очереди: выбор очереди из <see cref="Queues"/>.</summary>
+    [Parameter] public Page<JobListRow>? Page { get; set; }
+
+    [Parameter] public IReadOnlyList<QueueRow>? Queues { get; set; }
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+
+    /// <summary>Таблица задач; при CanAct — внутри формы действий над выбранными.</summary>
+    private RenderFragment Table => @<div class="pgbolt-table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    @if (Context.CanAct)
+                    {
+                        <th><input type="checkbox" data-pgbolt-select-all aria-label="выбрать все"></th>
+                    }
+                    <th>Id</th><th>Тип</th><th>Очередь</th><th>Приоритет</th><th>Попытка</th><th>Создана</th>
+                    @switch (Kind)
+                    {
+                        case JobState.Scheduled or JobState.Enqueued:
+                            <th>Запуск</th>
+                            break;
+                        case JobState.Processing:
+                            <th>Начата</th><th>Сервер</th>
+                            break;
+                        case JobState.Succeeded:
+                            <th>Завершена</th>
+                            break;
+                        case JobState.Failed or JobState.Cancelled:
+                            <th>Завершена</th><th>Событие</th><th>Сообщение</th>
+                            break;
+                    }
+                    @if (Context.CanAct)
+                    {
+                        <th>Действия</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in Page!.Rows)
+                {
+                    <JobRow Row="row" Kind="Kind" Context="Context" />
+                }
+            </tbody>
+        </table>
+    </div>;
+
+    private string Name => Kind.ToString().ToLowerInvariant();
+
+    /// <summary>Url вкладки с фильтрами, без after.</summary>
+    private string BaseUrl => QueryHelpers.AddQueryString($"jobs/{Name}", new Dictionary<string, string?> { ["queue"] = Queue, ["type"] = Type });
+}

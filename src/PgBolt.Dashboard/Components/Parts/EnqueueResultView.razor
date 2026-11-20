@@ -1,0 +1,13 @@
+@* Итог «Поставить» (§8): ссылка на карточку задачи (навигация в #main от body — собственных hx-target / hx-swap нет). *@
+<p class="pgbolt-result">
+    @Message
+    @if (JobId is { } id)
+    {
+        <text>: </text><a href="jobs/@id">@id</a>
+    }
+</p>
+
+@code {
+    [Parameter] public string Message { get; set; } = "";
+    [Parameter] public Guid? JobId { get; set; }
+}

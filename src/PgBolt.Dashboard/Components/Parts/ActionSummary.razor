@@ -1,0 +1,16 @@
+@* Итог действия над выбранными задачами (§7): выполнено N, неприменимо M и перечень неприменимых. *@
+<p>выполнено @Done, неприменимо @NotApplicable.Count</p>
+@if (NotApplicable.Count > 0)
+{
+    <ul>
+        @foreach (var (id, message) in NotApplicable)
+        {
+            <li><a href="jobs/@id">@id</a>: @message</li>
+        }
+    </ul>
+}
+
+@code {
+    [Parameter] public int Done { get; set; }
+    [Parameter] public IReadOnlyList<(Guid Id, string Message)> NotApplicable { get; set; } = [];
+}

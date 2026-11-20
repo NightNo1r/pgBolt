@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="$(RepoRoot)eng/UsePgBoltGenerator.props" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>PgBolt.E2E.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.Testing" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PgBolt.E2E.JobsA\PgBolt.E2E.JobsA.csproj" />
+    <ProjectReference Include="..\PgBolt.E2E.JobsB\PgBolt.E2E.JobsB.csproj" />
+    <ProjectReference Include="..\..\PgBolt.Testing\PgBolt.Testing.csproj" />
+    <ProjectReference Include="..\..\..\src\PgBolt.Dashboard\PgBolt.Dashboard.csproj" />
+    <ProjectReference Include="..\..\..\src\PgBolt.Server\PgBolt.Server.csproj" />
+  </ItemGroup>
+</Project>

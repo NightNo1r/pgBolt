@@ -1,0 +1,32 @@
+@* Действия над лимитом и весом очереди. Форма отправляет op=set: «Задать» — её submit-кнопка, Enter в поле браузер
+   превращает в нажатие первой submit-кнопки, htmx добавляет name/value нажатой кнопки к полям формы. Остальные кнопки —
+   type="button" со своими hx-post и op. Цель и свап — на каждом элементе с запросом: наследование отключено. Ни hx-vals,
+   ни скрытого op на форме: htmx применяет их поверх значения нажатой кнопки или отправляет вместе с ним. *@
+@using PgBolt.Postgres.Client
+<form class="pgbolt-actions" @attributes='Post("limit")'>
+    <input type="number" name="value" min="1" placeholder="лимит" aria-label="лимит">
+    <button type="submit" name="op" value="set">Задать лимит</button>
+    @Button("limit", "unlimited", "Без лимита")
+    @Button("limit", "pause", "Пауза")
+    @Button("limit", "reset", "Сбросить к значению из кода")
+</form>
+<form class="pgbolt-actions" @attributes='Post("weight")'>
+    <input type="number" name="value" min="1" max="@QueueSettingsManager.MaxWeight" placeholder="вес" aria-label="вес">
+    <button type="submit" name="op" value="set">Задать вес</button>
+    @Button("weight", "none", "Без веса")
+    @Button("weight", "reset", "Сбросить к значению из кода")
+</form>
+
+@code {
+    [Parameter] public string Queue { get; set; } = "";
+
+    private Dictionary<string, object> Post(string setting) => new()
+    {
+        ["hx-post"] = $"actions/queues/{setting}?queue={Uri.EscapeDataString(Queue)}",
+        ["hx-target"] = "closest tr",
+        ["hx-swap"] = "outerHTML",
+    };
+
+    private RenderFragment Button(string setting, string op, string text) =>
+        @<button type="button" @attributes="Post(setting)" name="op" value="@op">@text</button>;
+}

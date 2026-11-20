@@ -1,0 +1,52 @@
+<tr>
+    @if (Context.CanAct)
+    {
+        <td><input type="checkbox" name="ids" value="@Row.Id" aria-label="выбрать"></td>
+    }
+    <td><a href="jobs/@Row.Id">@Row.Id</a>@if (State is { } state) { <text> </text><StateBadge State="state" /> }@if (Row.CancelRequested) { <span class="muted"> отмена запрошена</span> }</td>
+    <td>@Row.Type</td>
+    <td>@Row.Queue</td>
+    <td>@Row.Priority</td>
+    <td>@Row.Attempt / @Row.MaxAttempts</td>
+    <td><Time Utc="Row.CreatedAt" /></td>
+    @switch (Kind)
+    {
+        case JobState.Scheduled or JobState.Enqueued:
+            <td><Time Utc="Row.RunAt" /></td>
+            break;
+        case JobState.Processing:
+            <td><Time Utc="Row.StartedAt" /></td>
+            <td>@Row.ServerId</td>
+            break;
+        case JobState.Succeeded:
+            <td><Time Utc="Row.FinishedAt" /></td>
+            break;
+        case JobState.Failed or JobState.Cancelled:
+            <td><Time Utc="Row.FinishedAt" /></td>
+            <td>@Row.EventKind</td>
+            <td>
+                @if (Row.Message is { } message)
+                {
+                    <pre>@message</pre>
+                }
+                else if (Row.EventKind == JobEventKind.LeaseExpired)
+                {
+                    <text>lease истёк на последней попытке</text>
+                }
+            </td>
+            break;
+    }
+    @if (Context.CanAct)
+    {
+        <td><JobActions Id="Row.Id" State="@(State ?? Kind)" View="row" Kind="Kind" Context="Context" /></td>
+    }
+</tr>
+
+@code {
+    [Parameter] public JobListRow Row { get; set; } = null!;
+    [Parameter] public JobState Kind { get; set; }
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+
+    /// <summary>Строка после действия (§7): состояние из GetAsync — бейджем в колонках вкладки Kind; null — состояние вкладки.</summary>
+    [Parameter] public JobState? State { get; set; }
+}

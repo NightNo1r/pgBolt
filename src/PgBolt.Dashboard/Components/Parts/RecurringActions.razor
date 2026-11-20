@@ -1,0 +1,34 @@
+@* Действия над расписанием (§7): pause / resume по Paused, trigger, delete — только без Owner (code-first строки API не удаляет). *@
+@if (Context.CanAct)
+{
+    <span class="pgbolt-actions">
+        @if (Paused)
+        {
+            <button type="button" hx-post="@Url("resume")" hx-target="@Target" hx-swap="outerHTML">возобновить</button>
+        }
+        else
+        {
+            <button type="button" hx-post="@Url("pause")" hx-target="@Target" hx-swap="outerHTML">пауза</button>
+        }
+        <button type="button" hx-post="@Url("trigger")" hx-target="@Target" hx-swap="outerHTML">запустить</button>
+        @if (Owner is null)
+        {
+            <button type="button" class="danger" hx-post="@Url("delete")" hx-target="@Target" hx-swap="outerHTML">удалить</button>
+        }
+    </span>
+}
+
+@code {
+    [Parameter] public string Id { get; set; } = "";
+    [Parameter] public bool Paused { get; set; }
+    [Parameter] public string? Owner { get; set; }
+
+    /// <summary>"row" — строка списка (&lt;tr&gt;), "card" — карточка (&lt;article&gt;).</summary>
+    [Parameter] public string View { get; set; } = "row";
+
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+
+    private string Target => View == "card" ? "closest article" : "closest tr";
+
+    private string Url(string action) => $"actions/recurring/{action}?id={Uri.EscapeDataString(Id)}&view={View}";
+}

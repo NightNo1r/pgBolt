@@ -1,0 +1,10 @@
+@using System.Globalization
+@if (Utc is { } utc)
+{
+    var text = utc.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
+    <time datetime="@text">@text</time>
+}
+
+@code {
+    [Parameter] public DateTime? Utc { get; set; }
+}

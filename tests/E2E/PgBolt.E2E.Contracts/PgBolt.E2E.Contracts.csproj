@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="$(RepoRoot)eng/UsePgBoltGenerator.props" />
+  <ItemGroup>
+    <ProjectReference Include="$(RepoRoot)src/PgBolt.Abstractions/PgBolt.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

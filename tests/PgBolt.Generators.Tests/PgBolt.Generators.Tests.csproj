@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Verify.XunitV3" />
+    <PackageReference Include="Verify.SourceGenerators" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <!-- Явно: иначе CodeFix.Testing 1.1.2 тянет Workspaces 1.0.1 (NU1701 как ошибка, несовпадение Roslyn в рантайме). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.CodeFix.Testing" />
+    <!-- CSharpAnalyzerTest<,> (AnalyzerTests) — в отдельном пакете, CodeFix.Testing его не тянет. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Analyzer.Testing" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PgBolt.Abstractions\PgBolt.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\PgBolt.Server\PgBolt.Server.csproj" />
+    <ProjectReference Include="..\..\src\PgBolt.Generators\PgBolt.Generators.csproj" />
+    <ProjectReference Include="..\..\src\PgBolt.Generators.CodeFixes\PgBolt.Generators.CodeFixes.csproj" />
+  </ItemGroup>
+</Project>

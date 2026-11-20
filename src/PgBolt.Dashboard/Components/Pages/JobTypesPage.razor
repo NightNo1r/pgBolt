@@ -1,0 +1,30 @@
+<h1>Типы задач</h1>
+<div class="pgbolt-table-wrap">
+    <table>
+        <thead>
+            <tr><th>Тип</th><th>Очередь</th><th>Попытки</th><th>Приоритет</th><th>Опубликовал</th><th>Виден</th>@if (Context.CanAct) { <th></th> }</tr>
+        </thead>
+        <tbody>
+            @foreach (var t in Types)
+            {
+                <tr>
+                    <td>@t.Name</td>
+                    <td>@t.DefaultQueue</td>
+                    <td>@t.DefaultMaxAttempts</td>
+                    <td>@t.DefaultPriority</td>
+                    <td>@t.PublishedBy</td>
+                    <td><Time Utc="t.LastSeenAt" /></td>
+                    @if (Context.CanAct)
+                    {
+                        <td><a href="types/enqueue?name=@Uri.EscapeDataString(t.Name)">Поставить</a></td>
+                    }
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<JobTypeRow> Types { get; set; } = [];
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+}

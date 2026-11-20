@@ -1,0 +1,111 @@
+@* Форма «Поставить» (§8). #enqueue-result оборачивает форму: ответ POST заменяет его содержимое (итог + форма заново), поэтому
+   форма всегда одна; #enqueue-body — поля args или textarea JSON (кнопка «JSON» заменяет только его). *@
+@using Microsoft.AspNetCore.Http
+@using PgBolt.Dashboard.Forms
+@switch (Part)
+{
+    case "result":
+        @Result
+        break;
+    case "body":
+        @Body
+        break;
+    default:
+        <h1>Поставить @Type.Name</h1>
+        <nav class="pgbolt-tabs">
+            @if (Fields is null)
+            {
+                <span class="muted" title="схема args вне поддерживаемого подмножества">Форма</span>
+            }
+            else
+            {
+                <a href="types/enqueue?name=@N" aria-current="@(Json is null ? "page" : null)">Форма</a>
+            }
+            <a href="types/enqueue?name=@N&mode=json" aria-current="@(Json is null ? null : "page")">JSON</a>
+        </nav>
+        @if (Context.CanAct)
+        {
+            <div id="enqueue-result">@Result</div>
+        }
+        else
+        {
+            <p class="muted">действия недоступны: режим только для чтения или нет прав ActionsPolicy</p>
+        }
+        break;
+}
+
+@code {
+    [Parameter] public JobTypeRow Type { get; set; } = null!;
+
+    /// <summary>null — схема вне подмножества: только JSON.</summary>
+    [Parameter] public IReadOnlyList<FormField>? Fields { get; set; }
+
+    /// <summary>Текст textarea; не null — режим JSON.</summary>
+    [Parameter] public string? Json { get; set; }
+
+    [Parameter] public IFormCollection? Values { get; set; }
+
+    /// <summary>Ошибки по имени поля формы: args.{Path}, json, имя опции.</summary>
+    [Parameter] public IReadOnlyList<FieldError> Errors { get; set; } = [];
+
+    [Parameter] public string? Message { get; set; }
+    [Parameter] public Guid? JobId { get; set; }
+
+    /// <summary>"page" — страница целиком, "result" — содержимое #enqueue-result, "body" — содержимое #enqueue-body.</summary>
+    [Parameter] public string Part { get; set; } = "page";
+
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+
+    private string N => Uri.EscapeDataString(Type.Name);
+
+    private string Value(string key, string fallback = "") => Values is null ? fallback : Values[key].ToString();
+
+    private RenderFragment FieldErrors(string key) => FieldErrors(Errors, key);
+
+    /// <summary>Ошибки поля формы key — общая вёрстка опций и полей args (SchemaFields).</summary>
+    internal static RenderFragment FieldErrors(IReadOnlyList<FieldError> errors, string key) => @<text>
+        @foreach (var e in errors.Where(e => e.Path == key))
+        {
+            <span class="pgbolt-field-error">@e.Message</span>
+        }
+    </text>;
+
+    private RenderFragment Result => @<text>
+        @if (Message is not null)
+        {
+            <EnqueueResultView Message="@Message" JobId="JobId" />
+        }
+        <form hx-post="actions/types/enqueue?name=@N" hx-target="#enqueue-result" hx-swap="innerHTML">
+            <div id="enqueue-body">@Body</div>
+            <fieldset>
+                <legend>Опции</legend>
+                <label><span>Очередь</span> <input type="text" name="queue" value="@Value("queue", Type.DefaultQueue)"> @FieldErrors("queue")</label>
+                <label><span>Приоритет</span> <input type="number" step="1" name="priority" value="@Value("priority")" placeholder="@Type.DefaultPriority"> @FieldErrors("priority")</label>
+                <label><span>Задержка, с</span> <input type="number" step="1" min="0" name="delay" value="@Value("delay")"> @FieldErrors("delay")</label>
+                <label><span>Время запуска</span> <input type="text" name="runAt" value="@Value("runAt")" placeholder="2026-10-05T12:00:00Z"> @FieldErrors("runAt")</label>
+                <label><span>unique_key</span> <input type="text" name="uniqueKey" value="@Value("uniqueKey")"> @FieldErrors("uniqueKey")</label>
+                <label><span>Попыток</span> <input type="number" step="1" min="1" name="maxAttempts" value="@Value("maxAttempts")" placeholder="@Type.DefaultMaxAttempts"> @FieldErrors("maxAttempts")</label>
+                @FieldErrors("options")
+            </fieldset>
+            <p>
+                <button>Поставить</button>
+                @if (Json is null)
+                {
+                    <button type="button" hx-post="actions/types/json?name=@N" hx-include="closest form" hx-target="#enqueue-body" hx-swap="innerHTML">JSON</button>
+                }
+            </p>
+        </form>
+    </text>;
+
+    private RenderFragment Body => @<text>
+        @if (Json is null && Fields is not null)
+        {
+            <SchemaFields Fields="Fields" Values="Values" Errors="Errors" />
+        }
+        else
+        {
+            <textarea name="json" rows="12" aria-label="args (JSON)">@Json</textarea>
+            @FieldErrors("json")
+        }
+    </text>;
+}

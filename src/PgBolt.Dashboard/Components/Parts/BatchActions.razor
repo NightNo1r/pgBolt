@@ -1,0 +1,12 @@
+@* «Отменить» batch (§7): только при CanAct, Active / Awaiting и без запрошенной отмены; ответ заменяет карточку. *@
+@if (Context.CanAct && Batch.State is (BatchState.Active or BatchState.Awaiting) && !Batch.CancellationRequested)
+{
+    <span class="pgbolt-actions">
+        <button type="button" class="danger" hx-post="actions/batches/@Batch.Id/cancel" hx-target="closest article" hx-swap="outerHTML">отменить</button>
+    </span>
+}
+
+@code {
+    [Parameter] public BatchInfo Batch { get; set; } = null!;
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+}

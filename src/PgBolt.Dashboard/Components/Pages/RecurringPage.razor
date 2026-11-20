@@ -1,0 +1,53 @@
+<article class="pgbolt-card">
+    <h1>@Recurring.Id</h1><RecurringActions Id="@Recurring.Id" Paused="Recurring.Paused" Owner="@Recurring.Owner" View="card" Context="Context" />
+    <dl class="pgbolt-props">
+        <dt>Тип</dt><dd>@Recurring.JobName</dd>
+        <dt>Cron</dt><dd>@Recurring.Cron</dd>
+        <dt>Часовой пояс</dt><dd>@Recurring.TimeZone</dd>
+        <dt>Misfire</dt><dd>@Recurring.Misfire</dd>
+        <dt>Overlap</dt><dd>@Recurring.Overlap</dd>
+        <dt>Очередь</dt><dd>@Recurring.Queue</dd>
+        <dt>Владелец</dt><dd>@Recurring.Owner</dd>
+        <dt>Пауза</dt><dd>@(Recurring.Paused ? "да" : "нет")</dd>
+        <dt>Следующий запуск</dt><dd><Time Utc="Recurring.NextFireAt?.UtcDateTime" /></dd>
+        <dt>Последний запуск</dt><dd><Time Utc="Recurring.LastFireAt?.UtcDateTime" />@if (Recurring.LastJobId is { } last) { <text> </text><a href="jobs/@last">задача</a> }</dd>
+    </dl>
+    @if (Recurring.LastError is { } error)
+    {
+        <h2>Ошибка</h2>
+        <pre>@error</pre>
+    }
+    <h2>Аргументы</h2>
+    <pre>@JobCard.Json(Recurring.Args)</pre>
+    <h2>Запуски</h2>
+    <div class="pgbolt-table-wrap">
+        <table>
+            <thead>
+                <tr><th>Id</th><th>Состояние</th><th>Очередь</th><th>Создана</th><th>Завершена</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var r in Runs.Rows)
+                {
+                    <tr>
+                        <td><a href="jobs/@r.Id">@r.Id</a></td>
+                        <td><StateBadge State="r.State" /></td>
+                        <td>@r.Queue</td>
+                        <td><Time Utc="r.CreatedAt" /></td>
+                        <td><Time Utc="r.FinishedAt" /></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    @if (Runs.Rows.Count == 0)
+    {
+        <p class="muted">запусков нет</p>
+    }
+    <Pager Next="@Runs.Next" ScannedTo="Runs.ScannedTo" BaseUrl="@($"recurring/item?id={Uri.EscapeDataString(Recurring.Id)}")" />
+</article>
+
+@code {
+    [Parameter] public RecurringJobInfo Recurring { get; set; } = null!;
+    [Parameter] public Page<RelatedJobRow> Runs { get; set; } = null!;
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+}

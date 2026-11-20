@@ -1,0 +1,53 @@
+@using System.Globalization
+@foreach (var line in Queues)
+{
+    var q = line.Stats;
+    var s = line.Settings;
+    <tr>
+        <td><a href="jobs/enqueued?queue=@Uri.EscapeDataString(q.Name)">@q.Name</a></td>
+        <td>@q.Scheduled</td>
+        <td>@q.Enqueued</td>
+        <td>@q.Processing</td>
+        <td>@q.Awaiting</td>
+        <td>@q.Servers</td>
+        <td><Time Utc="q.MeasuredAt" /></td>
+        <td>
+            @if (s?.EffectiveMaxConcurrency is { } limit)
+            {
+                @($"{line.Leased ?? 0} / {limit}")
+                @if (s.Paused)
+                {
+                    <span class="pgbolt-state">Пауза</span>
+                }
+            }
+            else
+            {
+                @("—")
+            }
+            @Origin(s?.OverrideConcurrencySet ?? false, s?.EffectiveMaxConcurrency is not null, s?.OverrideConcurrencyUpdatedBy,
+                s?.OverrideConcurrencyUpdatedAt)
+        </td>
+        <td>
+            @(s?.EffectiveWeight?.ToString(CultureInfo.InvariantCulture) ?? "—")
+            @Origin(s?.OverrideWeightSet ?? false, s?.EffectiveWeight is not null, s?.OverrideWeightUpdatedBy, s?.OverrideWeightUpdatedAt)
+        </td>
+        @if (Context.CanAct)
+        {
+            <td><QueueSettingsActions Queue="@q.Name" /></td>
+        }
+    </tr>
+}
+@if (Queues.Count == 0)
+{
+    <tr><td colspan="@(Context.CanAct ? 10 : 9)" class="muted">очередей нет</td></tr>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<QueueLine> Queues { get; set; } = [];
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+
+    /// <summary>Откуда значение: переопределение (кто, когда) или код; без значения и без переопределения — ничего.</summary>
+    private static RenderFragment Origin(bool overridden, bool hasValue, string? by, DateTimeOffset? at) => overridden
+        ? @<span class="muted">переопределён: @by, <Time Utc="at?.UtcDateTime" /></span>
+        : hasValue ? @<span class="muted">из кода</span> : _ => { };
+}

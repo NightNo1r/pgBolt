@@ -1,0 +1,36 @@
+@* Кнопки действий над задачей (§7): только при CanAct и только применимые к состоянию; ответ заменяет строку или карточку. *@
+@if (Context.CanAct)
+{
+    <span class="pgbolt-actions">
+        @if (State == JobState.Scheduled)
+        {
+            <button type="button" hx-post="@Url("trigger")" hx-target="@Target" hx-swap="outerHTML">запустить</button>
+        }
+        @if (State is JobState.Scheduled or JobState.Enqueued or JobState.Processing or JobState.Awaiting)
+        {
+            <button type="button" class="danger" hx-post="@Url("cancel")" hx-target="@Target" hx-swap="outerHTML">отменить</button>
+        }
+        @if (State is JobState.Failed or JobState.Cancelled)
+        {
+            <button type="button" hx-post="@Url("requeue")" hx-target="@Target" hx-swap="outerHTML">перезапустить</button>
+        }
+    </span>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    [Parameter] public JobState State { get; set; }
+
+    /// <summary>"row" — строка списка (&lt;tr&gt;), "card" — карточка (&lt;article&gt;).</summary>
+    [Parameter] public string View { get; set; } = "row";
+
+    /// <summary>Вкладка строки: строка после действия рендерится с её колонками.</summary>
+    [Parameter] public JobState Kind { get; set; }
+
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+
+    private string Target => View == "card" ? "closest article" : "closest tr";
+
+    private string Url(string action) =>
+        $"actions/jobs/{Id}/{action}?view={View}" + (View == "card" ? "" : $"&kind={Kind.ToString().ToLowerInvariant()}");
+}

@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="$(RepoRoot)eng/UsePgBoltGenerator.props" />
+  <ItemGroup>
+    <ProjectReference Include="..\PgBolt.E2E.Contracts\PgBolt.E2E.Contracts.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,20 @@
+@using Microsoft.AspNetCore.WebUtilities
+@foreach (var b in Page.Rows)
+{
+    <li><a href="batches/@b.Id">@b.Id</a> <StateBadge State="b.State" /> @b.Succeeded / @b.Total <Time Utc="b.CreatedAt" /></li>
+}
+@if (Page.Rows.Count == 0)
+{
+    <li class="muted">нет</li>
+}
+@if (Page.Next is { } next)
+{
+    <li hx-get="@QueryHelpers.AddQueryString(BaseUrl, "after", next)" hx-target="this" hx-swap="outerHTML"><button type="button">ещё</button></li>
+}
+
+@code {
+    [Parameter] public Page<BatchRow> Page { get; set; } = null!;
+
+    /// <summary>Url фрагмента без after.</summary>
+    [Parameter] public string BaseUrl { get; set; } = "";
+}

@@ -1,0 +1,13 @@
+<h1>Обзор</h1>
+<section hx-get="overview/hour" hx-trigger="every @((long)Context.RefreshInterval.TotalMilliseconds)ms, pgbolt:refresh" hx-swap="innerHTML" hx-target="this" data-pgbolt-poll>
+    <HourPanel Data="Data" />
+</section>
+<section hx-get="overview/day" hx-trigger="load, every 60000ms, pgbolt:refresh" hx-swap="innerHTML" hx-target="this" data-pgbolt-poll>
+    <p class="muted">загрузка…</p>
+</section>
+<p class="muted">статистика приблизительная: учитываются исходы, подтверждённые воркерами; терминальные Failed по истёкшему lease в ней не видны (они есть в списке Failed)</p>
+
+@code {
+    [Parameter] public OverviewData Data { get; set; } = null!;
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+}

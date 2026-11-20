@@ -1,0 +1,49 @@
+<h1>Серверы</h1>
+<div class="pgbolt-table-wrap">
+    <table>
+        <thead>
+            <tr><th>Имя</th><th>Хост</th><th>Очереди</th><th>Ёмкость</th><th>Старт</th><th>Heartbeat</th><th>Succeeded за час</th><th>Failed за час</th><th>Retried за час</th></tr>
+        </thead>
+        <tbody>
+            @foreach (var s in Data.Servers)
+            {
+                <tr>
+                    <td>@s.Name</td>
+                    <td>@s.Host</td>
+                    <td>@string.Join(", ", s.Queues)</td>
+                    <td>@s.Capacity</td>
+                    <td><Time Utc="s.StartedAt" /></td>
+                    <td><Time Utc="s.HeartbeatAt" />@if (s.Stale) { <span class="failed"> не отвечает</span> }</td>
+                    <td>@s.Succeeded</td>
+                    <td>@s.Failed</td>
+                    <td>@s.Retried</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+<h2>Задачи обслуживания</h2>
+<div class="pgbolt-table-wrap">
+    <table>
+        <thead>
+            <tr><th>Задача</th><th>Последний запуск</th><th>Завершена</th><th>Следующий запуск</th><th>Состояние</th><th>Ошибка</th></tr>
+        </thead>
+        <tbody>
+            @foreach (var t in Data.Tasks)
+            {
+                <tr>
+                    <td>@t.Name</td>
+                    <td><Time Utc="t.LastRunAt" /></td>
+                    <td><Time Utc="t.LastFinishedAt" /></td>
+                    <td><Time Utc="t.NextRunAt" /></td>
+                    <td>@(t.Running ? "идёт" : "")</td>
+                    <td>@if (t.LastError is { } error) { <pre>@error</pre> }</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter] public ServersData Data { get; set; } = null!;
+}

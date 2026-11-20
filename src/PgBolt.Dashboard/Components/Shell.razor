@@ -1,0 +1,37 @@
+@namespace PgBolt.Dashboard.Components
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <base href="@(Context.BasePath)/">
+    <meta name="htmx-config" content="@DashboardHtmx.Config">
+    <title>@Title · PgBolt</title>
+    <link rel="stylesheet" href="@Context.CssUrl">
+    <script src="@Context.HtmxUrl"></script>
+    <script src="@Context.ScriptUrl" defer></script>
+</head>
+<body hx-boost="true" hx-target="#main" hx-swap="innerHTML show:window:top" hx-inherit="hx-boost hx-target hx-swap">
+    <header class="pgbolt-header">
+        <a class="pgbolt-brand" href="./">PgBolt</a>
+        <nav class="pgbolt-nav">
+            <a href="./">Обзор</a>
+            <a href="queues">Очереди</a>
+            <a href="jobs/scheduled">Задачи</a>
+            <a href="batches">Batches</a>
+            <a href="recurring">Recurring</a>
+            <a href="servers">Серверы</a>
+            <a href="types">Типы задач</a>
+        </nav>
+    </header>
+    <main id="main"><DynamicComponent Type="Body" Parameters="BodyParameters.ToDictionary(p => p.Key, p => p.Value!)" /></main>
+    <div id="pgbolt-notify" role="status" aria-live="polite"></div>
+</body>
+</html>
+
+@code {
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+    [Parameter] public Type Body { get; set; } = null!;
+    [Parameter] public IReadOnlyDictionary<string, object?> BodyParameters { get; set; } = null!;
+}

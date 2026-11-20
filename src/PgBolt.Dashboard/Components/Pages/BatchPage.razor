@@ -1,0 +1,43 @@
+<article class="pgbolt-card">
+    <h1>Batch @Batch.Id <StateBadge State="Batch.State" /></h1><BatchActions Batch="Batch" Context="Context" />
+    <dl class="pgbolt-props">
+        <dt>Прогресс</dt><dd>@Batch.Succeeded / @Batch.Total</dd>
+        <dt>Failed</dt><dd>@Batch.Failed</dd>
+        <dt>Cancelled</dt><dd>@Batch.Cancelled</dd>
+        <dt>Создан</dt><dd><Time Utc="Batch.CreatedAt.UtcDateTime" /></dd>
+        <dt>Завершён</dt><dd><Time Utc="Batch.FinishedAt?.UtcDateTime" /></dd>
+        @if (Batch.CancellationRequested)
+        {
+            <dt>Отмена</dt><dd>запрошена</dd>
+        }
+        @if (Batch.OuterBatchId is { } outer)
+        {
+            <dt>Внешний batch</dt><dd><a href="batches/@outer">@outer</a></dd>
+        }
+        @if (Batch.ParentId is { } parent)
+        {
+            <dt>Родитель</dt><dd><a href="jobs/@parent">@parent</a></dd>
+        }
+        else if (Batch.ParentBatchId is { } parentBatch)
+        {
+            <dt>Родитель</dt><dd><a href="batches/@parentBatch">@parentBatch</a></dd>
+        }
+        @if (Batch.Condition is { } condition)
+        {
+            <dt>Условие</dt><dd>@condition</dd>
+        }
+    </dl>
+    <h2>Задачи</h2>
+    <ul hx-get="batches/@Batch.Id/jobs" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">загрузка…</li></ul>
+    <h2>Вложенные batches</h2>
+    <ul hx-get="batches/@Batch.Id/nested" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">загрузка…</li></ul>
+    <h2>Продолжения</h2>
+    <ul hx-get="batches/@Batch.Id/continuations" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">загрузка…</li></ul>
+    <h2>Batch-продолжения</h2>
+    <ul hx-get="batches/@Batch.Id/batch-continuations" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">загрузка…</li></ul>
+</article>
+
+@code {
+    [Parameter] public BatchInfo Batch { get; set; } = null!;
+    [Parameter] public DashboardContext Context { get; set; } = null!;
+}

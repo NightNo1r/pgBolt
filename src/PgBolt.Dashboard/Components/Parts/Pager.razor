@@ -1,0 +1,23 @@
+@using Microsoft.AspNetCore.WebUtilities
+@if (Next is { } next)
+{
+    var href = QueryHelpers.AddQueryString(BaseUrl, "after", next);
+    <p class="pgbolt-pager">
+        @if (ScannedTo is { } scanned)
+        {
+            <text>Просмотрено до </text><Time Utc="scanned.UtcDateTime" /><text> — </text><a href="@href" hx-push-url="true">продолжить поиск</a>
+        }
+        else
+        {
+            <a href="@href" hx-push-url="true">следующая страница</a>
+        }
+    </p>
+}
+
+@code {
+    [Parameter] public string? Next { get; set; }
+    [Parameter] public DateTimeOffset? ScannedTo { get; set; }
+
+    /// <summary>Url списка без after.</summary>
+    [Parameter] public string BaseUrl { get; set; } = "";
+}

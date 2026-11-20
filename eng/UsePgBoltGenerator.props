@@ -1,0 +1,7 @@
+<Project>
+  <ItemGroup>
+    <ProjectReference Include="$(RepoRoot)src/PgBolt.Generators/PgBolt.Generators.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Import Project="$(RepoRoot)src/PgBolt.Abstractions/build/PgBolt.Abstractions.props" />
+</Project>

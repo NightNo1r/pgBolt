@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>PgBolt</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <PropertyGroup>
+    <PackageId>PgBolt.OpenTelemetry</PackageId>
+    <Description>OpenTelemetry instrumentation for PgBolt: trace source, meter and histogram buckets.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="OpenTelemetry" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PgBolt.Abstractions\PgBolt.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

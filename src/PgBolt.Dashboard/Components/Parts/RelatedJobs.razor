@@ -1,0 +1,20 @@
+@using Microsoft.AspNetCore.WebUtilities
+@foreach (var r in Page.Rows)
+{
+    <li><a href="jobs/@r.Id">@r.Id</a> @r.Type · @r.Queue <StateBadge State="r.State" /> <Time Utc="r.CreatedAt" /></li>
+}
+@if (Page.Rows.Count == 0)
+{
+    <li class="muted">нет</li>
+}
+@if (Page.Next is { } next)
+{
+    <li hx-get="@QueryHelpers.AddQueryString(BaseUrl, "after", next)" hx-target="this" hx-swap="outerHTML"><button type="button">ещё</button></li>
+}
+
+@code {
+    [Parameter] public Page<RelatedJobRow> Page { get; set; } = null!;
+
+    /// <summary>Url фрагмента без after.</summary>
+    [Parameter] public string BaseUrl { get; set; } = "";
+}

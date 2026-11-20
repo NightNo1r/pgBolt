@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Микробенчмарки синхронизации рантайма (lock против lock-free). Не тестовый проект: dotnet test его не запускает. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PgBolt.Benchmarks</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Без синхронизации: компилируется из продукта как есть, а не копией. -->
+    <Compile Include="..\..\src\PgBolt.Server\Runtime\MonoClock.cs" Link="Copies\MonoClock.cs" />
+    <Using Include="PgBolt.Server.Runtime" />
+  </ItemGroup>
+</Project>

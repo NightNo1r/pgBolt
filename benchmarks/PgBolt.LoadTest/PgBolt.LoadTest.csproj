@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Нагрузочный стенд: долгие сценарии с реальными PostgreSQL и PgBouncer. Не тестовый проект: dotnet test его не запускает. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PgBolt.LoadTest</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="HdrHistogram" />
+    <PackageReference Include="Testcontainers" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PgBolt.Server\PgBolt.Server.csproj" />
+    <ProjectReference Include="..\..\src\PgBolt.Postgres\PgBolt.Postgres.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="PgBolt.LoadTest.Tests" />
+  </ItemGroup>
+</Project>
