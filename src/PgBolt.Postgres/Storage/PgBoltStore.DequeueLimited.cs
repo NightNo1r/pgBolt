@@ -34,11 +34,10 @@ public sealed partial class PgBoltStore
             SET {{LeaseSet}}
             FROM c, r
             WHERE q.job_id = c.job_id AND (r.room IS NULL OR c.rn <= r.room)
-            RETURNING q.job_id, q.lease_id, q.attempt, {{WaitSecondsExpr}}
+            RETURNING q.job_id, q.lease_id, q.attempt, q.priority, q.run_at, {{WaitSecondsExpr}}
         )
-        SELECT r.room, x.* FROM r LEFT JOIN (
-            {{SelectLeasedJobs}}
-        ) x ON true
+        SELECT r.room, {{LeasedColumns}} FROM r LEFT JOIN l ON true {{JoinDefinitions}}
+        ORDER BY l.priority DESC, l.run_at
         """;
 
     private string QueueLockSql => field ??= Render(QueueLockTemplate);

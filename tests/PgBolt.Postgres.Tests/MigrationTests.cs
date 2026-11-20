@@ -213,6 +213,9 @@ public abstract class MigrationTests(PostgresFixture pg, ConnectionMode mode) : 
         var script = PgBoltMigrations.GetScript("my_schema");
         Assert.Contains("-- V001 initial", script);
         Assert.Contains("-- V002 missing_job", script);
+        var upgrade = PgBoltMigrations.GetScript("my_schema", fromVersion: 2);
+        Assert.Contains("CREATE FUNCTION my_schema.read_jobs(uuid[])", upgrade);
+        Assert.DoesNotContain("-- V002", upgrade);
         Assert.Contains("CREATE TABLE my_schema.maintenance_tasks", script);
         Assert.Contains("CREATE TABLE my_schema.recurring_jobs", script);
         Assert.Contains("CREATE TABLE my_schema.batches", script);
@@ -232,6 +235,7 @@ public abstract class MigrationTests(PostgresFixture pg, ConnectionMode mode) : 
         await _db.ExecAsync(PgBoltMigrations.GetScript(_db.Schema, fromVersion: 1));
 
         Assert.True(await _db.ScalarAsync<bool>("SELECT to_regprocedure('{schema}.missing_job(uuid)') IS NOT NULL"));
+        Assert.True(await _db.ScalarAsync<bool>("SELECT to_regprocedure('{schema}.read_jobs(uuid[])') IS NOT NULL"));
         Assert.Equal(PgBoltMigrations.LatestVersion, await Runner().GetCurrentVersionAsync(Ct));
     }
 

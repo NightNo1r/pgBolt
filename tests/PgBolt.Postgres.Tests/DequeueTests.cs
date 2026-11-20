@@ -61,14 +61,17 @@ public abstract class DequeueTests(PostgresFixture pg, ConnectionMode mode) : St
         Assert.Empty(await Store.DequeueAsync("q", 10, ServerA, Lease, Ct));
     }
 
-    [Fact]
-    public async Task Order_is_priority_desc_then_run_at()
+    [Theory]
+    [InlineData(QueueKind.Plain)]
+    [InlineData(QueueKind.Limited)]
+    public async Task Order_is_priority_desc_then_run_at(QueueKind kind)
     {
         var lowEarly = await EnqueueAsync(priority: 0);
         var high = await EnqueueAsync(priority: 5);
         var lowLate = await EnqueueAsync(priority: 0);
 
-        var jobs = await Store.DequeueAsync("q", 10, ServerA, Lease, Ct);
+        var jobs = kind == QueueKind.Plain ? await Store.DequeueAsync("q", 10, ServerA, Lease, Ct)
+            : (await Store.DequeueLimitedAsync("q", 10, ServerA, Lease, Ct)).Jobs;
 
         Assert.Equal(new[] { high, lowEarly, lowLate }, jobs.Select(j => j.Id));
     }

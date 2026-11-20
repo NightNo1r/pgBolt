@@ -6,7 +6,7 @@ namespace PgBolt.Postgres.Tests;
 
 /// <summary>
 /// Планы dequeue на большой очереди: 300 000 готовых строк, jobs — 10 суточных партиций по 140 000 строк. Без Seq Scan по queue
-/// и партициям jobs и без Hash Join. Только Direct (EXPLAIN), Slow.
+/// и партициям jobs. Только Direct (EXPLAIN), Slow.
 /// </summary>
 [Trait("Category", "Slow")]
 public sealed class DequeueLimitedPlanTests(PostgresFixture pg) : StoreTestBase(pg, ConnectionMode.Direct)
@@ -71,7 +71,7 @@ public sealed class DequeueLimitedPlanTests(PostgresFixture pg) : StoreTestBase(
 
     private static void AssertNoScansOfWholeTables(List<JsonElement> nodes)
     {
-        Assert.DoesNotContain(nodes, x => x.GetProperty("Node Type").GetString() == "Hash Join");
+        // Соединение двух ограниченных пачек по hash допустимо. Захват обязан обращаться к queue по индексам.
         Assert.DoesNotContain(nodes, x => x.GetProperty("Node Type").GetString() == "Seq Scan"
             && x.GetProperty("Relation Name").GetString()! is var r && (r == "queue" || r.StartsWith("jobs_", StringComparison.Ordinal)));
     }

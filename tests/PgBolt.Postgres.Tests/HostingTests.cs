@@ -188,7 +188,7 @@ public abstract class HostingTests(PostgresFixture pg, ConnectionMode mode) : IA
         await new PgBolt.Postgres.Schema.MigrationRunner(_db.Admin, _db.Schema).MigrateAsync(Ct);
         await _db.ExecAsync("DROP TABLE {schema}.recurring_jobs");        // схема прошлой сборки: версия есть, объектов части 4 нет
         // У исторической V002 была maintenance_tasks, но ещё не было функции проверки выдачи.
-        await _db.ExecAsync("DROP FUNCTION {schema}.missing_job(uuid)");
+        await _db.ExecAsync("DROP FUNCTION {schema}.missing_job(uuid), {schema}.read_jobs(uuid[])");
         await _db.ExecAsync("DELETE FROM {schema}.schema_version WHERE version > @v", ("v", version));
         await using var sp = Build(o => o.AutoMigrate = autoMigrate);
 
@@ -260,8 +260,9 @@ public abstract class HostingTests(PostgresFixture pg, ConnectionMode mode) : IA
     [Theory]
     [InlineData(true, null, true)]
     [InlineData(true, 1, true)]
-    [InlineData(true, 2, false)]
+    [InlineData(true, 2, true)]
     [InlineData(true, 3, false)]
+    [InlineData(true, 4, false)]
     [InlineData(false, null, false)]
     [InlineData(false, 1, false)]
     public void Needs_migration_only_for_missing_or_older_schema(bool autoMigrate, int? version, bool expected) =>
