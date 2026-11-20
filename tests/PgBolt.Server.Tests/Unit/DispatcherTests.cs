@@ -729,8 +729,10 @@ public sealed class DispatcherTests : IAsyncDisposable
         await Dequeues(3);
     }
 
-    [Fact]
-    public async Task Last_slot_flushes_acks()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Last_slot_flushes_acks(int successes)
     {
         _options.Queue("q");
         LimitQueue("q", 2);
@@ -746,9 +748,30 @@ public sealed class DispatcherTests : IAsyncDisposable
         Assert.Empty(_store.CallsOf("Ack"));
 
         FreeSlot(jobs[1]);
-        _sink.Complete(jobs[1], new JobOutcome.Ack());
-        await Eventually.True(() => _store.CallsOf("Ack").Any(), "both leases are released without advancing the clock");
-        Assert.Equal(jobs.Select(j => j.Lease), (LeaseRef[])Assert.Single(_store.CallsOf("Ack")).Detail!);
+        _sink.Complete(jobs[1], successes == 2 ? new JobOutcome.Ack() : new JobOutcome.ConfirmCancel(null));
+        await Eventually.True(() => _store.CallsOf("Ack").Any(), "buffered successes are sent without advancing the clock");
+        Assert.Equal(jobs.Take(successes).Select(j => j.Lease), (LeaseRef[])Assert.Single(_store.CallsOf("Ack")).Detail!);
+    }
+
+    [Fact]
+    public async Task Limit_observed_flushes_acks()
+    {
+        _options.Workers = 1;
+        _options.Queue("q");
+        LimitQueue("q", 2);
+        var response = new TaskCompletionSource<LimitedDequeueResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        RespondLimited = (_, _, _) => _started.IsEmpty ? Limited(1, limitReached: false) : response.Task;
+        Start();
+        await Idle(1);
+
+        // Второй хост занял место, пока этот хост буферизовал ACK и ждал ответа на выдачу.
+        var job = Assert.Single(_started);
+        FreeSlot(job);
+        await Dequeues(2);
+        _sink.Complete(job, new JobOutcome.Ack());
+        Assert.Empty(_store.CallsOf("Ack"));
+        response.SetResult(new LimitedDequeueResult([], true));
+        await Eventually.True(() => _store.CallsOf("Ack").Any(), "the empty fetch at the limit releases the buffered lease");
     }
 
     [Fact]

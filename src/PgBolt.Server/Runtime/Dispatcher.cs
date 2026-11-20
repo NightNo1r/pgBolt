@@ -149,6 +149,11 @@ internal sealed partial class Dispatcher
                         }
                         errorPause = TimeSpan.Zero;
 
+                        if (q.LimitReached && jobs.Count == 0)
+                        {
+                            _sink.RecheckBufferedAcks(name);
+                        }
+
                         var validUntil = _clock.Add(fetchStartedAt, _options.LeaseDuration);
                         if (_stopping || _keeper.HeartbeatLost)
                         {

@@ -156,6 +156,35 @@ internal sealed partial class CompletionSink
             return;
         }
         StartSend(() => SendSingleAsync(execution));
+        // Последний локальный слот могла освободить отмена или ошибка, а в буфере ещё есть успехи этой очереди.
+        FlushIdleAcksLocked(execution.Queue);
+    }
+
+    /// <summary>Выдача могла увидеть занятый кластерный лимит уже после буферизации ACK.</summary>
+    internal void RecheckBufferedAcks(string queue)
+    {
+        lock (_lock)
+        {
+            FlushIdleAcksLocked(queue);
+        }
+    }
+
+    private void FlushIdleAcksLocked(string queue)
+    {
+        if (_ackBuffer.Count == 0 || _waitingForLease?.Invoke(queue) != true)
+        {
+            return;
+        }
+
+        // Коммит пачки освободит место, только если она содержит задачу этой очереди.
+        foreach (var job in _ackBuffer)
+        {
+            if (job.Queue == queue)
+            {
+                FlushAckLocked();
+                return;
+            }
+        }
     }
 
     private void OnAckTimer()
