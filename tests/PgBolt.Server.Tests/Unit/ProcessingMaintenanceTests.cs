@@ -35,22 +35,19 @@ public sealed class ProcessingMaintenanceTests : IDisposable
         };
 
     [Fact]
-    public async Task Promote_repeats_while_batch_is_full_and_signals_queues()
+    public async Task Promote_signals_drained_queues()
     {
         var signals = new ConcurrentQueue<string>();
         foreach (var q in new[] { "a", "b", "c" })
             _wakeup.Subscribe(q, () => signals.Enqueue(q));
-        var batches = new ConcurrentQueue<int>();
-        _store.OnPromote = (batch, _) =>
-        {
-            batches.Enqueue(batch);
-            return Task.FromResult(batches.Count == 1 ? new PromoteResult(batch, ["a", "b"]) : new PromoteResult(3, ["c"]));
-        };
+        // Хранилище уже обработало полную пачку и три задачи из следующей.
+        _store.OnPromote = (batch, _) => Task.FromResult(
+            _store.CallsOf("Promote").Count() == 1 ? new PromoteResult(batch + 3, ["a", "b", "c"]) : new PromoteResult(0, []));
 
         var promoted = await Create().PromoteOnceAsync(Ct);
 
         Assert.Equal(1003, promoted);
-        Assert.Equal([1000, 1000], batches);
+        Assert.Single(_store.CallsOf("Promote"));
         Assert.Equal(["a", "b", "c"], signals);
     }
 

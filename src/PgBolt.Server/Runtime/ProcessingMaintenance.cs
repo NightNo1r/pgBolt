@@ -77,19 +77,16 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
         return _loops;
     }
 
-    /// <summary>PromoteDueAsync(1000), пока пакет полный; каждая очередь с новыми задачами получает сигнал.</summary>
+    /// <summary>Хранилище обрабатывает пачки до неполной. Каждая очередь с новыми задачами получает один сигнал.</summary>
     internal async Task<int> PromoteOnceAsync(CancellationToken ct)
     {
-        var total = 0;
-        while (true)
+        var result = await store.PromoteDueAsync(BatchSize, ct);
+        foreach (var queue in result.Queues)
         {
-            var result = await store.PromoteDueAsync(BatchSize, ct);
-            total += result.Promoted;
-            foreach (var queue in result.Queues)
-                wakeup.Signal(queue);
-            if (result.Promoted < BatchSize)
-                return total;
+            wakeup.Signal(queue);
         }
+
+        return result.Promoted;
     }
 
     /// <summary>SweepExpiredLeasesAsync(1000), пока пакет полный.</summary>

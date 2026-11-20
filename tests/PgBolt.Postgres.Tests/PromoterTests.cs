@@ -24,11 +24,30 @@ public abstract class PromoterTests(PostgresFixture pg, ConnectionMode mode) : S
     public async Task Loops_until_partial_batch()
     {
         for (var i = 0; i < 25; i++)
-            await EnqueueAsync(delay: TimeSpan.FromHours(1));
+        {
+            await EnqueueAsync(queue: i < 10 ? "Q" : "q", delay: TimeSpan.FromHours(1));
+        }
         await Db.ExecAsync("UPDATE {schema}.queue SET run_at = now() - interval '1 second'");
 
-        Assert.Equal(25, (await Store.PromoteDueAsync(10, Ct)).Promoted);
+        var result = await Store.PromoteDueAsync(10, Ct);
+        Assert.Equal(25, result.Promoted);
+        Assert.Equal(["Q", "q"], result.Queues.Order(StringComparer.Ordinal));
         Assert.Equal(0L, await Db.ScalarAsync<long>("SELECT count(*) FROM {schema}.queue WHERE NOT ready"));
+    }
+
+    [Fact]
+    public async Task Batch_returns_one_summary()
+    {
+        // Измеряем строки результата реального SQL при нескольких задачах одной очереди.
+        await EnqueueAsync(delay: TimeSpan.FromHours(1));
+        await EnqueueAsync(delay: TimeSpan.FromHours(1));
+        await Db.ExecAsync("UPDATE {schema}.queue SET run_at = now()");
+        await using var cmd = Db.DataSource.CreateCommand(Store.PromoteSql);
+        cmd.Parameters.AddWithValue("batch", 10);
+        await using var reader = await cmd.ExecuteReaderAsync(Ct);
+
+        Assert.True(await reader.ReadAsync(Ct));
+        Assert.False(await reader.ReadAsync(Ct));
     }
 
     [Fact]
