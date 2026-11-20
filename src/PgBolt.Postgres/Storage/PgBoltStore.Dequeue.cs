@@ -16,10 +16,12 @@ public sealed partial class PgBoltStore
     private const string WaitSecondsExpr =
         "greatest(0, extract(epoch FROM clock_timestamp() - q.run_at))::double precision AS wait_seconds";
 
+    // При повреждённой паре queue/jobs ошибка внутри statement откатывает lease всей пачки.
     private const string SelectLeasedJobs = """
-        SELECT j.id, l.lease_id, j.type, j.args, l.attempt, j.max_attempts, j.retry_delays,
+        SELECT coalesce(j.id, {schema}.missing_job(l.job_id)) AS id,
+                   l.lease_id, j.type, j.args, l.attempt, j.max_attempts, j.retry_delays,
                    j.parent_id, j.batch_id, j.trace_parent, j.recurring_id, j.scheduled_at, j.continuation, l.wait_seconds
-            FROM l JOIN {schema}.jobs j ON j.id = l.job_id
+            FROM l LEFT JOIN {schema}.jobs j ON j.id = l.job_id
         """;
 
     private const string DequeueTemplate = $$"""

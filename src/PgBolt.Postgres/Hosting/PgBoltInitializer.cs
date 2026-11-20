@@ -90,13 +90,18 @@ public sealed partial class PgBoltInitializer : IHostedService
 
         // §4, §9.3: версия новее кода — не ошибка (схему поднял более новый релиз при rolling deploy, миграции аддитивны).
         var version = await _migrations.GetCurrentVersionAsync(cancellationToken);
+        // Исторические сборки использовали те же номера, но требуют пересоздания схемы.
+        if (version.HasValue)
+        {
+            await EnsureNotPreReleaseSchemaAsync(cancellationToken);
+        }
+
         if (PgBoltMigrations.IsOutdated(version))
             throw new InvalidOperationException(
                 $"PgBolt schema version in '{_options.Schema}' is {version?.ToString() ?? "absent"}, expected {PgBoltMigrations.LatestVersion}. " +
                 "Apply PgBoltMigrations.GetScript(...) or enable AutoMigrate.");
         if (version > PgBoltMigrations.LatestVersion)
             Log.SchemaVersionNewer(_logger, _options.Schema, version, PgBoltMigrations.LatestVersion);
-        await EnsureNotPreReleaseSchemaAsync(cancellationToken);
 
         var result = await _partitions.EnsureAsync(_options.PartitionDaysAhead, cancellationToken);
         if (result.TimedOut && !result.TodayPresent)
@@ -134,9 +139,9 @@ public sealed partial class PgBoltInitializer : IHostedService
     }
 
     /// <summary>
-    /// Миграции объединены в одну V001, поэтому схемы прошлых сборок (версия 1 или 2, но без части объектов — recurring_jobs,
+    /// Начальные миграции объединены в V001, поэтому схемы прошлых сборок (версия 1 или 2, но без части объектов — recurring_jobs,
     /// batches, stats_minutes, queue_stats, queue_settings) и колонок (queue_stats.oldest_ready_seconds) не обновляются. Признак такой
-    /// схемы — отсутствие любой из этих таблиц или колонки после миграций и проверки версии.
+    /// схемы — отсутствие любой из этих таблиц или колонки.
     /// </summary>
     private async Task EnsureNotPreReleaseSchemaAsync(CancellationToken ct)
     {
