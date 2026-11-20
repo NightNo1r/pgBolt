@@ -5,7 +5,7 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Отправка исходов: ack — пакетами (размер или окно от первого элемента), остальное — поштучно и параллельно.
+/// Отправка исходов: ack — пакетами по размеру, таймеру или при простое у кластерного лимита, остальное — поштучно и параллельно.
 /// Каждая попытка начинается CAS OutcomePending → OutcomeInFlight; ошибка — обратно в OutcomePending и повтор
 /// с backoff 100 мс → 5 с в пределах бюджета LeaseDuration от первой попытки. Запись покидает таблицу только
 /// после завершения отправки (успех, LeaseLost, бюджет, прерывание остановкой). После успеха или LeaseLost —
@@ -25,6 +25,7 @@ internal sealed partial class CompletionSink
     private readonly OutcomeStats _stats;
     private readonly PgBoltMetrics _metrics;
     private readonly Action<string>? _onLeaseFreed;
+    private readonly Func<string, bool>? _waitingForLease;
     private readonly Lock _lock = new();
     private readonly ConcurrentDictionary<Task, byte> _sends = new();
     private readonly CancellationTokenSource _abort = new();
@@ -34,7 +35,8 @@ internal sealed partial class CompletionSink
     private int _backoffWaits;
 
     public CompletionSink(Guid serverId, IServerStore store, ExecutionTable table, PgBoltServerOptions options,
-        MonoClock clock, ILogger logger, OutcomeStats stats, PgBoltMetrics metrics, Action<string>? onLeaseFreed = null)
+        MonoClock clock, ILogger logger, OutcomeStats stats, PgBoltMetrics metrics, Action<string>? onLeaseFreed = null,
+        Func<string, bool>? waitingForLease = null)
     {
         _serverId = serverId;
         _store = store;
@@ -45,6 +47,7 @@ internal sealed partial class CompletionSink
         _stats = stats;
         _metrics = metrics;
         _onLeaseFreed = onLeaseFreed;
+        _waitingForLease = waitingForLease;
     }
 
     /// <summary>Для тестов: сколько раз отправка встала на ожидание backoff (таймер уже взведён).</summary>
@@ -141,10 +144,15 @@ internal sealed partial class CompletionSink
         if (execution.Outcome is JobOutcome.Ack)
         {
             _ackBuffer.Add(execution);
-            if (_ackBuffer.Count >= _options.AckBatchSize)
+            // У исчерпанного лимита ожидание таймера оставило бы простаивать уже закончившую работу очередь.
+            if (_ackBuffer.Count >= _options.AckBatchSize || _waitingForLease?.Invoke(execution.Queue) == true)
+            {
                 FlushAckLocked();
+            }
             else if (_ackBuffer.Count == 1)
+            {
                 _ackTimer?.Change(_options.AckFlushInterval, Timeout.InfiniteTimeSpan);
+            }
             return;
         }
         StartSend(() => SendSingleAsync(execution));

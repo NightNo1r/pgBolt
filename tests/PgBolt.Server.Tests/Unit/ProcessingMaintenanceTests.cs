@@ -35,7 +35,7 @@ public sealed class ProcessingMaintenanceTests : IDisposable
         };
 
     [Fact]
-    public async Task Promote_signals_drained_queues()
+    public async Task Promote_signals_queues_once()
     {
         var signals = new ConcurrentQueue<string>();
         foreach (var q in new[] { "a", "b", "c" })

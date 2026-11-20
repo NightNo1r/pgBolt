@@ -87,6 +87,10 @@ internal sealed partial class Dispatcher
 
     public void Wake() => _wake.Set();
 
+    /// <summary>Лимит исчерпан, а у этого сервера уже нет работающих задач очереди. Место освободит коммит исхода.</summary>
+    internal bool WaitingForLease(string queue) =>
+        _byName[queue].LimitReached && _slots.InUse(queue) == 0;
+
     private async Task RunAsync()
     {
         var subscriptions = Subscribe();
@@ -360,7 +364,7 @@ internal sealed partial class Dispatcher
         public int Signaled;
         public int SlotFreed;
         public int LeaseFreed;
-        public bool LimitReached;   // только поток цикла
+        public volatile bool LimitReached;   // пишет диспетчер, читает также отправитель ACK
     }
 
     private static partial class Log

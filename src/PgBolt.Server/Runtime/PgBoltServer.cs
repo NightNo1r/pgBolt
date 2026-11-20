@@ -48,7 +48,8 @@ internal sealed partial class PgBoltServer
         _slots = new SlotAllocator(Options.Workers, Options.Queues, () => settings.Current.Weights);
         Dispatcher? dispatcher = null;   // onRecovered и onLeaseFreed будят диспетчер; keeper и sink стартуют после его создания
         _keeper = new LeaseKeeper(_registration, store, _table, Options, clock, _logger, () => dispatcher?.Wake(), metrics);
-        _sink = new CompletionSink(Id, store, _table, Options, clock, _logger, stats, metrics, q => dispatcher?.OnLeaseFreed(q));
+        _sink = new CompletionSink(Id, store, _table, Options, clock, _logger, stats, metrics,
+            q => dispatcher?.OnLeaseFreed(q), q => dispatcher?.WaitingForLease(q) == true);
         var filters = new FilterPipeline([.. globalFilters, .. Options.FilterTypes]);
         _runner = new JobRunner(registry, scopes, filters, new RetryDecider(Options.RetryPolicy, _logger), Options, clock, loggers,
             metrics, Name);
