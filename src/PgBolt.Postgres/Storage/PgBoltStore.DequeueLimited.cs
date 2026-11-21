@@ -5,9 +5,17 @@ namespace PgBolt.Postgres.Storage;
 public sealed partial class PgBoltStore
 {
     // Транзакционный lock: снимается на коммите батча; сессионный остался бы на серверном соединении PgBouncer.
-    private const string QueueLockTemplate = """
-        SELECT pg_advisory_xact_lock(hashtextextended('pgbolt:{schema}:' || @queue, 0))
+    private const string QueueLockExpr = "pg_advisory_xact_lock(hashtextextended('pgbolt:{schema}:' || @queue, 0))";
+    private const string QueueLockTemplate = "SELECT " + QueueLockExpr;
+
+    // Зависимости CTE гарантируют, что сервер снимет первую метку до захвата, а вторую после него.
+    private const string TimedLockTemplate = $$"""
+        WITH stamp AS MATERIALIZED (SELECT clock_timestamp() AS started),
+        held AS MATERIALIZED (SELECT started, {{QueueLockExpr}} FROM stamp)
+        SELECT (extract(epoch FROM clock_timestamp() - started) * 1000000)::bigint FROM held
         """;
+    private string TimedLockSql => field ??= Render(TimedLockTemplate);
+    internal Action<long>? QueueLockMeasured { get; set; }
 
     // Отдельная команда после lock: snapshot берётся уже после коммита предыдущего держателя, и подсчёт видит все взятые им
     // строки (в одном statement'е с lock snapshot был бы старше ожидания и лимит превышался бы).
@@ -34,11 +42,10 @@ public sealed partial class PgBoltStore
             SET {{LeaseSet}}
             FROM c, r
             WHERE q.job_id = c.job_id AND (r.room IS NULL OR c.rn <= r.room)
-            RETURNING q.job_id, q.lease_id, q.attempt, {{WaitSecondsExpr}}
+            RETURNING q.job_id, q.lease_id, q.attempt, q.priority, q.run_at, {{WaitSecondsExpr}}
         )
-        SELECT r.room, x.* FROM r LEFT JOIN (
-            {{SelectLeasedJobs}}
-        ) x ON true
+        SELECT r.room, {{LeasedColumns}} FROM r LEFT JOIN l ON true {{JoinDefinitions}}
+        ORDER BY l.priority DESC, l.run_at
         """;
 
     private string QueueLockSql => field ??= Render(QueueLockTemplate);
@@ -56,9 +63,10 @@ public sealed partial class PgBoltStore
         {
             await using var conn = await _dataSource.OpenConnectionAsync(c);
             // Две команды одного батча без BeginTransaction — одна неявная транзакция и один round trip.
+            var measure = QueueLockMeasured;
             await using var batch = new NpgsqlBatch(conn)
             {
-                BatchCommands = { new NpgsqlBatchCommand(QueueLockSql), new NpgsqlBatchCommand(DequeueLimitedSql) },
+                BatchCommands = { new NpgsqlBatchCommand(measure is null ? QueueLockSql : TimedLockSql), new NpgsqlBatchCommand(DequeueLimitedSql) },
             };
             P.Add(batch.BatchCommands[0].Parameters, "queue", queue);
             var ps = batch.BatchCommands[1].Parameters;
@@ -69,7 +77,12 @@ public sealed partial class PgBoltStore
             if (_prepare)
                 await batch.PrepareAsync(c);
 
+            DequeueExecuting?.Invoke();
             await using var r = await batch.ExecuteReaderAsync(c);
+            if (measure is not null && await r.ReadAsync(c))
+            {
+                measure(r.GetInt64(0));
+            }
             await r.NextResultAsync(c);
             long? room = null;
             var jobs = new List<LeasedJob>();

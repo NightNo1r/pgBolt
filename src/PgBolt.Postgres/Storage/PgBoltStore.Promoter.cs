@@ -9,10 +9,13 @@ public sealed partial class PgBoltStore
             ORDER BY run_at
             LIMIT @batch
             FOR UPDATE SKIP LOCKED
+        ), promoted AS (
+            UPDATE {schema}.queue q SET ready = true
+            FROM p WHERE q.job_id = p.job_id
+            RETURNING q.queue
         )
-        UPDATE {schema}.queue q SET ready = true
-        FROM p WHERE q.job_id = p.job_id
-        RETURNING q.queue
+        SELECT count(*)::int, coalesce(array_agg(DISTINCT queue COLLATE "C"), '{}'::text[])
+        FROM promoted
         """;
 
     internal string PromoteSql => field ??= Render(PromoteTemplate);
@@ -25,12 +28,18 @@ public sealed partial class PgBoltStore
         var total = 0;
         while (true)
         {
-            var batch = await QueryAsync(PromoteSql, ps => P.Add(ps, "batch", batchSize),
-                async (r, c) => await r.ReadAllAsync(static r => r.GetString(0), c), ct);
-            total += batch.Count;
-            queues.UnionWith(batch);
-            if (batch.Count < batchSize)
+            // Число изменённых строк определяет повтор, имена нужны только для пробуждения очередей.
+            var (promoted, names) = await QueryAsync(PromoteSql, ps => P.Add(ps, "batch", batchSize), static async (r, c) =>
+            {
+                await r.ReadAsync(c);
+                return (r.GetInt32(0), r.GetFieldValue<string[]>(1));
+            }, ct);
+            total += promoted;
+            queues.UnionWith(names);
+            if (promoted < batchSize)
+            {
                 return new PromoteResult(total, queues);
+            }
         }
     }
 }

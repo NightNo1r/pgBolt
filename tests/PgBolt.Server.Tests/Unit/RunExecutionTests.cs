@@ -62,6 +62,7 @@ public sealed class RunExecutionTests : IAsyncDisposable
     private ServiceProvider? _provider;
     private PgBoltProcessingService? _service;
     private int _polls;
+    private int _clusterLimit = 5;
     private string? _jobType;
 
     public RunExecutionTests()
@@ -96,15 +97,15 @@ public sealed class RunExecutionTests : IAsyncDisposable
         _services.AddPgBoltServer("a", s =>
         {
             s.Workers = 1;
-            s.Queue(Queue, q => q.ClusterMaxConcurrency = 5);
+            s.Queue(Queue, q => q.ClusterMaxConcurrency = _clusterLimit);
             configure?.Invoke(s);
         });
-        _store.OnGetActiveQueueSettings = _ => Task.FromResult<IReadOnlyList<ActiveQueueSetting>>([new(Queue, 5, null)]);
+        _store.OnGetActiveQueueSettings = _ => Task.FromResult<IReadOnlyList<ActiveQueueSetting>>([new(Queue, _clusterLimit, null)]);
         _store.OnDequeueLimited = async (_, _, _) =>
         {
             await _dequeueGate.Task;
-            return new LimitedDequeueResult(
-                Interlocked.Increment(ref _polls) == 1 && _jobType is { } type ? [Leased.Job(type: type)] : [], false);
+            LeasedJob[] jobs = Interlocked.Increment(ref _polls) == 1 && _jobType is { } type ? [Leased.Job(type: type)] : [];
+            return new LimitedDequeueResult(jobs, jobs.Length == _clusterLimit);
         };
         _provider = _services.BuildServiceProvider();
         _service = new PgBoltProcessingService(_provider, _ => Task.CompletedTask);
@@ -156,6 +157,24 @@ public sealed class RunExecutionTests : IAsyncDisposable
             collector.Dispose();
         if (_provider is not null)
             await _provider.DisposeAsync();
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    public async Task Ack_releases_a_full_limit(int limit)
+    {
+        _clusterLimit = limit;
+        await StartAsync();
+        await (await RunOneAsync(Probe.Name)).WaitAsync(Ct);
+
+        // При свободных местах обычная пачка ждёт таймера, при занятом последнем месте ACK нужен сразу.
+        if (limit > 1)
+        {
+            Assert.Empty(_store.CallsOf("Ack"));
+            _time.Advance(Server.Options.AckFlushInterval);
+        }
+        await Eventually.True(() => _store.CallsOf("Ack").Count() == 1, "the finished job releases its lease");
     }
 
     [Fact]

@@ -81,7 +81,8 @@ public sealed class DispatcherTests : IAsyncDisposable
         };
         _slots = new SlotAllocator(_options.Workers, _options.Queues, Distribution);
         _keeper = new LeaseKeeper(new ServerRegistration(ServerId, "s", "h", ["q"], 1), _store, _table, _options, _clock, NullLogger.Instance, onRecovered: () => { }, _metrics);
-        _sink = new CompletionSink(ServerId, _store, _table, _options, _clock, NullLogger.Instance, new OutcomeStats(_time), _metrics);
+        _sink = new CompletionSink(ServerId, _store, _table, _options, _clock, NullLogger.Instance, new OutcomeStats(_time), _metrics,
+            waitingForLease: q => _dispatcher.WaitingForLease(q));
         _dispatcher = new Dispatcher(_options, _slots, new DequeueFetchStrategy(_store, ServerId, _options.LeaseDuration, () => Settings), _keeper, _sink,
             _wakeup, _clock, _logs.CreateLogger("dispatcher"), e =>
             {
@@ -113,8 +114,8 @@ public sealed class DispatcherTests : IAsyncDisposable
     private static Task<LimitedDequeueResult> Limited(int count, bool limitReached) =>
         Task.FromResult(new LimitedDequeueResult(Enumerable.Range(0, count).Select(_ => Leased.Job()).ToArray(), limitReached));
 
-    private void LimitQueue(string queue) =>
-        Settings = new QueueSettingsSnapshot(new Dictionary<string, int> { [queue] = 1 }.ToFrozenDictionary(StringComparer.Ordinal), FrozenDictionary<string, int>.Empty);
+    private void LimitQueue(string queue, int limit = 1) =>
+        Settings = new QueueSettingsSnapshot(new Dictionary<string, int> { [queue] = limit }.ToFrozenDictionary(StringComparer.Ordinal), FrozenDictionary<string, int>.Empty);
 
     private Task Idle(int waits) =>
         Eventually.True(() => _dispatcher.IdleWaits == waits, $"dispatcher enters wait #{waits}");
@@ -726,6 +727,51 @@ public sealed class DispatcherTests : IAsyncDisposable
         Assert.Equal(2, _dequeues.Count);
         _time.Advance(Ms);
         await Dequeues(3);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Last_slot_flushes_acks(int successes)
+    {
+        _options.Queue("q");
+        LimitQueue("q", 2);
+        RespondLimited = (_, _, _) => Limited(_started.IsEmpty ? 2 : 0, limitReached: true);
+        Start();
+        await Idle(1);
+        var jobs = _started.ToArray();
+        Assert.Equal(2, jobs.Length);
+
+        // Пока второй исполнитель занят, первый ACK остаётся в пачке.
+        FreeSlot(jobs[0]);
+        _sink.Complete(jobs[0], new JobOutcome.Ack());
+        Assert.Empty(_store.CallsOf("Ack"));
+
+        FreeSlot(jobs[1]);
+        _sink.Complete(jobs[1], successes == 2 ? new JobOutcome.Ack() : new JobOutcome.ConfirmCancel(null));
+        await Eventually.True(() => _store.CallsOf("Ack").Any(), "buffered successes are sent without advancing the clock");
+        Assert.Equal(jobs.Take(successes).Select(j => j.Lease), (LeaseRef[])Assert.Single(_store.CallsOf("Ack")).Detail!);
+    }
+
+    [Fact]
+    public async Task Limit_observed_flushes_acks()
+    {
+        _options.Workers = 1;
+        _options.Queue("q");
+        LimitQueue("q", 2);
+        var response = new TaskCompletionSource<LimitedDequeueResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        RespondLimited = (_, _, _) => _started.IsEmpty ? Limited(1, limitReached: false) : response.Task;
+        Start();
+        await Idle(1);
+
+        // Второй хост занял место, пока этот хост буферизовал ACK и ждал ответа на выдачу.
+        var job = Assert.Single(_started);
+        FreeSlot(job);
+        await Dequeues(2);
+        _sink.Complete(job, new JobOutcome.Ack());
+        Assert.Empty(_store.CallsOf("Ack"));
+        response.SetResult(new LimitedDequeueResult([], true));
+        await Eventually.True(() => _store.CallsOf("Ack").Any(), "the empty fetch at the limit releases the buffered lease");
     }
 
     [Fact]

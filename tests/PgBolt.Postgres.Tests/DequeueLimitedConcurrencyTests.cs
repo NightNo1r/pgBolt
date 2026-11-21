@@ -76,6 +76,24 @@ public abstract class DequeueLimitedConcurrencyTests(PostgresFixture pg, Connect
         Assert.Equal(4L, max);
     }
 
+    [Fact]
+    public async Task MeasuresQueueLockWait()
+    {
+        var samples = new List<long>();
+        Store.QueueLockMeasured = samples.Add;
+        await Store.DequeueLimitedAsync("q", 1, ServerB, Lease, Ct);
+        await using var holder = await Db.Admin.OpenConnectionAsync(Ct);
+        await using var tx = await holder.BeginTransactionAsync(Ct);
+        await LockQueueAsync(holder, tx);
+        var pending = Store.DequeueLimitedAsync("q", 1, ServerB, Lease, Ct);
+        await WaitForQueueLockAsync(pending);
+        await Task.Delay(100, Ct);
+        await tx.CommitAsync(Ct);
+        await pending;
+        Assert.Equal(2, samples.Count);
+        Assert.True(samples[1] >= 100_000, $"free={samples[0]} µs, held={samples[1]} µs");
+    }
+
     /// <summary>
     /// Контроль: lock и подсчёт в одном statement'е превышают лимит — snapshot statement'а взят до ожидания lock и не видит
     /// строки, закоммиченные держателем. Поэтому лимитированный dequeue берёт lock отдельной командой батча.
@@ -121,21 +139,26 @@ public abstract class DequeueLimitedConcurrencyTests(PostgresFixture pg, Connect
             return await cmd.ExecuteNonQueryAsync(Ct);
         }, Ct);
 
+        await WaitForQueueLockAsync(b);
+        await txA.CommitAsync(Ct);
+
+        Assert.Equal(2, await b);
+        Assert.Equal(4L, await Db.ScalarAsync<long>("SELECT count(*) FROM {schema}.queue WHERE queue = 'q' AND lease_owner IS NOT NULL"));
+    }
+    private async Task WaitForQueueLockAsync(Task pending)
+    {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         while (!await Db.ScalarAsync<bool>($"""
                    SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
                                   AND ((classid::bigint << 32) | objid::bigint) = {LockKey})
                    """, ("q", "q")))
         {
-            Assert.False(b.IsCompleted, "B finished without waiting for the lock");
+            Assert.False(pending.IsCompleted, "B finished without waiting for the lock");
             Assert.True(System.Diagnostics.Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(10), "B never waited for the lock");
             await Task.Delay(20, Ct);
         }
-        await txA.CommitAsync(Ct);
-
-        Assert.Equal(2, await b);
-        Assert.Equal(4L, await Db.ScalarAsync<long>("SELECT count(*) FROM {schema}.queue WHERE queue = 'q' AND lease_owner IS NOT NULL"));
     }
+
 }
 
 public sealed class DequeueLimitedConcurrencyTests_Direct(PostgresFixture pg) : DequeueLimitedConcurrencyTests(pg, ConnectionMode.Direct);

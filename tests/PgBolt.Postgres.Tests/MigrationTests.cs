@@ -59,13 +59,13 @@ public abstract class MigrationTests(PostgresFixture pg, ConnectionMode mode) : 
             SELECT pg_get_indexdef(to_regclass(@a)) LIKE '%(parent_id, job_id) WHERE (await_condition IS NOT NULL)'
                AND pg_get_indexdef(to_regclass(@j)) LIKE '%(batch_id, id) WHERE (batch_id IS NOT NULL)'
             """, ("a", $"{_db.Schema}.queue_awaiting"), ("j", $"{_db.Schema}.jobs_batch")));
-        Assert.Equal("n_distinct=-0.05", await AttributeOptionsAsync("queue", "parent_id"));
+        Assert.Contains("n_distinct=-0.05", await AttributeOptionsAsync("queue", "parent_id"));
     }
 
     /// <summary>pg_attribute.attoptions колонки: закреплённый n_distinct поиска детей по parent_id (§4, §6.4).</summary>
-    private Task<string> AttributeOptionsAsync(string table, string column) =>
-        _db.ScalarAsync<string>(
-            "SELECT coalesce(array_to_string(attoptions, ','), '') FROM pg_attribute WHERE attrelid = to_regclass(@t) AND attname = @c",
+    private Task<string[]> AttributeOptionsAsync(string table, string column) =>
+        _db.ScalarAsync<string[]>(
+            "SELECT coalesce(attoptions, ARRAY[]::text[]) FROM pg_attribute WHERE attrelid = to_regclass(@t) AND attname = @c",
             ("t", $"{_db.Schema}.{table}"), ("c", column));
 
     [Fact]
@@ -80,8 +80,8 @@ public abstract class MigrationTests(PostgresFixture pg, ConnectionMode mode) : 
             await ColumnsAsync("batches"));
         Assert.Equal("batches_await_jobs,batches_awaiting,batches_finished,batches_nested,batches_open,batches_parent",
             await IndexesAsync("batches", "batches_pkey"));
-        Assert.Equal("n_distinct=-0.05", await AttributeOptionsAsync("batches", "parent_id"));
-        Assert.Equal("n_distinct=-0.05", await AttributeOptionsAsync("batches", "parent_batch_id"));
+        Assert.Contains("n_distinct=-0.05", await AttributeOptionsAsync("batches", "parent_id"));
+        Assert.Contains("n_distinct=-0.05", await AttributeOptionsAsync("batches", "parent_batch_id"));
         Assert.Equal(
             "id:bigint:true,node_id:uuid:true,kind:smallint:true,batch_id:uuid:false,counted:boolean:true,stage:smallint:true," +
             "cursor:uuid:false,retry_after:timestamp with time zone:false,created_at:timestamp with time zone:true",
@@ -112,7 +112,6 @@ public abstract class MigrationTests(PostgresFixture pg, ConnectionMode mode) : 
     public async Task Maintenance_tasks_has_spec_columns_and_no_rows()
     {
         await Runner().MigrateAsync(Ct);
-        Assert.Equal(1, PgBoltMigrations.LatestVersion);
         await using var cmd = _db.Admin.CreateCommand("""
             SELECT string_agg(attname || ':' || format_type(atttypid, atttypmod) || ':' || attnotnull, ',' ORDER BY attnum)
             FROM pg_attribute WHERE attrelid = to_regclass(@t) AND attnum > 0 AND NOT attisdropped
@@ -209,11 +208,14 @@ public abstract class MigrationTests(PostgresFixture pg, ConnectionMode mode) : 
     }
 
     [Fact]
-    public void Script_contains_single_merged_migration()
+    public void ScriptIncludesInitialAndGuard()
     {
         var script = PgBoltMigrations.GetScript("my_schema");
         Assert.Contains("-- V001 initial", script);
-        Assert.DoesNotContain("-- V002", script);
+        Assert.Contains("-- V002 missing_job", script);
+        var upgrade = PgBoltMigrations.GetScript("my_schema", fromVersion: 2);
+        Assert.Contains("CREATE FUNCTION my_schema.read_jobs(uuid[])", upgrade);
+        Assert.DoesNotContain("-- V002", upgrade);
         Assert.Contains("CREATE TABLE my_schema.maintenance_tasks", script);
         Assert.Contains("CREATE TABLE my_schema.recurring_jobs", script);
         Assert.Contains("CREATE TABLE my_schema.batches", script);
@@ -221,6 +223,20 @@ public abstract class MigrationTests(PostgresFixture pg, ConnectionMode mode) : 
         Assert.Contains("CREATE TABLE my_schema.stats_minutes", script);
         Assert.Contains("CREATE TABLE my_schema.queue_stats", script);
         Assert.Contains("VALUES (1, now())", script);
+    }
+
+    [Fact]
+    public async Task UpgradeFromInitialAddsGuard()
+    {
+        // Установить реальную V001, затем применить только добавочную миграцию из ручного скрипта.
+        await _db.ExecAsync(PgBoltMigrations.BootstrapSql);
+        await _db.ExecAsync(PgBoltMigrations.All[0].Sql);
+        await _db.ExecAsync("INSERT INTO {schema}.schema_version VALUES (1, now())");
+        await _db.ExecAsync(PgBoltMigrations.GetScript(_db.Schema, fromVersion: 1));
+
+        Assert.True(await _db.ScalarAsync<bool>("SELECT to_regprocedure('{schema}.missing_job(uuid)') IS NOT NULL"));
+        Assert.True(await _db.ScalarAsync<bool>("SELECT to_regprocedure('{schema}.read_jobs(uuid[])') IS NOT NULL"));
+        Assert.Equal(PgBoltMigrations.LatestVersion, await Runner().GetCurrentVersionAsync(Ct));
     }
 
     [Fact]

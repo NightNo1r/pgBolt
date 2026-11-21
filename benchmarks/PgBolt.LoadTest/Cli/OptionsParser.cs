@@ -30,6 +30,7 @@ internal static class OptionsParser
 
     private static readonly Scenario[] AllScenarios = [.. Scenarios.Values];
     private static readonly Scenario[] WithRate = [Scenario.Sustained, Scenario.Partitions, Scenario.Vacuum];
+    private const string PgProfileFlag = "--pg-profile";
 
     /// <summary>Флаг → сценарии, в которых он допустим.</summary>
     private static readonly Dictionary<string, Scenario[]> Flags = new()
@@ -46,12 +47,14 @@ internal static class OptionsParser
         ["--ramp-step-duration"] = [Scenario.Ramp],
         ["--ramp-max"] = [Scenario.Ramp],
         ["--partitions"] = [Scenario.Partitions],
+        ["--queue-profile"] = [Scenario.Partitions],
         ["--indexes"] = [Scenario.Partitions],
         ["--phase1"] = [Scenario.Vacuum],
         ["--hold-xmin"] = [Scenario.Vacuum],
         ["--phase3"] = [Scenario.Vacuum],
         ["--queue-reloptions"] = [Scenario.Vacuum],
-        ["--pg-setting"] = [Scenario.Vacuum],
+        [PgProfileFlag] = [Scenario.Sustained, Scenario.Partitions, Scenario.Vacuum],
+        ["--pg-setting"] = [Scenario.Sustained, Scenario.Vacuum],
     };
 
     public static ParseResult Parse(IReadOnlyList<string> args)
@@ -80,6 +83,12 @@ internal static class OptionsParser
         if (connection is not null && values.ContainsKey("--pg-setting"))
             throw new FormatException("--pg-setting нельзя вместе с --connection: параметры задаются только своему контейнеру.");
 
+        // У внешнего сервера свой профиль, его фактические параметры читаются после подключения.
+        if (connection is not null && values.ContainsKey(PgProfileFlag))
+        {
+            throw new FormatException($"{PgProfileFlag} нельзя вместе с --connection.");
+        }
+
         var warmup = scenario switch
         {
             Scenario.Partitions => TimeSpan.FromSeconds(30),
@@ -93,6 +102,18 @@ internal static class OptionsParser
             Modes = ParseModes(values.GetValueOrDefault("--mode"), scenario, connection, bouncer),
             Connection = connection,
             BouncerConnection = bouncer,
+            Queues = values.GetValueOrDefault("--queue-profile") switch
+            {
+                null or "standard" => QueueProfile.Standard,
+                "limited" => QueueProfile.Limited,
+                var raw => throw new FormatException($"--queue-profile: ожидается standard|limited, получено {raw}."),
+            },
+            PgProfile = values.GetValueOrDefault(PgProfileFlag) switch
+            {
+                null or "bench" => PostgresProfile.Bench,
+                "stock" => PostgresProfile.Stock,
+                var raw => throw new FormatException($"{PgProfileFlag}: ожидается stock|bench, получено {raw}."),
+            },
             Out = values.GetValueOrDefault("--out") ?? defaults.Out,
             Rate = Number(values, "--rate", defaults.Rate),
             Warmup = Duration(values, "--warmup", warmup, multipleOf10: false),

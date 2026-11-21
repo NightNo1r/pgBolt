@@ -87,6 +87,10 @@ internal sealed partial class Dispatcher
 
     public void Wake() => _wake.Set();
 
+    /// <summary>Лимит исчерпан, а у этого сервера уже нет работающих задач очереди. Место освободит коммит исхода.</summary>
+    internal bool WaitingForLease(string queue) =>
+        _byName[queue].LimitReached && _slots.InUse(queue) == 0;
+
     private async Task RunAsync()
     {
         var subscriptions = Subscribe();
@@ -123,15 +127,20 @@ internal sealed partial class Dispatcher
                         var pollBeforeSlot = q.PollBeforeSlot;
                         q.PollBeforeSlot = null;
                         IReadOnlyList<LeasedJob> jobs;
+                        var measure = _options.FetchMeasured;
+                        var started = fetchStartedAt;
                         try
                         {
                             using var timeout = new CancellationTokenSource(_options.HeartbeatInterval, _clock.Time);
+                            if (measure is not null) { started = _clock.Now; }
                             var result = await _fetch.FetchAsync(name, n, timeout.Token);
+                            measure?.Invoke(_clock.Elapsed(started), result.Jobs.Count);
                             jobs = result.Jobs;
                             q.LimitReached = result.LimitReached;
                         }
                         catch (Exception e)
                         {
+                            measure?.Invoke(_clock.Elapsed(started), null);
                             _metrics.StorageError(StorageOperations.Dequeue);
                             errorPause = NextErrorPause(errorPause);
                             pausedUntil = _clock.Add(_clock.Now, errorPause);
@@ -139,6 +148,11 @@ internal sealed partial class Dispatcher
                             break;
                         }
                         errorPause = TimeSpan.Zero;
+
+                        if (q.LimitReached && jobs.Count == 0)
+                        {
+                            _sink.RecheckBufferedAcks(name);
+                        }
 
                         var validUntil = _clock.Add(fetchStartedAt, _options.LeaseDuration);
                         if (_stopping || _keeper.HeartbeatLost)
@@ -355,7 +369,7 @@ internal sealed partial class Dispatcher
         public int Signaled;
         public int SlotFreed;
         public int LeaseFreed;
-        public bool LimitReached;   // только поток цикла
+        public volatile bool LimitReached;   // пишет диспетчер, читает также отправитель ACK
     }
 
     private static partial class Log

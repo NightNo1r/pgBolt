@@ -16,10 +16,15 @@ public sealed partial class PgBoltStore
     private const string WaitSecondsExpr =
         "greatest(0, extract(epoch FROM clock_timestamp() - q.run_at))::double precision AS wait_seconds";
 
-    private const string SelectLeasedJobs = """
-        SELECT j.id, l.lease_id, j.type, j.args, l.attempt, j.max_attempts, j.retry_delays,
+    // При повреждённой паре queue/jobs ошибка внутри statement откатывает lease всей пачки.
+    private const string LeasedColumns = """
+        coalesce(j.id, {schema}.missing_job(l.job_id)) AS id,
+                   l.lease_id, j.type, j.args, l.attempt, j.max_attempts, j.retry_delays,
                    j.parent_id, j.batch_id, j.trace_parent, j.recurring_id, j.scheduled_at, j.continuation, l.wait_seconds
-            FROM l JOIN {schema}.jobs j ON j.id = l.job_id
+        """;
+
+    private const string JoinDefinitions = """
+        LEFT JOIN {schema}.read_jobs((SELECT array_agg(job_id) FROM l)) j ON j.id = l.job_id
         """;
 
     private const string DequeueTemplate = $$"""
@@ -34,9 +39,10 @@ public sealed partial class PgBoltStore
             UPDATE {schema}.queue q
             SET {{LeaseSet}}
             FROM c WHERE q.job_id = c.job_id
-            RETURNING q.job_id, q.lease_id, q.attempt, {{WaitSecondsExpr}}
+            RETURNING q.job_id, q.lease_id, q.attempt, q.priority, q.run_at, {{WaitSecondsExpr}}
         )
-        {{SelectLeasedJobs}}
+        SELECT {{LeasedColumns}} FROM l {{JoinDefinitions}}
+        ORDER BY l.priority DESC, l.run_at
         """;
 
     internal string DequeueSql => field ??= Render(DequeueTemplate);
@@ -46,7 +52,7 @@ public sealed partial class PgBoltStore
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(max);
         return QueryAsync<IReadOnlyList<LeasedJob>>(DequeueSql, ps => BindDequeue(ps, queue, max, serverId, lease),
-            async (r, c) => await r.ReadAllAsync(static r => ReadLeasedJob(r, 0), c), ct);
+            async (r, c) => await r.ReadAllAsync(static r => ReadLeasedJob(r, 0), c), ct, DequeueExecuting);
     }
 
     internal static void BindDequeue(NpgsqlParameterCollection ps, string queue, int max, Guid serverId, TimeSpan lease)

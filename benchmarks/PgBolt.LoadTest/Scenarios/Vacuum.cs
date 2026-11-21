@@ -104,7 +104,7 @@ internal sealed class Vacuum : IScenario
     }
 
     /// <summary>
-    /// Входы выбора параметров autovacuum: выполнены ли SLO 7–9 («нет данных» нарушением не считается), пик
+    /// Входы выбора параметров autovacuum: выполнены ли SLO 7–9, пик
     /// <c>pg_total_relation_size(queue)</c> в фазе 1 и p99 немедленных фазы 1; без срезов или задач фазы 1 — <c>null</c>.
     /// </summary>
     private static ModeOutcome? Outcome(RunData data, IReadOnlyList<SloVerdict> verdicts, LatencySummary? phase1Immediate)
@@ -112,7 +112,7 @@ internal sealed class Vacuum : IScenario
         var p = data.Phases!;
         var peak = SloEvaluator.SamplesIn(data.Samples, p.Phase1Start, p.Phase2Start).Max(s => s.QueueTotalBytes);
         if (peak is null || phase1Immediate is not { Count: > 0 }) return null;
-        return new ModeOutcome(verdicts.Where(v => v.Number is >= 7 and <= 9).All(v => v.Result != Verdict.Fail),
+        return new ModeOutcome(SloEvaluator.VacuumStatus(verdicts.Where(v => v.Number is >= 7 and <= 9).Select(v => v.Result)),
             peak.Value, phase1Immediate.P99Ms);
     }
 }

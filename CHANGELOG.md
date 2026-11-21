@@ -149,6 +149,7 @@
 
 ### Changed
 
+- При отсутствии записи в `jobs` обычная и лимитированная выдача откатывают всю пачку. Ошибка PostgreSQL содержит ID отсутствующей задачи. При выключенном `AutoMigrate` перед обновлением примените миграцию V002 через `PgBoltMigrations.GetScript(schema, fromVersion: 1)`.
 - Observability (часть 7a):
   - `jobs.trace_parent` пишет id producer-span'а (без него — id `Activity.Current`, как раньше); `IRecurringJobManager.TriggerAsync`
     пишет `trace_parent` по тому же правилу (раньше — `NULL`);

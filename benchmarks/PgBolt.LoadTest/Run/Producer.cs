@@ -36,7 +36,7 @@ internal sealed class Producer : IAsyncDisposable
         _host = host;
         _client = host.Services.GetRequiredService<IJobClient>();
         _ctx = ctx;
-        _pipeline = new ProducerPipeline(new ProfileB(new Random()), new TokenBucket(rate, rate, TimeProvider.System),
+        _pipeline = new ProducerPipeline(new ProfileB(new Random(), ctx.Queues), new TokenBucket(rate, rate, TimeProvider.System),
             new BatchAssembler(), SendAsync, () => RunClock.NowMicros, () => ProfileB.PickDelaySeconds(Random.Shared),
             TimeProvider.System, ctx.Counter.EnsureChunk);
     }

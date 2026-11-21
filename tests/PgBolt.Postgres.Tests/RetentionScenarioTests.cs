@@ -164,6 +164,46 @@ public abstract class RetentionScenarioTests(PostgresFixture pg, ConnectionMode 
         Assert.Equal(60L, await Db.ScalarAsync<long>("SELECT count(*) FROM {schema}.queue WHERE queue = 'old'"));
     }
 
+    [Theory]
+    [InlineData(DequeueTests.QueueKind.Plain)]
+    [InlineData(DequeueTests.QueueKind.Limited)]
+    public async Task ReadAcrossPartitionSwap(DequeueTests.QueueKind kind)
+    {
+        var day = Ago(10);
+        await PinnedAsync(day, live: 1);
+        var parent = await OidAsync("jobs");
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hooks = new HookRecorder
+        {
+            Then = async (step, token) =>
+            {
+                if (step is { Parent: "jobs", Step: RetentionStep.BatchB })
+                {
+                    ready.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                }
+            },
+        };
+        var compaction = Runner(o => o.JobsRetention = Days3, hooks.Tuning(holdIdle: TimeSpan.FromSeconds(15))).ApplyAsync(Ct);
+        async Task<IReadOnlyList<LeasedJob>> TakeAsync() => kind == DequeueTests.QueueKind.Plain
+            ? await Store.DequeueAsync("q", 1, ServerA, Lease, Ct)
+            : (await Store.DequeueLimitedAsync("q", 1, ServerA, Lease, Ct)).Jobs;
+        Task<IReadOnlyList<LeasedJob>> dequeue;
+        try
+        {
+            await ready.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            dequeue = TakeAsync();
+            await WaitForLockWaitersAsync(parent, 1);
+        }
+        finally
+        {
+            release.TrySetResult();
+            Assert.True(Assert.Single((await compaction).Pinned).Compacted);
+        }
+        Assert.Single(await dequeue);
+    }
+
     [Fact]
     public async Task Repeatable_read_snapshot_taken_before_compaction_misses_moved_rows()   // документирует §5.3 «MVCC»
     {

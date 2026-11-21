@@ -21,6 +21,14 @@ public sealed class OptionsParserTests
     }
 
     [Fact]
+    public void LimitedQueueOnlyForPartitions()
+    {
+        Assert.Null(OptionsParser.Parse(["partitions", "--queue-profile", "limited"]).Error);
+        Assert.NotNull(OptionsParser.Parse(["sustained", "--queue-profile", "limited"]).Error);
+        Assert.NotNull(OptionsParser.Parse(["partitions", "--queue-profile", "other"]).Error);
+    }
+
+    [Fact]
     public void Sustained_defaults()
     {
         var o = Ok("sustained");
@@ -152,6 +160,21 @@ public sealed class OptionsParserTests
     [Fact]
     public void Pg_setting_with_connection_fails() =>
         Fails("vacuum", "--connection", "Host=x", "--pg-setting", "autovacuum_naptime=10s");
+
+    [Fact]
+    public void AcceptsSustainedPgSettings()
+    {
+        var options = Ok("sustained", "--pg-setting", "autovacuum_naptime=10s");
+        Assert.Equal("10s", options.PgSettings["autovacuum_naptime"]);
+    }
+
+    [Fact]
+    public void RejectsInvalidProfile()
+    {
+        Assert.Contains("stock", Fails("sustained", "--pg-profile", "fast"));
+        Assert.Contains("--connection", Fails("sustained", "--connection", "Host=x", "--pg-profile", "bench"));
+        Assert.Contains("--connection", Fails("sustained", "--connection", "Host=x", "--pg-setting", "work_mem=1MB"));
+    }
 
     [Theory]
     [InlineData("bouncer")]

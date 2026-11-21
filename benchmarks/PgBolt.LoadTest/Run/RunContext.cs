@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using PgBolt.LoadTest.Cli;
 using PgBolt.LoadTest.Load;
 using PgBolt.LoadTest.Measure;
 using PgBolt.LoadTest.Slo;
@@ -10,10 +11,12 @@ namespace PgBolt.LoadTest.Run;
 /// срез и сверка корректности.
 /// </summary>
 /// <param name="capacity">Верхняя оценка числа задач прогона: размер внешнего массива счётчика выполнений.</param>
-internal sealed class RunContext(long capacity)
+internal sealed class RunContext(long capacity, QueueProfile queues = QueueProfile.Standard)
 {
     private long _executed;
 
+    public FetchRecorder? Fetches { get; init; }
+    public QueueProfile Queues { get; } = queues;
     public ExecutionCounter Counter { get; } = new(capacity);
 
     /// <summary>Выполнений всего, включая падения первой попытки.</summary>

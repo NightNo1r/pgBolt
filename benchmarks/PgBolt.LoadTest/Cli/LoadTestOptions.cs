@@ -1,5 +1,7 @@
 namespace PgBolt.LoadTest.Cli;
 
+internal enum QueueProfile { Standard, Limited }
+
 internal enum Scenario { Sustained, Ramp, Partitions, Vacuum }
 
 /// <summary>Способ подключения нагрузки к БД; <c>*Prepared</c> — с авто-подготовкой statement'ов Npgsql.</summary>
@@ -7,6 +9,9 @@ internal enum LoadMode { Direct, Bouncer, DirectPrepared, BouncerPrepared }
 
 /// <summary>Набор индексов таблицы <c>jobs</c> в сценарии <c>partitions</c>.</summary>
 internal enum IndexSet { Current, Extra }
+
+/// <summary>Штатные параметры PostgreSQL или параметры исходных замеров стенда.</summary>
+internal enum PostgresProfile { Bench, Stock }
 
 /// <summary>
 /// Параметры прогона. Значения свойств по умолчанию — для сценариев, где они не переопределены;
@@ -18,6 +23,8 @@ internal sealed record LoadTestOptions
     public required IReadOnlyList<LoadMode> Modes { get; init; }
     public string? Connection { get; init; }
     public string? BouncerConnection { get; init; }
+    public QueueProfile Queues { get; init; }
+    public PostgresProfile PgProfile { get; init; } = PostgresProfile.Bench;
     public string Out { get; init; } = "benchmarks/PgBolt.LoadTest/results";
     public int Rate { get; init; } = 10_000;
     public TimeSpan Warmup { get; init; } = TimeSpan.FromMinutes(1);

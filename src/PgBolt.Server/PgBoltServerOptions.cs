@@ -16,6 +16,9 @@ public sealed class PgBoltServerOptions
     /// <summary>Наибольшая задержка таймера .NET (2³² − 2 мс ≈ 49,7 сут): предел DefaultJobTimeout и [Job(TimeoutSeconds)].</summary>
     internal static readonly TimeSpan MaxJobTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
 
+    // Стенд объединяет длительности FetchAsync обоих хостов в одну гистограмму.
+    internal Action<TimeSpan, int?>? FetchMeasured { get; set; }
+
     private readonly List<QueueOptions> _queues = [];
     private readonly List<Type> _filterTypes = [];
     private readonly List<Action<IServiceCollection>> _filterRegistrations = [];

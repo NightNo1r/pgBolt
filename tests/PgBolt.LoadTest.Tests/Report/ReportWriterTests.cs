@@ -131,7 +131,7 @@ public sealed class ReportWriterTests : IDisposable
         new(p, IndexSet.Extra, mode, slo1 ? Verdict.Pass : Verdict.Fail, Verdict.Pass, false, 120.5,
             new Dictionary<string, StatementResult>
             {
-                [StatementClasses.Dequeue] = new(new StatementClassStats(10, 0.25, 1.5, 2.5, 15), new LockCount(2 * p - 14, 2 * p + 2), true, PlanKind.Generic),
+                [StatementClasses.Dequeue] = new(new StatementClassStats(10, 0.25, 1.5, 2.5, 15), new LockCount(9, 25), false, PlanKind.Generic),
                 [StatementClasses.Ack] = new(null, new LockCount(0, 6), false, PlanKind.Custom),
             },
             3, 0.5, 7);
@@ -151,7 +151,7 @@ public sealed class ReportWriterTests : IDisposable
 
         Assert.Equal(Path.Combine(_dir, "20261017-1230-partitions-direct-prepared-p60-extra.md"), path);
         Assert.Contains("## Блокировки statement'ов", text);
-        Assert.Contains("| dequeue | generic | 106 | 122 | нижняя оценка |", text);
+        Assert.Contains("| dequeue | generic | 9 | 25 | измерение |", text);
         Assert.Contains("| ack | custom | 0 | 6 | измерение |", text);
     }
 
@@ -205,7 +205,7 @@ public sealed class ReportWriterTests : IDisposable
         Assert.Contains("| Ёмкость таблицы блокировок | 7808 |", text);
         Assert.Contains("| direct | extra | 60 | FAIL | PASS | 120.5 |  | 3 | 0.50 | 7 |  |", text);
         Assert.Contains("| bouncer | extra | 200 | нет данных | нет данных | нет данных |  | нет данных | нет данных | нет данных | TimeoutException: x |", text);
-        Assert.Contains("| direct | extra | 60 | dequeue | generic | 106 | 122 | нижняя оценка | 0.250 | 1.500 |", text);
+        Assert.Contains("| direct | extra | 60 | dequeue | generic | 9 | 25 | измерение | 0.250 | 1.500 |", text);
         Assert.Contains("| direct | extra | 15 | ack | custom | 0 | 6 | измерение | нет данных | нет данных |", text);
         // Порог P: наименьшее P, с которого режим и набор индексов нарушают SLO 1 или 2.
         Assert.Matches(@"(?m)^\| direct \| extra \| 60 \|\r?$", text);

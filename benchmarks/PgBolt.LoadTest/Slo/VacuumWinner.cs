@@ -1,7 +1,10 @@
 namespace PgBolt.LoadTest.Slo;
 
 /// <summary>Итог прогона <c>vacuum</c> в одном режиме: SLO 7–9, пиковый размер <c>queue</c> и p99 SLO 2 фазы 1.</summary>
-internal sealed record ModeOutcome(bool Slo7To9, double PeakSizeBytes, double P99Ms);
+internal sealed record ModeOutcome(Verdict Slo7To9, double PeakSizeBytes, double P99Ms)
+{
+    public bool Passed => Slo7To9 == Verdict.Pass;
+}
 
 internal sealed record VacuumCandidate(string Name, ModeOutcome Bouncer, ModeOutcome Direct);
 
@@ -21,7 +24,7 @@ internal static class VacuumWinner
     /// и в <c>direct</c>, иначе — кандидат, выполняющий их в обоих режимах.
     /// </summary>
     public static VacuumChoice Choose(VacuumCandidate current, VacuumCandidate baseline) =>
-        Pick(current, baseline, tieKeepsIncumbent: current.Direct.Slo7To9);
+        Pick(current, baseline, tieKeepsIncumbent: current.Direct.Passed);
 
     /// <summary>Табличный победитель против глобального кандидата; при равенстве остаётся табличный.</summary>
     public static VacuumChoice ChooseGlobal(VacuumCandidate tableWinner, VacuumCandidate global) =>
@@ -29,20 +32,25 @@ internal static class VacuumWinner
 
     private static VacuumChoice Pick(VacuumCandidate incumbent, VacuumCandidate challenger, bool tieKeepsIncumbent)
     {
+        if (new[] { incumbent.Direct, incumbent.Bouncer, challenger.Direct, challenger.Bouncer }
+            .Any(result => result.Slo7To9 == Verdict.NoData))
+        {
+            throw new InvalidOperationException("Для выбора параметров autovacuum нужны результаты SLO 7–9 обоих режимов.");
+        }
         var (mine, theirs) = (incumbent.Bouncer, challenger.Bouncer);
-        if (!mine.Slo7To9 && !theirs.Slo7To9) return new(incumbent, "SLO 7–9 в bouncer не выполняет ни один вариант");
+        if (!mine.Passed && !theirs.Passed) return new(incumbent, "SLO 7–9 в bouncer не выполняет ни один вариант");
 
         string reason;
-        if (!theirs.Slo7To9) return new(incumbent, $"{challenger.Name} не выполняет SLO 7–9 в bouncer");
-        if (!mine.Slo7To9) reason = $"{incumbent.Name} не выполняет SLO 7–9 в bouncer";
+        if (!theirs.Passed) return new(incumbent, $"{challenger.Name} не выполняет SLO 7–9 в bouncer");
+        if (!mine.Passed) reason = $"{incumbent.Name} не выполняет SLO 7–9 в bouncer";
         else if (Better(mine, theirs)) return new(incumbent, $"{incumbent.Name} лучше в bouncer");
         else if (Better(theirs, mine)) reason = $"{challenger.Name} лучше в bouncer";
-        else if (tieKeepsIncumbent || !challenger.Direct.Slo7To9) return new(incumbent, "равенство в bouncer");
+        else if (tieKeepsIncumbent || !challenger.Direct.Passed) return new(incumbent, "равенство в bouncer");
         else reason = $"равенство в bouncer, {challenger.Name} выполняет SLO 7–9 в обоих режимах";
 
-        if (!challenger.Direct.Slo7To9)
+        if (!challenger.Direct.Passed)
             return new(incumbent, $"расхождение режимов: {challenger.Name} не выполняет SLO 7–9 в direct");
-        if (incumbent.Direct.Slo7To9 && !NotWorse(challenger.Direct, incumbent.Direct))
+        if (incumbent.Direct.Passed && !NotWorse(challenger.Direct, incumbent.Direct))
             return new(incumbent, $"расхождение режимов: {challenger.Name} хуже {incumbent.Name} в direct");
         return new(challenger, reason);
     }

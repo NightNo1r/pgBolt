@@ -59,9 +59,9 @@ public sealed class CompletionSinkTests : IDisposable
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private CompletionSink Sink(Action<string>? onLeaseFreed = null)
+    private CompletionSink Sink(Action<string>? onLeaseFreed = null, Func<string, bool>? waitingForLease = null)
     {
-        var sink = new CompletionSink(_serverId, _store, _table, _options, _clock, _logs.CreateLogger("test"), _stats, _metrics, onLeaseFreed);
+        var sink = new CompletionSink(_serverId, _store, _table, _options, _clock, _logs.CreateLogger("test"), _stats, _metrics, onLeaseFreed, waitingForLease);
         sink.Start();
         return sink;
     }
@@ -98,11 +98,12 @@ public sealed class CompletionSinkTests : IDisposable
     [Fact]
     public async Task Ack_batch_is_sent_after_flush_interval_from_first_item()
     {
-        var sink = Sink();
+        var sink = Sink(waitingForLease: q => q == "blocked");
         var first = Running();
         var second = Running();
 
         sink.Complete(first, new JobOutcome.Ack());
+        sink.RecheckBufferedAcks("blocked");  // ACK другой очереди может дождаться общей пачки.
         _time.Advance(10 * Ms);
         sink.Complete(second, new JobOutcome.Ack());
         _time.Advance(9 * Ms);

@@ -1,10 +1,36 @@
 using System.Collections.Concurrent;
+using Npgsql;
 using PgBolt.Testing;
 
 namespace PgBolt.Postgres.Tests;
 
 public abstract class DequeueTests(PostgresFixture pg, ConnectionMode mode) : StoreTestBase(pg, mode)
 {
+    public enum QueueKind { Plain, Limited }
+
+    [Theory]
+    [InlineData(QueueKind.Plain)]
+    [InlineData(QueueKind.Limited)]
+    public async Task MissingJobRollsBackBatch(QueueKind kind)
+    {
+        // Одна потерянная запись jobs должна отменить выдачу обеих задач.
+        await EnqueueAsync();
+        var missing = await EnqueueAsync();
+        await Db.ExecAsync("DELETE FROM {schema}.jobs WHERE id = @id", ("id", missing));
+        await Db.ExecAsync("INSERT INTO {schema}.queue_settings (queue, default_max_concurrency) VALUES ('q', 2)");
+
+        Task dequeue = kind == QueueKind.Plain
+            ? Store.DequeueAsync("q", 2, ServerA, Lease, Ct)
+            : Store.DequeueLimitedAsync("q", 2, ServerA, Lease, Ct);
+        var error = await Assert.ThrowsAsync<PostgresException>(() => dequeue);
+        Assert.Equal(PostgresErrorCodes.NoDataFound, error.SqlState);
+        Assert.Contains(missing.ToString(), error.MessageText);
+        Assert.Equal(2L, await Db.ScalarAsync<long>("""
+            SELECT count(*) FROM {schema}.queue
+            WHERE lease_owner IS NULL AND lease_id IS NULL AND leased_at IS NULL AND lease_until IS NULL AND attempt = 0
+            """));
+    }
+
     [Fact]
     public async Task Dequeue_leases_job_and_returns_definition()
     {
@@ -35,14 +61,17 @@ public abstract class DequeueTests(PostgresFixture pg, ConnectionMode mode) : St
         Assert.Empty(await Store.DequeueAsync("q", 10, ServerA, Lease, Ct));
     }
 
-    [Fact]
-    public async Task Order_is_priority_desc_then_run_at()
+    [Theory]
+    [InlineData(QueueKind.Plain)]
+    [InlineData(QueueKind.Limited)]
+    public async Task Order_is_priority_desc_then_run_at(QueueKind kind)
     {
         var lowEarly = await EnqueueAsync(priority: 0);
         var high = await EnqueueAsync(priority: 5);
         var lowLate = await EnqueueAsync(priority: 0);
 
-        var jobs = await Store.DequeueAsync("q", 10, ServerA, Lease, Ct);
+        var jobs = kind == QueueKind.Plain ? await Store.DequeueAsync("q", 10, ServerA, Lease, Ct)
+            : (await Store.DequeueLimitedAsync("q", 10, ServerA, Lease, Ct)).Jobs;
 
         Assert.Equal(new[] { high, lowEarly, lowLate }, jobs.Select(j => j.Id));
     }

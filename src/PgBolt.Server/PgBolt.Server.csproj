@@ -12,6 +12,7 @@
     <ProjectReference Include="..\PgBolt.Postgres\PgBolt.Postgres.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="PgBolt.LoadTest" />
     <InternalsVisibleTo Include="PgBolt.Server.Tests" />
     <InternalsVisibleTo Include="PgBolt.Server.Benchmarks" />
   </ItemGroup>
