@@ -16,6 +16,7 @@
     <ProjectReference Include="..\PgBolt.Postgres\PgBolt.Postgres.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <None Update="THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="/" />
     <Content Remove="Assets\**" />
     <None Remove="Assets\**" />
     <EmbeddedResource Include="Assets\**" LogicalName="PgBolt.Dashboard.Assets.%(Filename)%(Extension)" />

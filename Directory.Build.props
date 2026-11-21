@@ -8,5 +8,14 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <RepoRoot>$(MSBuildThisFileDirectory)</RepoRoot>
     <Deterministic>true</Deterministic>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Authors>nightNo1r</Authors>
+    <RepositoryUrl>https://github.com/NightNo1r/pgBolt</RepositoryUrl>
+    <PackageProjectUrl>$(RepositoryUrl)</PackageProjectUrl>
   </PropertyGroup>
+  <ItemGroup>
+    <None Include="$(RepoRoot)LICENSE" Pack="true" PackagePath="/" Visible="false" />
+    <None Include="$(RepoRoot)docs/nuget.md" Pack="true" PackagePath="README.md" Visible="false" />
+  </ItemGroup>
 </Project>
