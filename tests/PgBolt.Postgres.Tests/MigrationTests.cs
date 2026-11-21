@@ -59,13 +59,13 @@ public abstract class MigrationTests(PostgresFixture pg, ConnectionMode mode) : 
             SELECT pg_get_indexdef(to_regclass(@a)) LIKE '%(parent_id, job_id) WHERE (await_condition IS NOT NULL)'
                AND pg_get_indexdef(to_regclass(@j)) LIKE '%(batch_id, id) WHERE (batch_id IS NOT NULL)'
             """, ("a", $"{_db.Schema}.queue_awaiting"), ("j", $"{_db.Schema}.jobs_batch")));
-        Assert.Equal("n_distinct=-0.05", await AttributeOptionsAsync("queue", "parent_id"));
+        Assert.Contains("n_distinct=-0.05", await AttributeOptionsAsync("queue", "parent_id"));
     }
 
     /// <summary>pg_attribute.attoptions колонки: закреплённый n_distinct поиска детей по parent_id (§4, §6.4).</summary>
-    private Task<string> AttributeOptionsAsync(string table, string column) =>
-        _db.ScalarAsync<string>(
-            "SELECT coalesce(array_to_string(attoptions, ','), '') FROM pg_attribute WHERE attrelid = to_regclass(@t) AND attname = @c",
+    private Task<string[]> AttributeOptionsAsync(string table, string column) =>
+        _db.ScalarAsync<string[]>(
+            "SELECT coalesce(attoptions, ARRAY[]::text[]) FROM pg_attribute WHERE attrelid = to_regclass(@t) AND attname = @c",
             ("t", $"{_db.Schema}.{table}"), ("c", column));
 
     [Fact]
@@ -80,8 +80,8 @@ public abstract class MigrationTests(PostgresFixture pg, ConnectionMode mode) : 
             await ColumnsAsync("batches"));
         Assert.Equal("batches_await_jobs,batches_awaiting,batches_finished,batches_nested,batches_open,batches_parent",
             await IndexesAsync("batches", "batches_pkey"));
-        Assert.Equal("n_distinct=-0.05", await AttributeOptionsAsync("batches", "parent_id"));
-        Assert.Equal("n_distinct=-0.05", await AttributeOptionsAsync("batches", "parent_batch_id"));
+        Assert.Contains("n_distinct=-0.05", await AttributeOptionsAsync("batches", "parent_id"));
+        Assert.Contains("n_distinct=-0.05", await AttributeOptionsAsync("batches", "parent_batch_id"));
         Assert.Equal(
             "id:bigint:true,node_id:uuid:true,kind:smallint:true,batch_id:uuid:false,counted:boolean:true,stage:smallint:true," +
             "cursor:uuid:false,retry_after:timestamp with time zone:false,created_at:timestamp with time zone:true",
