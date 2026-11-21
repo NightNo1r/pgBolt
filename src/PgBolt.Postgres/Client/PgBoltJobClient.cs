@@ -99,9 +99,9 @@ internal sealed partial class PgBoltJobClient(PgBoltStore store, JobTypesCache j
     }
 
     /// <summary>
-    /// Только READ COMMITTED. Явный другой уровень отклоняется сразу. Иначе уровень всегда читается с сервера
-    /// без кэша: Npgsql сообщает ReadCommitted и для BeginTransaction() без уровня, а SET TRANSACTION ISOLATION LEVEL
-    /// внутри транзакции меняет уровень незаметно для NpgsqlTransaction.IsolationLevel.
+    /// Accepts only READ COMMITTED. Explicitly requesting another level fails immediately. Otherwise reads isolation from the server every time.
+    /// Npgsql reports ReadCommitted for BeginTransaction() without a level, and SET TRANSACTION ISOLATION LEVEL can change it without updating
+    /// NpgsqlTransaction.IsolationLevel.
     /// </summary>
     internal static async Task EnsureReadCommittedAsync(NpgsqlTransaction tx, CancellationToken ct)
     {

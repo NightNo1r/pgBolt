@@ -66,11 +66,11 @@ public sealed partial class PgBoltStore
     private string ReadQueueStatsSql => field ??= Render(ReadQueueStatsTemplate);
     private string TrimStatsSql => field ??= Render(TrimStatsTemplate);
 
-    /// <summary>Сброс счётчиков исходов одним upsert'ом (часть 6 §4.1); пустой список — без обращения к БД.</summary>
+    /// <summary>Flushes outcome counters with one upsert (Part 6 §4.1). An empty list requires no database access.</summary>
     /// <remarks>
-    /// Предусловия: ключ (BucketUtc, ServerId, Queue) уникален в пакете (иначе 21000 — ON CONFLICT дважды по одной строке),
-    /// BucketUtc — UTC (иначе Npgsql отклоняет параметр timestamptz). Такой пакет не запишется ни при каком повторе:
-    /// вызывающий, возвращающий строки на повтор, повторял бы ошибку бесконечно.
+    /// Each (BucketUtc, ServerId, Queue) key must be unique within the batch, or ON CONFLICT hits one row twice (21000). BucketUtc must be UTC for
+    /// the Npgsql timestamptz parameter. Retrying cannot fix an invalid batch. A caller returning such rows for retry would repeat the error
+    /// indefinitely.
     /// </remarks>
     internal Task FlushOutcomeStatsAsync(IReadOnlyList<OutcomeStatsRow> rows, CancellationToken ct)
     {
@@ -92,10 +92,10 @@ public sealed partial class PgBoltStore
         }, ct);
     }
 
-    /// <summary>Снимок живых состояний по очередям в queue_stats, исчезнувшие очереди удаляются (часть 6 §4.2 п. 1).</summary>
+    /// <summary>Snapshots live states by queue into queue_stats and removes queues that have disappeared (Part 6 §4.2, step 1).</summary>
     internal Task SnapshotQueueStatsAsync(CancellationToken ct) => NonQueryAsync(SnapshotQueueStatsSql, _ => { }, ct);
 
-    /// <summary>Строки queue_stats и возраст последнего успешного снимка одним запросом.</summary>
+    /// <summary>Reads queue_stats rows and the age of the last successful snapshot in one query.</summary>
     internal Task<QueueStatsSnapshot> ReadQueueStatsAsync(CancellationToken ct) =>
         QueryAsync(ReadQueueStatsSql, _ => { }, async (r, c) =>
         {
@@ -111,12 +111,12 @@ public sealed partial class PgBoltStore
             return new QueueStatsSnapshot(rows, age);
         }, ct);
 
-    /// <summary>Мёртвые строки и размер таблиц queue и completions своей схемы (признаки bloat).</summary>
+    /// <summary>Reads dead tuple counts and sizes for queue and completions in this schema as indicators of bloat.</summary>
     internal Task<IReadOnlyList<TableStatsRow>> ReadTableStatsAsync(CancellationToken ct) =>
         QueryAsync<IReadOnlyList<TableStatsRow>>(ReadTableStatsSql, ps => P.Add(ps, "schema", Schema),
             async (r, c) => await r.ReadAllAsync(static r => new TableStatsRow(r.GetString(0), r.GetInt64(1), r.GetInt64(2)), c), ct);
 
-    /// <summary>Одна порция retention stats_minutes (часть 6 §4.2 п. 2); возвращает число удалённых строк.</summary>
+    /// <summary>Runs one stats_minutes retention batch and returns the number of deleted rows (Part 6 §4.2, step 2).</summary>
     internal Task<int> TrimStatsAsync(TimeSpan retention, int limit, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(retention, TimeSpan.Zero);

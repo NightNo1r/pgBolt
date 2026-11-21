@@ -4,10 +4,12 @@ using PgBolt.Postgres.Storage;
 
 namespace PgBolt.Server.Runtime;
 
-/// <summary>Строка servers (§7.2).</summary>
+/// <summary>A row in servers (§7.2).</summary>
 internal sealed record ServerRegistration(Guid Id, string Name, string Host, string[] Queues, int Capacity);
 
-/// <summary>Доступ runtime к БД; единственная реализация — <see cref="PgBoltServerStore"/>, в тестах — фейк.</summary>
+/// <summary>
+/// Database access for the runtime. <see cref="PgBoltServerStore"/> is the production implementation; tests use a fake.
+/// </summary>
 internal interface IServerStore
 {
     Task<IReadOnlyList<LeasedJob>> DequeueAsync(string queue, int max, Guid serverId, TimeSpan lease, CancellationToken ct);

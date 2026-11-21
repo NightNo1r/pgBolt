@@ -17,7 +17,7 @@
                 @($"{line.Leased ?? 0} / {limit}")
                 @if (s.Paused)
                 {
-                    <span class="pgbolt-state">Пауза</span>
+                    <span class="pgbolt-state">Paused</span>
                 }
             }
             else
@@ -39,15 +39,15 @@
 }
 @if (Queues.Count == 0)
 {
-    <tr><td colspan="@(Context.CanAct ? 10 : 9)" class="muted">очередей нет</td></tr>
+    <tr><td colspan="@(Context.CanAct ? 10 : 9)" class="muted">No queues</td></tr>
 }
 
 @code {
     [Parameter] public IReadOnlyList<QueueLine> Queues { get; set; } = [];
     [Parameter] public DashboardContext Context { get; set; } = null!;
 
-    /// <summary>Откуда значение: переопределение (кто, когда) или код; без значения и без переопределения — ничего.</summary>
+    /// <summary>Shows the override author and time or the configured default. Leaves the cell empty when neither applies.</summary>
     private static RenderFragment Origin(bool overridden, bool hasValue, string? by, DateTimeOffset? at) => overridden
-        ? @<span class="muted">переопределён: @by, <Time Utc="at?.UtcDateTime" /></span>
-        : hasValue ? @<span class="muted">из кода</span> : _ => { };
+        ? @<span class="muted">overridden by @by, <Time Utc="at?.UtcDateTime" /></span>
+        : hasValue ? @<span class="muted">configured default</span> : _ => { };
 }

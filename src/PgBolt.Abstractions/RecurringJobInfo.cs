@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace PgBolt;
 
-/// <summary>Строка recurring_jobs (часть 4 §4.1). Owner = null — расписание создано через API.</summary>
+/// <summary>A recurring_jobs record (Part 4 §4.1). Owner is null for schedules created through the API.</summary>
 public sealed record RecurringJobInfo(
     string Id,
     string JobName,

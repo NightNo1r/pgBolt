@@ -2,7 +2,7 @@ using System.Text.Json.Serialization.Metadata;
 
 namespace PgBolt;
 
-/// <summary>Метаданные [Job]-типа, заполняемые сгенерированным кодом (без reflection).</summary>
+/// <summary>Metadata for a [Job] type, populated by generated code without reflection.</summary>
 public static class JobMetadata<TArgs>
 {
     public static JobDescriptor? Descriptor { get; private set; }

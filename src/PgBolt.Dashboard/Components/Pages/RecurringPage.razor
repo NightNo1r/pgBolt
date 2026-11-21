@@ -1,29 +1,29 @@
 <article class="pgbolt-card">
     <h1>@Recurring.Id</h1><RecurringActions Id="@Recurring.Id" Paused="Recurring.Paused" Owner="@Recurring.Owner" View="card" Context="Context" />
     <dl class="pgbolt-props">
-        <dt>Тип</dt><dd>@Recurring.JobName</dd>
+        <dt>Type</dt><dd>@Recurring.JobName</dd>
         <dt>Cron</dt><dd>@Recurring.Cron</dd>
-        <dt>Часовой пояс</dt><dd>@Recurring.TimeZone</dd>
+        <dt>Time zone</dt><dd>@Recurring.TimeZone</dd>
         <dt>Misfire</dt><dd>@Recurring.Misfire</dd>
         <dt>Overlap</dt><dd>@Recurring.Overlap</dd>
-        <dt>Очередь</dt><dd>@Recurring.Queue</dd>
-        <dt>Владелец</dt><dd>@Recurring.Owner</dd>
-        <dt>Пауза</dt><dd>@(Recurring.Paused ? "да" : "нет")</dd>
-        <dt>Следующий запуск</dt><dd><Time Utc="Recurring.NextFireAt?.UtcDateTime" /></dd>
-        <dt>Последний запуск</dt><dd><Time Utc="Recurring.LastFireAt?.UtcDateTime" />@if (Recurring.LastJobId is { } last) { <text> </text><a href="jobs/@last">задача</a> }</dd>
+        <dt>Queue</dt><dd>@Recurring.Queue</dd>
+        <dt>Owner</dt><dd>@Recurring.Owner</dd>
+        <dt>Paused</dt><dd>@(Recurring.Paused ? "yes" : "no")</dd>
+        <dt>Next run</dt><dd><Time Utc="Recurring.NextFireAt?.UtcDateTime" /></dd>
+        <dt>Last run</dt><dd><Time Utc="Recurring.LastFireAt?.UtcDateTime" />@if (Recurring.LastJobId is { } last) { <text> </text><a href="jobs/@last">job</a> }</dd>
     </dl>
     @if (Recurring.LastError is { } error)
     {
-        <h2>Ошибка</h2>
+        <h2>Error</h2>
         <pre>@error</pre>
     }
-    <h2>Аргументы</h2>
+    <h2>Arguments</h2>
     <pre>@JobCard.Json(Recurring.Args)</pre>
-    <h2>Запуски</h2>
+    <h2>Runs</h2>
     <div class="pgbolt-table-wrap">
         <table>
             <thead>
-                <tr><th>Id</th><th>Состояние</th><th>Очередь</th><th>Создана</th><th>Завершена</th></tr>
+                <tr><th>Id</th><th>State</th><th>Queue</th><th>Created</th><th>Finished</th></tr>
             </thead>
             <tbody>
                 @foreach (var r in Runs.Rows)
@@ -41,7 +41,7 @@
     </div>
     @if (Runs.Rows.Count == 0)
     {
-        <p class="muted">запусков нет</p>
+        <p class="muted">No runs</p>
     }
     <Pager Next="@Runs.Next" ScannedTo="Runs.ScannedTo" BaseUrl="@($"recurring/item?id={Uri.EscapeDataString(Recurring.Id)}")" />
 </article>

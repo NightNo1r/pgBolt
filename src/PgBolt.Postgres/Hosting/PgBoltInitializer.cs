@@ -7,7 +7,7 @@ using PgBolt.Postgres.Storage;
 
 namespace PgBolt.Postgres.Hosting;
 
-/// <summary>Проверка изоляции, миграции и партиции на старте (§1, §4.4, §4.7).</summary>
+/// <summary>Checks isolation, applies migrations, and ensures partitions at startup (§1, §4.4, §4.7).</summary>
 public sealed partial class PgBoltInitializer : IHostedService
 {
     private readonly PgBoltOptions _options;
@@ -35,9 +35,9 @@ public sealed partial class PgBoltInitializer : IHostedService
     internal Task? BackgroundRetry { get; private set; }
 
     /// <summary>
-    /// Готовность схемы (часть 3 §8.3): успех — после проверки изоляции, миграций и партиций на сегодня (фоновое создание
-    /// будущих партиций не ждётся); исключение — при падении StartAsync; отмена — при отмене его токена.
-    /// Координатор PgBolt.Server ждёт её явно, не полагаясь на порядок hosted services.
+    /// Signals schema readiness once isolation, migrations, and today's partitions have been checked (Part 3 §8.3). Future partitions are created in
+    /// the background. If StartAsync fails or its token is cancelled, the task faults or is cancelled accordingly. PgBolt.Server explicitly awaits
+    /// it regardless of hosted service order.
     /// </summary>
     internal Task Ready => _ready.Task;
 
@@ -124,8 +124,8 @@ public sealed partial class PgBoltInitializer : IHostedService
     }
 
     /// <summary>
-    /// §1: statement'ы горячего пути вне пользовательской транзакции выполняются на уровне изоляции по умолчанию,
-    /// а их SQL рассчитан на READ COMMITTED. Новое соединение показывает default_transaction_isolation сервера/БД/роли.
+    /// Hot-path statements outside a caller's transaction rely on READ COMMITTED, the default isolation level (§1). A fresh connection reveals the
+    /// effective default_transaction_isolation for the server, database, and role.
     /// </summary>
     private async Task EnsureReadCommittedDefaultAsync(CancellationToken ct)
     {
@@ -139,9 +139,8 @@ public sealed partial class PgBoltInitializer : IHostedService
     }
 
     /// <summary>
-    /// Начальные миграции объединены в V001, поэтому схемы прошлых сборок (версия 1 или 2, но без части объектов — recurring_jobs,
-    /// batches, stats_minutes, queue_stats, queue_settings) и колонок (queue_stats.oldest_ready_seconds) не обновляются. Признак такой
-    /// схемы — отсутствие любой из этих таблиц или колонки.
+    /// V001 consolidates the initial migrations. Earlier schemas with version 1 or 2 cannot be upgraded if they lack recurring_jobs, batches,
+    /// stats_minutes, queue_stats, queue_settings, or queue_stats.oldest_ready_seconds. A missing table or column identifies such a schema.
     /// </summary>
     private async Task EnsureNotPreReleaseSchemaAsync(CancellationToken ct)
     {

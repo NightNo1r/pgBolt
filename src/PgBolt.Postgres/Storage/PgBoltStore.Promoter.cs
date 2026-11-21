@@ -20,7 +20,7 @@ public sealed partial class PgBoltStore
 
     internal string PromoteSql => field ??= Render(PromoteTemplate);
 
-    /// <summary>Scheduled → Enqueued для наступивших run_at (§5.11). Повторяет пакеты, пока пакет полный.</summary>
+    /// <summary>Moves due Scheduled jobs to Enqueued (§5.11). Repeats while the last batch was full.</summary>
     public async Task<PromoteResult> PromoteDueAsync(int batchSize, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);

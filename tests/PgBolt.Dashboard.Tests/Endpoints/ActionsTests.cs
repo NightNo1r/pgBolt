@@ -46,13 +46,13 @@ public sealed partial class ActionsTests(PostgresFixture pg)
         Assert.StartsWith("<tr", trigger, StringComparison.Ordinal);
         Assert.DoesNotContain("<title>", trigger, StringComparison.Ordinal);
         Assert.Contains(">Enqueued</span>", trigger, StringComparison.Ordinal);
-        Assert.Equal("запущена", triggered);
+        Assert.Equal("triggered", triggered);
         Assert.Equal(JobState.Enqueued, await StateAsync(host, id));
 
         var (cancel, cancelled) = await ActAsync(PostAsync(host, $"actions/jobs/{id}/cancel"));
 
         Assert.Contains(">Cancelled</span>", cancel, StringComparison.Ordinal);
-        Assert.Equal("отменена", cancelled);
+        Assert.Equal("cancelled", cancelled);
         var job = (await Client(host).GetAsync(new JobId(id), Ct))!;
         Assert.Equal(JobState.Cancelled, job.State);
         Assert.Contains(job.Events, e => e.Kind == JobEventKind.Cancelled && e.Message == "dashboard: anonymous");
@@ -61,7 +61,7 @@ public sealed partial class ActionsTests(PostgresFixture pg)
         var (requeue, requeued) = await ActAsync(PostAsync(host, $"actions/jobs/{failed}/requeue"));
 
         Assert.Contains(">Enqueued</span>", requeue, StringComparison.Ordinal);
-        Assert.Equal("поставлена заново", requeued);
+        Assert.Equal("requeued", requeued);
         Assert.Equal(JobState.Enqueued, await StateAsync(host, failed));
     }
 
@@ -112,8 +112,8 @@ public sealed partial class ActionsTests(PostgresFixture pg)
         var (_, cancel) = await ActAsync(PostAsync(host, $"actions/jobs/{succeeded}/cancel"));
         var (_, requeue) = await ActAsync(PostAsync(host, $"actions/jobs/{enqueued}/requeue"));
 
-        Assert.Equal("задача уже завершена", cancel);
-        Assert.Equal("неприменимо: задача не завершена", requeue);
+        Assert.Equal("job already finished", cancel);
+        Assert.Equal("not applicable: job has not finished", requeue);
         Assert.Equal(JobState.Succeeded, await StateAsync(host, succeeded));
     }
 
@@ -138,7 +138,7 @@ public sealed partial class ActionsTests(PostgresFixture pg)
 
         var summary = await BodyAsync(PostAsync(host, "actions/jobs/trigger", [.. scheduled.Select(i => i.ToString()), succeeded.ToString()]));
 
-        Assert.Contains("выполнено 3, неприменимо 1", summary, StringComparison.Ordinal);
+        Assert.Contains("Applied 3, not applicable 1", summary, StringComparison.Ordinal);
         Assert.Contains(succeeded.ToString(), summary, StringComparison.Ordinal);
         Assert.DoesNotContain(scheduled[0].ToString(), summary, StringComparison.Ordinal);
         Assert.DoesNotContain("<title>", summary, StringComparison.Ordinal);
@@ -152,7 +152,7 @@ public sealed partial class ActionsTests(PostgresFixture pg)
 
         var once = await SeedAsync(db, host, 0, "scheduled");
         var repeated = await BodyAsync(PostAsync(host, "actions/jobs/trigger", once.ToString(), once.ToString()));
-        Assert.Contains("выполнено 1, неприменимо 0", repeated, StringComparison.Ordinal);
+        Assert.Contains("Applied 1, not applicable 0", repeated, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -177,16 +177,16 @@ public sealed partial class ActionsTests(PostgresFixture pg)
 
         Assert.StartsWith("<article", card, StringComparison.Ordinal);
         Assert.DoesNotContain("<title>", card, StringComparison.Ordinal);
-        Assert.Equal("отмена запрошена", first);
+        Assert.Equal("cancellation requested", first);
         Assert.True((await Client(host).GetBatchAsync(batch.Id, Ct))!.CancellationRequested);
         Assert.DoesNotContain($"hx-post=\"{path}\"", card, StringComparison.Ordinal);
 
         var (_, second) = await ActAsync(PostAsync(host, path));
-        Assert.Equal("отмена уже запрошена", second);
+        Assert.Equal("cancellation already requested", second);
 
         await ResolverPasses.SettleAsync(Core(host), cancelMembers: true, Ct);
         var (_, finished) = await ActAsync(PostAsync(host, path));
-        Assert.Equal("batch уже завершён", finished);
+        Assert.Equal("batch already finished", finished);
 
         using var unknown = await PostAsync(host, $"actions/batches/{Guid.CreateVersion7()}/cancel");
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
@@ -222,7 +222,7 @@ public sealed partial class ActionsTests(PostgresFixture pg)
 
         var (removed, _) = await ActAsync(PostAsync(host, $"actions/recurring/delete?id={q}"));
         Assert.StartsWith("<tr", removed, StringComparison.Ordinal);
-        Assert.Contains("расписание удалено", removed, StringComparison.Ordinal);
+        Assert.Contains("schedule deleted", removed, StringComparison.Ordinal);
         Assert.Null(await Recurring(host).GetAsync(Id, Ct));
         using var again = await PostAsync(host, $"actions/recurring/delete?id={q}");
         using var noId = await PostAsync(host, "actions/recurring/pause");
@@ -241,12 +241,12 @@ public sealed partial class ActionsTests(PostgresFixture pg)
         Assert.DoesNotContain("actions/recurring/delete?id=owned", owners, StringComparison.Ordinal);
 
         var (_, owned) = await ActAsync(PostAsync(host, "actions/recurring/delete?id=owned"));
-        Assert.Contains("расписание объявлено в коде (owner svc)", owned, StringComparison.Ordinal);
+        Assert.Contains("schedule defined in code (owner svc)", owned, StringComparison.Ordinal);
         Assert.NotNull(await Recurring(host).GetAsync("owned", Ct));
 
         var (row, gone) = await ActAsync(PostAsync(host, "actions/recurring/trigger?id=gone"));
         Assert.StartsWith("<tr", row, StringComparison.Ordinal);
-        Assert.Contains("тип задачи dash.gone не опубликован", gone, StringComparison.Ordinal);
+        Assert.Contains("job type dash.gone is not published", gone, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -282,7 +282,7 @@ public sealed partial class ActionsTests(PostgresFixture pg)
         Assert.Contains("<div id=\"bulk-result\"", page, StringComparison.Ordinal);
 
         var summary = await BodyAsync(PostAsync(host, "actions/jobs/trigger", id.ToString()));
-        Assert.Contains("выполнено 1, неприменимо 0", summary, StringComparison.Ordinal);
+        Assert.Contains("Applied 1, not applicable 0", summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -384,7 +384,7 @@ public sealed partial class ActionsTests(PostgresFixture pg)
 
         var entry = Assert.Single(logs.Entries, e => e.Level == LogLevel.Information && e.Message.StartsWith("PgBolt dashboard: ",
             StringComparison.Ordinal));
-        Assert.Equal($"PgBolt dashboard: anonymous trigger job {id}: запущена.", entry.Message);
+        Assert.Equal($"PgBolt dashboard: anonymous trigger job {id}: triggered.", entry.Message);
     }
 
     [Fact]
@@ -400,7 +400,7 @@ public sealed partial class ActionsTests(PostgresFixture pg)
         using (var response = await PostAsync(host, "actions/recurring/pause?id=none"))
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
 
-        Assert.Equal([$"PgBolt dashboard: anonymous cancel batch {batch}: batch не найден.", "PgBolt dashboard: anonymous pause recurring none: расписание не найдено."],
+        Assert.Equal([$"PgBolt dashboard: anonymous cancel batch {batch}: batch not found.", "PgBolt dashboard: anonymous pause recurring none: schedule not found."],
             logs.Entries.Where(e => e.Category == "PgBolt.Dashboard.Actions").Select(e => e.Message));
     }
 
@@ -415,7 +415,7 @@ public sealed partial class ActionsTests(PostgresFixture pg)
 
         var (row, message) = await ActAsync(PostAsync(host, $"actions/jobs/{id}/trigger"));
 
-        Assert.Equal("неприменимо: задача не Scheduled", message);
+        Assert.Equal("not applicable: job is not Scheduled", message);
         Assert.Contains(">Enqueued</span>", row, StringComparison.Ordinal);
         Assert.Equal(1, reads);
     }

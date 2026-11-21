@@ -6,7 +6,7 @@ namespace PgBolt.Dashboard.Security;
 
 internal static class DashboardAccess
 {
-    /// <summary>§5.3: авторизация на endpoint'е — IAuthorizeData / AuthorizationPolicy / IAuthorizationRequirementData или fallback-политика; IAllowAnonymous отменяет.</summary>
+    /// <summary>Checks endpoint authorization via IAuthorizeData, AuthorizationPolicy, IAuthorizationRequirementData or a fallback policy. IAllowAnonymous overrides it (§5.3).</summary>
     public static bool HasAuthorization(EndpointMetadataCollection metadata, bool hasFallbackPolicy)
     {
         if (metadata.GetMetadata<IAllowAnonymous>() is not null)
@@ -17,7 +17,7 @@ internal static class DashboardAccess
                || metadata.GetMetadata<IAuthorizationRequirementData>() is not null;
     }
 
-    /// <summary>Loopback (включая IPv4-mapped) без заголовков reverse proxy; null-адрес — нелокальный.</summary>
+    /// <summary>Tests for loopback, including IPv4-mapped addresses, without reverse proxy headers. A missing address counts as remote.</summary>
     public static bool IsLocal(HttpContext http)
     {
         var a = http.Connection.RemoteIpAddress;
@@ -29,7 +29,7 @@ internal static class DashboardAccess
                && !headers.ContainsKey("X-Real-IP");
     }
 
-    /// <summary>CSRF: HX-Request и Sec-Fetch-Site: same-origin, а без него — Origin, совпадающий со схемой, хостом и портом запроса.</summary>
+    /// <summary>CSRF check: requires HX-Request and Sec-Fetch-Site: same-origin. If Sec-Fetch-Site is absent, Origin must match the request scheme, host and port.</summary>
     public static bool IsAllowedPost(HttpRequest request)
     {
         if (request.Headers["HX-Request"] != "true")

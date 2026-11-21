@@ -1,11 +1,11 @@
-﻿<h1>Обзор</h1>
-<section hx-get="overview/hour" hx-trigger="every 5000ms, pgbolt:refresh" hx-swap="innerHTML" hx-target="this" data-pgbolt-poll><div class="pgbolt-banner">последний проход снимка статистики завершился ошибкой:<pre>disk &lt;full&gt;</pre></div>
+﻿<h1>Overview</h1>
+<section hx-get="overview/hour" hx-trigger="every 5000ms, pgbolt:refresh" hx-swap="innerHTML" hx-target="this" data-pgbolt-poll><div class="pgbolt-banner">Last statistics snapshot failed:<pre>disk &lt;full&gt;</pre></div>
 <dl class="pgbolt-totals"><div><dt><a href="jobs/scheduled">Scheduled</a></dt><dd>1</dd></div>
     <div><dt><a href="jobs/enqueued">Enqueued</a></dt><dd>2</dd></div>
     <div><dt><a href="jobs/processing">Processing</a></dt><dd>3</dd></div>
     <div><dt><a href="jobs/awaiting">Awaiting</a></dt><dd>4</dd></div>
-    <div><dt><a href="servers">Живые серверы</a></dt><dd>2</dd></div></dl>
-<h2>Последний час</h2>
+    <div><dt><a href="servers">Live servers</a></dt><dd>2</dd></div></dl>
+<h2>Last hour</h2>
 <dl class="pgbolt-totals"><div><dt>Succeeded</dt><dd>175</dd></div>
     <div><dt>Failed</dt><dd>12</dd></div>
     <div><dt>Retried</dt><dd>4</dd></div></dl><svg class="pgbolt-chart" viewBox="0 0 600 100" preserveAspectRatio="none" role="img"><g><title>2026-10-05 11:01 UTC: succeeded 8, failed 2, retried 1</title>
@@ -129,5 +129,5 @@
                 <rect class="fail" x="581" y="70" width="8" height="0"></rect></g><g><title>2026-10-05 12:00 UTC: succeeded 4, failed 0, retried 0</title>
                 <rect class="ok" x="591" y="60" width="8" height="40"></rect>
                 <rect class="fail" x="591" y="60" width="8" height="0"></rect></g></svg></section>
-<section hx-get="overview/day" hx-trigger="load, every 60000ms, pgbolt:refresh" hx-swap="innerHTML" hx-target="this" data-pgbolt-poll><p class="muted">загрузка…</p></section>
-<p class="muted">статистика приблизительная: учитываются исходы, подтверждённые воркерами; терминальные Failed по истёкшему lease в ней не видны (они есть в списке Failed)</p>
+<section hx-get="overview/day" hx-trigger="load, every 60000ms, pgbolt:refresh" hx-swap="innerHTML" hx-target="this" data-pgbolt-poll><p class="muted">Loading…</p></section>
+<p class="muted">Statistics are approximate. They count outcomes acknowledged by workers. Jobs that failed when their lease expired appear in the Failed list only.</p>

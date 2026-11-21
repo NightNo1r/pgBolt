@@ -96,7 +96,7 @@ internal sealed partial class DashboardStore
     private string RecurringRunsSql => field ??= WithAfter(RecurringRunsTemplate, "");
     private string RecurringRunsAfterSql => field ??= WithAfter(RecurringRunsTemplate, "AND j.id < @after_id");
 
-    /// <summary>Продолжения-задачи (§6.2): родитель-задача — коды 1, 2, родитель-batch — 3, 4; член batch-продолжения (5) — нет.</summary>
+    /// <summary>Job continuations (§6.2): codes 1 and 2 have a job parent, 3 and 4 have a batch parent. Excludes members of continuation batches (code 5).</summary>
     public Task<Page<RelatedJobRow>> ListContinuationsAsync(Guid parentId, bool batchParent, DateTimeOffset parentCreatedAt, string? after,
         CancellationToken ct) =>
         KeysetAsync(batchParent ? BatchParentContinuationsSql : JobContinuationsSql,
@@ -121,7 +121,7 @@ internal sealed partial class DashboardStore
         KeysetAsync(NestedBatchesSql, NestedBatchesAfterSql, after, CursorShape.Id, ps => P.Add(ps, "batch", batchId),
             static r => ReadBatchRow(r, 0), static r => new ListKey(r.Id), ct);
 
-    /// <summary>Batches (§6.1): без фильтра — PK и LIMIT, с фильтром состояния — порциями (§6.3).</summary>
+    /// <summary>Batch lists (§6.1). Uses the primary key and LIMIT without filters, or a chunked scan for a state filter (§6.3).</summary>
     public Task<Page<BatchRow>> ListBatchesAsync(BatchState? state, string? after, CancellationToken ct)
     {
         if (state is not { } filter)
@@ -137,15 +137,15 @@ internal sealed partial class DashboardStore
                 r.GetNullableValue<DateTime>(6), r.GetNullableValue<DateTime>(7), r.GetNullableValue<Guid>(8), r.GetNullable<string>(9)),
             static r => new ListKey(Guid.Empty, Text: r.Id), ct);
 
-    /// <summary>История запусков расписания: id DESC, производное состояние.</summary>
+    /// <summary>Schedule run history ordered by descending ID, with derived run state.</summary>
     public Task<Page<RelatedJobRow>> ListRecurringRunsAsync(string recurringId, string? after, CancellationToken ct) =>
         KeysetAsync(RecurringRunsSql, RecurringRunsAfterSql, after, CursorShape.Id, ps => P.Add(ps, "id", recurringId),
             ReadRelatedJobRow, static r => new ListKey(r.Id), ct);
 
-    /// <summary>§6.2: UUIDv7 от времени создания минус сутки — запас на расхождение часов клиентов.</summary>
+    /// <summary>Builds a UUIDv7 lower bound from the creation time minus one day to allow for client clock skew (§6.2).</summary>
     private static Guid LowerBound(DateTimeOffset createdAt) => UuidV7.LowerBound(createdAt.AddDays(-1));
 
-    /// <summary>Keyset-список: до PageSize + 1 строк после курсора (ключ формы shape или after_text для формы Text).</summary>
+    /// <summary>Keyset list with up to PageSize + 1 rows after the cursor. Uses the key for the given shape, or after_text for Text.</summary>
     private async Task<Page<T>> KeysetAsync<T>(string firstSql, string afterSql, string? after, CursorShape shape,
         Action<NpgsqlParameterCollection> bind, Func<NpgsqlDataReader, T> readRow, Func<T, ListKey> keyOf, CancellationToken ct)
     {

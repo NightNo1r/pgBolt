@@ -5,8 +5,8 @@ using NpgsqlTypes;
 namespace PgBolt.Postgres.Storage;
 
 /// <summary>
-/// Запись графа workflow (часть 5 §6.1): batches одним unnest, задачи — вариантом enqueue с колонками графа (все команды одним
-/// NpgsqlBatch), разрешение конфликтов, подписка на внешних родителей в порядке id (§6.2), синтетические сигналы — одна транзакция.
+/// Writes a workflow graph in one transaction (Part 5 §6.1). Inserts batches with one unnest, then jobs with workflow enqueue columns, sending
+/// all commands in one NpgsqlBatch. Resolves conflicts, subscribes to external parents in ID order (§6.2), and writes synthetic signals.
 /// </summary>
 public sealed partial class PgBoltStore
 {
@@ -44,9 +44,10 @@ public sealed partial class PgBoltStore
     private string GraphWrittenSql => field ??= Render(GraphWrittenTemplate);
 
     /// <summary>
-    /// §6.1. transaction — пользовательская: SAVEPOINT pgbolt_workflow, любое исключение — ROLLBACK TO SAVEPOINT и проброс, без
-    /// повторов и сигналов. null — своя транзакция: при 40P01/40001, транзиентной ошибке или признаке предыдущей попытки (23505 по
-    /// PK batches/jobs, exists_by_id) — проверка первой строки графа новой транзакцией: есть → успех, нет → повтор.
+    /// In a caller-provided transaction, creates SAVEPOINT pgbolt_workflow, rolls back to it on any exception, and rethrows without retries or
+    /// wakeups (§6.1). With a null transaction, owns the transaction. After 40P01, 40001, a transient error, or evidence of a previous attempt
+    /// (23505 on the batches/jobs primary key or exists_by_id), checks the graph's first row in a fresh transaction. An existing row means success,
+    /// otherwise retry.
     /// </summary>
     internal async Task<WorkflowWriteResult> SubmitWorkflowAsync(WorkflowPlan plan, NpgsqlTransaction? transaction, CancellationToken ct)
     {
@@ -128,7 +129,7 @@ public sealed partial class PgBoltStore
         }
     }
 
-    /// <summary>Граф записан предыдущей попыткой: её синтетические сигналы (если есть внешние родители) уже в completions.</summary>
+    /// <summary>A previous attempt wrote the graph. Any synthetic signals for external parents are already in completions.</summary>
     private WorkflowWriteResult Recovered(WorkflowPlan plan)
     {
         var result = new WorkflowWriteResult(plan.External.Count > 0);
@@ -150,7 +151,7 @@ public sealed partial class PgBoltStore
         return (bool)(await cmd.ExecuteScalarAsync(ct))!;
     }
 
-    /// <summary>Шаги 1–5 §6.1 в транзакции tx.</summary>
+    /// <summary>Runs steps 1–5 of §6.1 in transaction tx.</summary>
     private async Task<WorkflowWriteResult> WriteWorkflowAsync(NpgsqlConnection conn, NpgsqlTransaction tx, WorkflowPlan plan,
         CancellationToken ct)
     {
@@ -220,7 +221,8 @@ public sealed partial class PgBoltStore
         return cmd;
     }
 
-    /// <summary>§6.1 п. 3: exists_by_id — предыдущая попытка; иначе конфликт unique_key → UniqueKeyConflictException.</summary>
+    /// <summary>exists_by_id indicates an earlier attempt. Otherwise a unique_key conflict raises UniqueKeyConflictException (§6.1, step
+    /// 3).</summary>
     private async Task ThrowWorkflowConflictAsync(NpgsqlConnection conn, NpgsqlTransaction tx, List<(Guid Id, string? Key)> unresolved,
         CancellationToken ct)
     {
@@ -240,8 +242,8 @@ public sealed partial class PgBoltStore
     }
 
     /// <summary>
-    /// §6.2 пп. 1–3 для родителя-задачи. Возвращает kind синтетического сигнала (состояние терминального родителя) или null —
-    /// подписка на строку queue (Pending, Awaiting или выполняется). Нет задачи — ParentNotFoundException.
+    /// Subscribes to a parent job (§6.2, steps 1–3). Returns the synthetic signal kind for a terminal parent or null after subscribing to a Pending,
+    /// Awaiting, or running parent's queue row. A missing job raises ParentNotFoundException.
     /// </summary>
     private async Task<short?> SubscribeJobAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid id, CancellationToken ct)
     {
@@ -275,7 +277,9 @@ public sealed partial class PgBoltStore
         }
     }
 
-    /// <summary>§6.2 п. 4: KEY SHARE строки batch; есть → сигнал Subscribed, нет → ParentNotFoundException.</summary>
+    /// <summary>
+    /// Takes KEY SHARE on the batch row. Emits Subscribed for an existing batch or throws ParentNotFoundException if missing (§6.2, step 4).
+    /// </summary>
     private async Task<short?> SubscribeBatchAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid id, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(SubscribeBatchSql, conn, tx);
@@ -283,7 +287,7 @@ public sealed partial class PgBoltStore
         return await cmd.ExecuteScalarAsync(ct) is null ? throw new ParentNotFoundException(id) : WorkflowCodes.Subscribed;
     }
 
-    /// <summary>Откат к точке сохранения после любой ошибки; ошибка самого отката (разрыв соединения) не подменяет исходную.</summary>
+    /// <summary>Rolls back to the savepoint after any failure, preserving the original exception if rollback fails on a broken connection.</summary>
     private static async Task RollbackToSavepointAsync(NpgsqlTransaction tx, string savepoint)
     {
         try

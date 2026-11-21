@@ -60,9 +60,10 @@ public sealed partial class PgBoltStore
     private string RequeueSql => field ??= Render(RequeueTemplate);
 
     /// <summary>
-    /// Failed/Cancelled → Pending (core §5.9). Часть 5 §6.6: queue.notify = jobs.notify OR член batch, queue.batch_id = jobs.batch_id;
-    /// у члена batch в той же транзакции счётчики batch и терминальных внешних уменьшаются синхронно (цепочка блокируется
-    /// ORDER BY id FOR NO KEY UPDATE, подъём снизу вверх до первого нетерминального или отсутствующего). 40P01/40001 — повтор целиком.
+    /// Moves Failed or Cancelled jobs to Pending (core §5.9). Sets queue.notify from jobs.notify or batch membership and copies jobs.batch_id to
+    /// queue.batch_id. For a batch member, synchronously decrements the counters of its batch and terminal enclosing batches in the same
+    /// transaction. Locks the chain in ID order with FOR NO KEY UPDATE, then walks upward to the first nonterminal or missing batch (Part 5 §6.6).
+    /// Retries the whole transaction on 40P01 or 40001.
     /// </summary>
     public Task<(RequeueResult Result, string? Queue)> RequeueAsync(Guid jobId, CancellationToken ct) =>
         QueryAsync(RequeueSql, ps =>

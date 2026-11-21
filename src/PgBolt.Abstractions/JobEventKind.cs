@@ -1,6 +1,6 @@
 namespace PgBolt;
 
-/// <summary>Коды job_events.kind (§4.3). Новые коды только добавляются.</summary>
+/// <summary>Codes stored in job_events.kind (§4.3). New codes are appended.</summary>
 public enum JobEventKind : short
 {
     Retry = 1,

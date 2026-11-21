@@ -138,14 +138,14 @@ internal sealed partial class DashboardStore
     private string AwaitingPortionSql => field ??= AwaitingPortion("");
     private string AwaitingAfterPortionSql => field ??= AwaitingPortion(AwaitingAfter);
 
-    /// <summary>Порционная форма над queue: keycols / order — ключ и порядок строк m.</summary>
+    /// <summary>Chunk query over queue: keycols and order define the key and sort order of m.</summary>
     private string Portion(string keys, string last, string desc, string keycols, string order, string morder) => Portion(keys, last, desc,
         QueuePortionMatches.Replace("{keycols}", keycols, StringComparison.Ordinal).Replace("{order}", order, StringComparison.Ordinal), morder);
 
     // Признак «данные кончились» в ChunkedScan — Scanned < PortionSize: LIMIT порции берётся из той же константы.
     private static readonly string PortionLimit = ChunkedScan.PortionSize.ToString(CultureInfo.InvariantCulture);
 
-    /// <summary>Порционная форма над keys: last / desc — ключ и обратный порядок в k, m / morder — подходящие строки и их порядок.</summary>
+    /// <summary>Chunk query over keys: last and desc define the key and reverse order in k. m and morder select and order matching rows.</summary>
     private string Portion(string keys, string last, string desc, string m, string morder) => Render(PortionTemplate
         .Replace("{keys}", keys, StringComparison.Ordinal).Replace("{portion}", PortionLimit, StringComparison.Ordinal)
         .Replace("{last}", last, StringComparison.Ordinal)
@@ -153,9 +153,9 @@ internal sealed partial class DashboardStore
         .Replace("{morder}", morder, StringComparison.Ordinal));
 
     /// <summary>
-    /// Списки задач (§6.1). Из queue: простая выборка с LIMIT — когда предикат целиком в условии индекса; иначе (Scheduled и Awaiting
-    /// с фильтром очереди или типа, Enqueued с фильтром типа) — обход порциями (§6.3). Succeeded, Failed, Cancelled — всегда
-    /// порциями (DashboardStore.TerminalLists.cs).
+    /// Job lists (§6.1). Uses a queue index and LIMIT when the index covers the predicate. Scans chunks for Scheduled or
+    /// Awaiting with queue or type filters, Enqueued with a type filter, and all terminal states
+    /// (DashboardStore.TerminalLists.cs).
     /// </summary>
     public Task<Page<JobListRow>> ListJobsAsync(JobState kind, string? queue, string? type, string? after, CancellationToken ct)
     {
@@ -204,8 +204,8 @@ internal sealed partial class DashboardStore
         }, ReadJobListRow, keyOf, ct);
 
     /// <summary>
-    /// Обход порциями (§6.3): bind — фильтры, затем @need и ключ курсора; первые колонки — число просмотренных ключей и
-    /// последний ключ, затем строка или NULL.
+    /// Chunked scan (§6.3). Bind filters, then @need and the cursor key. Results contain the number of keys scanned and
+    /// the last key, followed by a matching row or NULL.
     /// </summary>
     private Task<Page<T>> PortionPageAsync<T>(string firstSql, string afterSql, string? after, CursorShape shape,
         Action<NpgsqlParameterCollection> bind, Func<NpgsqlDataReader, int, T> readRow, Func<T, ListKey> keyOf, CancellationToken ct) =>
@@ -217,8 +217,8 @@ internal sealed partial class DashboardStore
         }, (r, c2) => ReadPortionAsync(r, shape, readRow, c2), c), keyOf, ct);
 
     /// <summary>
-    /// Строки порции: число просмотренных ключей, последний ключ (колонки формы shape), затем строка с колонки 1 + ключ
-    /// или NULL — порция без совпадений.
+    /// Reads the scanned key count and last key (columns determined by shape). The matching row starts after the count and
+    /// key. NULL indicates a chunk without matches.
     /// </summary>
     private static async Task<Portion<T>> ReadPortionAsync<T>(NpgsqlDataReader r, CursorShape shape, Func<NpgsqlDataReader, int, T> readRow,
         CancellationToken ct)
@@ -238,7 +238,7 @@ internal sealed partial class DashboardStore
         return new Portion<T>(matches, scanned, last);
     }
 
-    /// <summary>Processing: все взятые строки, порядок (leased_at, job_id) и курсор — в памяти.</summary>
+    /// <summary>For Processing jobs, reads all leased rows and applies ordering by (leased_at, job_id) and the cursor in memory.</summary>
     private async Task<Page<JobListRow>> ProcessingAsync(string? queue, string? type, string? after, CancellationToken ct)
     {
         var key = Cursor.Decode(after, CursorShape.AtId);
@@ -275,7 +275,7 @@ internal sealed partial class DashboardStore
 
     private static JobListRow ReadJobListRow(NpgsqlDataReader r) => ReadJobListRow(r, 0);
 
-    /// <summary>Строка JobListRow с колонки offset.</summary>
+    /// <summary>Reads a JobListRow starting at column offset.</summary>
     private static JobListRow ReadJobListRow(NpgsqlDataReader r, int o) => new(r.GetGuid(o), r.GetString(o + 1), r.GetString(o + 2),
         r.GetInt16(o + 3), r.GetInt32(o + 4), r.GetInt32(o + 5), r.GetDateTime(o + 6), r.GetNullableValue<DateTime>(o + 7),
         r.GetNullableValue<DateTime>(o + 8), r.GetNullableValue<Guid>(o + 9), r.GetNullableValue<DateTime>(o + 10), r.GetBoolean(o + 11),

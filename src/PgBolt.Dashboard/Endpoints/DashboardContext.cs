@@ -6,14 +6,14 @@ using PgBolt.Postgres;
 
 namespace PgBolt.Dashboard.Endpoints;
 
-/// <summary>Внутренний тип dashboard, не входит в контракт пакета: данные запроса для оболочки и страниц.</summary>
+/// <summary>Internal dashboard model carrying request data for the shell and pages.</summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
 public sealed record DashboardContext(string BasePath, bool CanAct, TimeSpan RefreshInterval, TimeSpan? EventsRetention,
     string CssUrl, string HtmxUrl, string ScriptUrl)
 {
     /// <summary>
-    /// Контекст из HttpContext.Items (кладёт фильтр доступа); если его нет — собирает сам и кеширует в Items. Запасной путь
-    /// не вызывает IAuthorizationService: при заданной ActionsPolicy действия скрыты.
+    /// Gets the access filter's context from HttpContext.Items, or builds and caches it. The fallback does not call
+    /// IAuthorizationService and hides actions whenever ActionsPolicy is set.
     /// </summary>
     internal static DashboardContext Of(HttpContext http)
     {
@@ -34,7 +34,7 @@ public sealed record DashboardContext(string BasePath, bool CanAct, TimeSpan Ref
         return context;
     }
 
-    /// <summary>Контекст запроса с CanAct: не ReadOnly и (ActionsPolicy не задана или выполнена); кладёт его в Items.</summary>
+    /// <summary>Stores the request context in Items. CanAct requires write access and either no ActionsPolicy or a successful policy check.</summary>
     internal static async Task<DashboardContext> ResolveAsync(HttpContext http)
     {
         var context = Of(http);

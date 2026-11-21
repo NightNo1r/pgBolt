@@ -1,16 +1,16 @@
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Lock-free latched auto-reset событие (§4.3) для одного ожидающего за раз (цикл диспетчера, цикл resolver'а) и любого
-/// числа вызывающих Set. Set без ожидающего сохраняется до следующего WaitAsync (повторные схлопываются); Set будит
-/// ровно одного ожидающего. WaitAsync не бросает на таймаут: true — событие установлено (в том числе латч), false —
-/// истёк таймаут. Второй одновременный WaitAsync — InvalidOperationException.
+/// A lock-free, latched auto-reset event (§4.3) for a single waiter (the dispatcher or resolver loop) and any number of
+/// Set callers. With no waiter, Set stores a signal for the next WaitAsync. Repeated signals coalesce. Otherwise Set
+/// wakes exactly one waiter. WaitAsync returns true for a signal, including a latched one, and false on timeout. A second
+/// concurrent WaitAsync throws InvalidOperationException.
 /// </summary>
 /// <remarks>
-/// Всё состояние — одна ячейка: <c>null</c> (пусто), <see cref="Signaled"/> (латч) или TaskCompletionSource ожидающего;
-/// переходы — CAS. Ожидающего из ячейки снимает ровно один победитель CAS: Set (и завершает его) или сам ожидающий
-/// по таймауту/отмене. Поэтому сигнал на границе таймаута или отмены не теряется и не доставляется дважды, а снятые
-/// ожидающие не накапливаются.
+/// One slot holds the entire state: <c>null</c> (empty), <see cref="Signaled"/> (latched), or the waiter's
+/// TaskCompletionSource. Transitions use CAS. Exactly one caller removes the waiter: Set, which completes it, or the
+/// waiter itself on timeout or cancellation. A signal at the timeout or cancellation boundary is delivered at most once
+/// and cannot be lost. Removed waiters do not accumulate.
 /// </remarks>
 internal sealed class AsyncAutoResetEvent
 {
@@ -56,7 +56,9 @@ internal sealed class AsyncAutoResetEvent
         }
     }
 
-    /// <summary>Таймаут — без исключения (SuppressThrowing): у простаивающего диспетчера он штатный, до десятков раз в секунду.</summary>
+    /// <summary>
+    /// SuppressThrowing avoids an exception on timeout. An idle dispatcher can time out tens of times per second.
+    /// </summary>
     private async Task<bool> WaitCoreAsync(TaskCompletionSource waiter, TimeSpan timeout, TimeProvider time, CancellationToken ct)
     {
         var wait = waiter.Task.WaitAsync(timeout, time, ct);
@@ -77,6 +79,6 @@ internal sealed class AsyncAutoResetEvent
 
     private bool TryConsumeLatch() => ReferenceEquals(Interlocked.CompareExchange(ref _state, null, Signaled), Signaled);
 
-    /// <summary>true — ожидающий снят этим вызовом; false — его уже забрал Set.</summary>
+    /// <summary>Returns true if this call removed the waiter, or false if Set already claimed it.</summary>
     private bool Retire(TaskCompletionSource waiter) => ReferenceEquals(Interlocked.CompareExchange(ref _state, null, waiter), waiter);
 }

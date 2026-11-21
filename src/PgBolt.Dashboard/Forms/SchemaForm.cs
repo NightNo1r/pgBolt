@@ -4,8 +4,8 @@ using System.Text.Json.Nodes;
 namespace PgBolt.Dashboard.Forms;
 
 /// <summary>
-/// Поля формы «Поставить» из схемы args (вывод JsonSchemaExporter, §8 + отклонение 11). Схема с чем-либо сверх подмножества —
-/// null: только режим JSON.
+/// Builds enqueue form fields from the JsonSchemaExporter argument schema (§8 and deviation 11). Returns null for an
+/// unsupported schema, leaving JSON input available.
 /// </summary>
 internal static class SchemaForm
 {
@@ -85,7 +85,7 @@ internal static class SchemaForm
         return new(path, name, FieldKind.Object, required, nullable, [], children);
     }
 
-    /// <summary>type — строка или массив строк; без type — пустое множество (допустимо только у enum).</summary>
+    /// <summary>Reads type as a string or string array. A missing type yields an empty set, valid only for enums.</summary>
     private static bool TryTypes(JsonNode? node, out HashSet<string> types)
     {
         types = [];

@@ -6,8 +6,9 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Настройки очередей процесса: <see cref="Limits"/> — эффективные лимиты очередей (включая паузу 0), вес на них не
-/// влияет; <see cref="Weights"/> — эффективные веса, лимит на них не влияет. Имена сравниваются ordinal.
+/// Process-wide queue settings. <see cref="Limits"/> gives the effective queue limits, including a pause at 0,
+/// independently of weights. <see cref="Weights"/> gives effective weights independently of limits. Queue names use
+/// ordinal comparison.
 /// </summary>
 internal sealed record QueueSettingsSnapshot(FrozenDictionary<string, int> Limits, FrozenDictionary<string, int> Weights)
 {
@@ -15,9 +16,10 @@ internal sealed record QueueSettingsSnapshot(FrozenDictionary<string, int> Limit
 }
 
 /// <summary>
-/// Снимок настроек очередей процесса: читается из queue_settings в обход кэша менеджера и публикуется целиком,
-/// читатели берут <see cref="Current"/> без lock'а. Первая загрузка — шаг старта (<see cref="LoadAsync"/> бросает);
-/// дальше фоновый цикл раз в QueueSettingsRefreshInterval ±10 %, ошибка обновления оставляет прошлый снимок.
+/// Process-wide queue settings snapshot. Loads queue_settings directly, bypassing the manager cache, and publishes the
+/// entire snapshot. Readers access <see cref="Current"/> without locking. The initial load is a startup step and
+/// <see cref="LoadAsync"/> propagates failure. The background loop then refreshes every QueueSettingsRefreshInterval
+/// ±10%, retaining the previous snapshot on failure.
 /// </summary>
 internal sealed partial class QueueSettingsCache(IServerStore store, PgBoltProcessingOptions options, MonoClock clock, ILogger logger,
     PgBoltMetrics metrics)
@@ -36,7 +38,7 @@ internal sealed partial class QueueSettingsCache(IServerStore store, PgBoltProce
 
     internal Func<double> NextRandom { get; set; } = Random.Shared.NextDouble;
 
-    /// <summary>Для тестов: сколько раз цикл встал на ожидание (таймер уже взведён).</summary>
+    /// <summary>For tests, counts waits that the loop has entered with their timer armed.</summary>
     internal int Waits => Volatile.Read(ref _waits);
 
     public async Task LoadAsync(CancellationToken ct)
@@ -61,8 +63,8 @@ internal sealed partial class QueueSettingsCache(IServerStore store, PgBoltProce
     }
 
     /// <summary>
-    /// Внеочередное обновление, не ждёт его. Событие с латчем: вызовы во время идущего обновления дают ровно одно
-    /// следующее сразу после него — идущее могло прочитать состояние до изменения. До Start и после StopAsync — no-op.
+    /// Requests an immediate refresh without waiting for it. Calls during a refresh latch a single follow-up refresh
+    /// because the current one may have read the old state. Has no effect before Start or after StopAsync.
     /// </summary>
     public void RefreshNow()
     {

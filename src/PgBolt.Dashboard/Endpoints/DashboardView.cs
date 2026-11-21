@@ -14,14 +14,14 @@ namespace PgBolt.Dashboard.Endpoints;
 
 internal static class DashboardView
 {
-    /// <summary>htmx-запрос, кроме восстановления истории: ответ — фрагмент, а не страница целиком.</summary>
+    /// <summary>Detects htmx fragment requests, excluding history restoration, which requires a full page.</summary>
     public static bool WantsFragment(HttpRequest request) =>
         request.Headers["HX-Request"] == "true" && request.Headers["HX-History-Restore-Request"] != "true";
 
-    /// <summary>Цель свапа — #main (навигация): только такой фрагмент несёт &lt;title&gt;.</summary>
+    /// <summary>Only navigation fragments targeting #main carry a &lt;title&gt;.</summary>
     public static bool TargetsMain(HttpRequest request) => request.Headers["HX-Target"] == "main";
 
-    /// <summary>Фрагмент (<paramref name="partial"/> — без &lt;title&gt;) для htmx или страница в оболочке <see cref="Shell"/>.</summary>
+    /// <summary>Renders a fragment for htmx (without &lt;title&gt; when <paramref name="partial"/> is set) or a full page in the <see cref="Shell"/>.</summary>
     public static async Task<IResult> PageAsync<TPage>(HttpContext http, string title, IReadOnlyDictionary<string, object?> parameters,
         int status = 200, bool partial = false) where TPage : IComponent
     {
@@ -46,9 +46,9 @@ internal static class DashboardView
         return Results.Content(html, "text/html; charset=utf-8", Encoding.UTF8, status);
     }
 
-    /// <summary>Единственный рендер ошибки: фрагмент с &lt;title&gt; только при цели #main.</summary>
+    /// <summary>Renders errors through a single path. Only fragments targeting #main include &lt;title&gt;.</summary>
     public static Task<IResult> ErrorAsync(HttpContext http, int status, string message) =>
-        PageAsync<ErrorView>(http, "Ошибка", new Dictionary<string, object?>
+        PageAsync<ErrorView>(http, "Error", new Dictionary<string, object?>
         {
             [nameof(ErrorView.Status)] = status,
             [nameof(ErrorView.Message)] = message,
@@ -64,10 +64,10 @@ internal static class DashboardView
     }
 
     /// <summary>
-    /// HtmlRenderer берёт HtmlEncoder из сервисов, иначе HtmlEncoder.Default кодирует всё вне Basic Latin (кириллица → &amp;#x…;).
-    /// Кодировщик с UnicodeRanges.All подменяется только для рендера dashboard: регистрация хоста не меняется.
-    /// NavigationManager хоста (AddRazorPages / AddRazorComponents) скрыт: рендер вне Razor Components его не инициализирует, а
-    /// с ним HtmlRenderer дописывает &lt;form&gt; без action адрес из NavigationManager.Uri и падает.
+    /// HtmlRenderer takes HtmlEncoder from DI. Its default encodes text outside Basic Latin (for example, Cyrillic as
+    /// &amp;#x…;). The dashboard uses UnicodeRanges.All for its own rendering while preserving host registrations. It
+    /// hides the host NavigationManager because standalone rendering does not initialize it, and HtmlRenderer would
+    /// otherwise read NavigationManager.Uri for a &lt;form&gt; with no action.
     /// </summary>
     private sealed class RenderServices(IServiceProvider inner) : IServiceProvider
     {

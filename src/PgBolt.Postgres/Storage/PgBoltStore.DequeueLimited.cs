@@ -52,9 +52,8 @@ public sealed partial class PgBoltStore
     internal string DequeueLimitedSql => field ??= Render(DequeueLimitedTemplate);
 
     /// <summary>
-    /// Dequeue очереди с кластерным лимитом: берёт до <paramref name="max"/> задач, но не больше свободных мест лимита
-    /// (лимит из queue_settings минус взятые строки очереди). Нет лимита — как <see cref="DequeueAsync"/>.
-    /// LimitReached — после этого dequeue мест в лимите нет (в том числе пауза).
+    /// Leases up to <paramref name="max"/> jobs, bounded by remaining cluster capacity (the queue_settings limit minus leased queue rows). Without a
+    /// limit, behaves like <see cref="DequeueAsync"/>. LimitReached means no capacity remains after dequeue, including when paused.
     /// </summary>
     public Task<LimitedDequeueResult> DequeueLimitedAsync(string queue, int max, Guid serverId, TimeSpan lease, CancellationToken ct)
     {

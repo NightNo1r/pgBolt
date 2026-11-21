@@ -5,11 +5,12 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Отправка исходов: ack — пакетами по размеру, таймеру или при простое у кластерного лимита, остальное — поштучно и параллельно.
-/// Каждая попытка начинается CAS OutcomePending → OutcomeInFlight; ошибка — обратно в OutcomePending и повтор
-/// с backoff 100 мс → 5 с в пределах бюджета LeaseDuration от первой попытки. Запись покидает таблицу только
-/// после завершения отправки (успех, LeaseLost, бюджет, прерывание остановкой). После успеха или LeaseLost —
-/// onLeaseFreed с очередью выполнения: statement исхода вернулся, место в кластерном лимите видно следующему dequeue.
+/// Sends acknowledgments in batches on reaching the batch size, on a timer, or when a cluster limit leaves the server
+/// idle. Other outcomes are sent individually and concurrently. Each attempt starts with a CAS from OutcomePending to
+/// OutcomeInFlight. Errors return the entry to OutcomePending for retry with backoff from 100 ms to 5 s, within a
+/// LeaseDuration budget from the first attempt. An entry leaves the table only when sending finishes through success,
+/// LeaseLost, budget expiry or shutdown cancellation. On success or LeaseLost, onLeaseFreed receives the execution's
+/// queue. The outcome statement has returned and the next dequeue can see the freed cluster slot.
 /// </summary>
 internal sealed partial class CompletionSink
 {
@@ -50,7 +51,7 @@ internal sealed partial class CompletionSink
         _waitingForLease = waitingForLease;
     }
 
-    /// <summary>Для тестов: сколько раз отправка встала на ожидание backoff (таймер уже взведён).</summary>
+    /// <summary>For tests, counts backoff waits that have started with their timer armed.</summary>
     internal int BackoffWaits => Volatile.Read(ref _backoffWaits);
 
     public void Start()
@@ -160,7 +161,7 @@ internal sealed partial class CompletionSink
         FlushIdleAcksLocked(execution.Queue);
     }
 
-    /// <summary>Выдача могла увидеть занятый кластерный лимит уже после буферизации ACK.</summary>
+    /// <summary>A fetch may have seen the cluster limit exhausted after an acknowledgment was buffered.</summary>
     internal void RecheckBufferedAcks(string queue)
     {
         lock (_lock)
@@ -204,8 +205,8 @@ internal sealed partial class CompletionSink
     }
 
     /// <summary>
-    /// Отменённая остановка: ack, принятые после последнего сброса, не отправляются (отправка уже прервана) — отбрасываются
-    /// с логом, как исход, пришедший после остановки, и покидают таблицу; lease истечёт, задачу заберёт sweeper.
+    /// When shutdown is canceled, sending has already stopped. Acknowledgments accepted since the last flush are dropped,
+    /// logged as late outcomes and removed from the table. Their leases expire and the sweeper reclaims the jobs.
     /// </summary>
     private void DiscardAckBufferLocked()
     {
@@ -338,8 +339,8 @@ internal sealed partial class CompletionSink
         }
     }
 
-    /// <returns>true — исход применён; false — LeaseLost.</returns>
-    /// <remarks>ct — токен попытки; WaitAsync обрывает ожидание и тогда, когда вызов store токен не соблюдает.</remarks>
+    /// <returns>True if the outcome was applied, or false for LeaseLost.</returns>
+    /// <remarks>ct is the attempt token. WaitAsync also ends the wait when the store call ignores cancellation.</remarks>
     private async Task<bool> SendOutcomeAsync(Execution execution, CancellationToken ct)
     {
         var job = execution.Job;
@@ -360,7 +361,7 @@ internal sealed partial class CompletionSink
         }
     }
 
-    /// <summary>Учитываются только job_id, подтверждённые ответом ack, — по очереди выполнения.</summary>
+    /// <summary>Counts only job_id values confirmed in the ack response, grouped by execution queue.</summary>
     private void CountAcked(List<Execution> inFlight, HashSet<Guid> acked)
     {
         if (acked.Count == 0)
@@ -369,7 +370,7 @@ internal sealed partial class CompletionSink
             _stats.Record(_serverId, queue, succeeded: count);
     }
 
-    /// <summary>retry / fail учитываются по ответу store; Cancelled и LeaseLost — нет.</summary>
+    /// <summary>Counts retry and fail according to the store response. Cancelled and LeaseLost are excluded.</summary>
     private FailOutcome RecordOutcome(Execution execution, FailOutcome answer)
     {
         if (answer == FailOutcome.Retried)
@@ -379,7 +380,9 @@ internal sealed partial class CompletionSink
         return answer;
     }
 
-    /// <summary>OutcomePending → OutcomeInFlight для каждой записи; не удалось (Removed heartbeat'ом) — запись исключается.</summary>
+    /// <summary>
+    /// Moves each entry from OutcomePending to OutcomeInFlight. Skips entries already removed by the heartbeat.
+    /// </summary>
     private List<Execution> BeginAttempt(List<Execution> executions)
     {
         var inFlight = new List<Execution>(executions.Count);
@@ -397,8 +400,8 @@ internal sealed partial class CompletionSink
     }
 
     /// <summary>
-    /// Таймаут попытки: остаток бюджета LeaseDuration с первой попытки, для ack-пакета — минимальный
-    /// среди записей; ≥ 0 (нулевой — уже отменённый токен).
+    /// Attempt timeout is the remaining LeaseDuration budget from the first send attempt. An ack batch uses the smallest
+    /// remaining budget among its entries. The timeout is never negative; zero yields an already-canceled token.
     /// </summary>
     private TimeSpan RemainingBudget(List<Execution> executions)
     {
@@ -428,7 +431,7 @@ internal sealed partial class CompletionSink
         }
     }
 
-    /// <returns>Записи, которые нужно повторить (после ожидания backoff); пусто — отправка окончена.</returns>
+    /// <returns>Entries to retry after backoff. An empty collection means sending is complete.</returns>
     private async Task<List<Execution>> AfterFailureAsync(List<Execution> inFlight, Exception error, TimeSpan backoff)
     {
         var retry = new List<Execution>(inFlight.Count);
@@ -477,7 +480,9 @@ internal sealed partial class CompletionSink
             Log.OutcomeSendBudgetExceeded(_logger, error, execution.Job.Id, _options.LeaseDuration);
     }
 
-    /// <summary>Снятие записи, переведённой этим вызывающим в Removed без применения исхода, с учётом в метрике — до лога.</summary>
+    /// <summary>
+    /// Removes an entry this caller marked Removed without applying the outcome. Records the metric before logging.
+    /// </summary>
     private void Drop(Execution execution, string reason)
     {
         _table.Remove(execution);

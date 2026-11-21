@@ -3,9 +3,9 @@ using Npgsql;
 namespace PgBolt.Postgres.Storage;
 
 /// <summary>
-/// Отмена batch (часть 5 §6.5): CancelBatchAsync — один statement; CancelMembers — короткие транзакции с lock_timeout 1 с, сигнал
-/// за сигналом: этап 0 — члены-задачи (jobs_batch, семантика cancel core §5.7 набором), этап 1 — вложенные batches. Каждый
-/// statement порции перечитывает cancel_requested своего узла: сброшен requeue'ом (§6.6) — порция ничего не меняет, сигнал удаляется.
+/// Cancels a batch (Part 5 §6.5). CancelBatchAsync uses one statement. CancelMembers processes signals individually in short transactions with a
+/// 1-second lock_timeout. Stage 0 cancels member jobs using jobs_batch and set-based core §5.7 semantics. Stage 1 processes nested batches. Each
+/// portion rereads its node's cancel_requested flag. If requeue cleared it (§6.6), the portion changes nothing and the signal is removed.
 /// </summary>
 public sealed partial class PgBoltStore
 {
@@ -36,7 +36,10 @@ public sealed partial class PgBoltStore
         FOR UPDATE SKIP LOCKED
         """;
 
-    /// <summary>§6.5 stage = 0: члены по jobs_batch без блокировки jobs; их строки queue — ORDER BY job_id FOR UPDATE (без SKIP LOCKED).</summary>
+    /// <summary>
+    /// Stage 0 (§6.5) finds members via jobs_batch without locking jobs, then locks their queue rows with ORDER BY job_id FOR UPDATE without SKIP
+    /// LOCKED.
+    /// </summary>
     private const string CancelJobsTemplate = """
         WITH b AS (
             SELECT cancel_requested FROM {schema}.batches WHERE id = @node
@@ -81,13 +84,12 @@ public sealed partial class PgBoltStore
         """;
 
     /// <summary>
-    /// §6.5 stage = 1: вложенные batches (batches_nested) в порядке id; Active/Awaiting без флага — флаг и свой CancelMembers.
-    /// Помечается вложенный, открытый и в снимке statement'а (c.open; в том же снимке прочитан cancel_requested узла, b), и в
-    /// последней версии под FOR NO KEY UPDATE (lk). Ставший Active requeue'ом, закоммиченным после снимка, не помечается по правилу
-    /// снимка (§6.5, §6.6 «Requeue при идущей отмене»): в снимке он терминален, фильтр c.open не проходит — для порции такой batch
-    /// пройден обходом. Флаг узла этот requeue сбрасывает, только если узел был терминальным; на нетерминальном узле с
-    /// cancel_requested подъём останавливается и флаг остаётся (§6.6 п. 2) — ждущие члены ветки отменяются проверкой по флагу
-    /// внешнего (§6.4 Т2.3). Закрытые в снимке не блокируются; курсор и размер порции — по всем вложенным (c).
+    /// Stage 1 (§6.5) visits nested batches (batches_nested) in ID order. Active or Awaiting batches without a flag get cancel_requested and their
+    /// own CancelMembers signal. A nested batch must be open both in the statement snapshot (c.open, which also reads the node flag b) and in the
+    /// latest version under FOR NO KEY UPDATE (lk). A batch reactivated by a requeue committed after the snapshot counts as already visited: it was
+    /// terminal in the snapshot and fails c.open (§6.5, §6.6). Requeue clears the node flag only on a terminal node. The upward traversal stops at a
+    /// nonterminal node with cancel_requested, preserving that flag (§6.6, step 2). The enclosing flag therefore still cancels waiting branch
+    /// members (§6.4 T2.3). Closed batches in the snapshot are left unlocked. The cursor and portion size include all nested batches (c).
     /// </summary>
     private const string CancelNestedTemplate = """
         WITH b AS (
@@ -134,7 +136,10 @@ public sealed partial class PgBoltStore
     private string CancelDoneSql => field ??= Render(CancelDoneTemplate);
     private string CancelDeferSql => field ??= Render(CancelDeferTemplate);
 
-    /// <summary>§6.5: нет строки — NotFound; терминальный — AlreadyFinished; иначе CancellationRequested (повтор — без нового сигнала).</summary>
+    /// <summary>
+    /// Returns NotFound for a missing batch, AlreadyFinished for a terminal batch, and CancellationRequested otherwise. A repeated request sends no
+    /// new signal (§6.5).
+    /// </summary>
     internal Task<BatchCancelResult> CancelBatchAsync(Guid batchId, CancellationToken ct) =>
         QueryAndSignalAsync<BatchCancelResult>(CancelBatchSql, ps => P.Add(ps, "id", batchId), async (r, c) =>
         {
@@ -145,7 +150,10 @@ public sealed partial class PgBoltStore
             return (result, r.GetBoolean(1) ? 1L : 0L);   // сигнал — после завершения statement'а (коммит на Sync)
         }, ct);
 
-    /// <summary>§10: счётчики ограничены снизу нулём — между requeue члена и учётом его прежнего сигнала они бывают ниже факта (§6.6).</summary>
+    /// <summary>
+    /// Counters have a floor of zero. They can temporarily undercount after a member is requeued and before its previous signal is processed (§10,
+    /// §6.6).
+    /// </summary>
     internal Task<BatchInfo?> GetBatchAsync(Guid batchId, CancellationToken ct) =>
         QueryAsync<BatchInfo?>(GetBatchSql, ps => P.Add(ps, "id", batchId), async (r, c) =>
         {
@@ -166,8 +174,8 @@ public sealed partial class PgBoltStore
     private readonly record struct CancelStage(bool Requested, int Taken, Guid? Last);
 
     /// <summary>
-    /// §6.5: транзакции подряд, сигнал за сигналом, пока есть готовые сигналы, строк обхода меньше rowBudget и транзакций меньше
-    /// maxTransactions. lock_timeout — откат порции и retry_after этого сигнала отдельным statement'ом, итерация продолжается.
+    /// Processes ready signals in consecutive transactions until rowBudget or maxTransactions is reached (§6.5). On lock_timeout, rolls back the
+    /// portion, sets retry_after for its signal separately, and continues.
     /// </summary>
     internal async Task<CancelMembersResult> CancelMembersAsync(int portion, int rowBudget, int maxTransactions, TimeSpan retryDelay,
         CancellationToken ct)

@@ -3,8 +3,8 @@ using Microsoft.Extensions.DependencyInjection;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Конвейер фильтров (§3.6): порядок списка (глобальные уже впереди), первый — внешний. Экземпляры резолвятся из
-/// scope задачи; типы зарегистрированы как scoped при регистрации (Task 16), поэтому здесь нет reflection-активации.
+/// Runs filters in list order (§3.6), with global filters first and the first filter outermost. The job scope resolves
+/// instances from their scoped registrations (Task 16), avoiding reflection-based activation here.
 /// </summary>
 internal sealed class FilterPipeline(IReadOnlyList<Type> filterTypes)
 {

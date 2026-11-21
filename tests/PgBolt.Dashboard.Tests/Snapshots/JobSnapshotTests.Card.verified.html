@@ -1,17 +1,17 @@
 ﻿<article class="pgbolt-card"><h1>reports.daily <span class="pgbolt-state failed">Failed</span></h1>
     <dl class="pgbolt-props"><dt>Id</dt><dd>0199b3a0-0000-7000-8000-000000000002</dd>
-        <dt>Очередь</dt><dd>default</dd>
-        <dt>Приоритет</dt><dd>5</dd>
-        <dt>Попытка</dt><dd>2 / 3</dd>
-        <dt>Создана</dt><dd><time datetime="2026-10-05T11:01:00.000Z">2026-10-05T11:01:00.000Z</time></dd>
-        <dt>Запуск</dt><dd><time datetime="2026-10-05T11:01:00.000Z">2026-10-05T11:01:00.000Z</time></dd>
-        <dt>Начата</dt><dd><time datetime="2026-10-05T11:01:05.000Z">2026-10-05T11:01:05.000Z</time></dd>
-        <dt>Завершена</dt><dd><time datetime="2026-10-05T11:01:09.000Z">2026-10-05T11:01:09.000Z</time></dd>
-        <dt>Сервер</dt><dd>0199b3a0-0000-7000-8000-0000000000aa</dd>
-        <dt>Unique key</dt><dd>report:2026-10-05</dd><dt>Родитель</dt><dd><a href="jobs/0199b3a0-0000-7000-8000-000000000003">0199b3a0-0000-7000-8000-000000000003</a></dd><dt>Batch</dt><dd><a href="batches/0199b3a0-0000-7000-8000-000000000004">0199b3a0-0000-7000-8000-000000000004</a></dd><dt>Условие</dt><dd>OnAnyFinished</dd></dl>
-    <h2>Аргументы</h2>
+        <dt>Queue</dt><dd>default</dd>
+        <dt>Priority</dt><dd>5</dd>
+        <dt>Attempt</dt><dd>2 / 3</dd>
+        <dt>Created</dt><dd><time datetime="2026-10-05T11:01:00.000Z">2026-10-05T11:01:00.000Z</time></dd>
+        <dt>Run at</dt><dd><time datetime="2026-10-05T11:01:00.000Z">2026-10-05T11:01:00.000Z</time></dd>
+        <dt>Started</dt><dd><time datetime="2026-10-05T11:01:05.000Z">2026-10-05T11:01:05.000Z</time></dd>
+        <dt>Finished</dt><dd><time datetime="2026-10-05T11:01:09.000Z">2026-10-05T11:01:09.000Z</time></dd>
+        <dt>Server</dt><dd>0199b3a0-0000-7000-8000-0000000000aa</dd>
+        <dt>Unique key</dt><dd>report:2026-10-05</dd><dt>Parent</dt><dd><a href="jobs/0199b3a0-0000-7000-8000-000000000003">0199b3a0-0000-7000-8000-000000000003</a></dd><dt>Batch</dt><dd><a href="batches/0199b3a0-0000-7000-8000-000000000004">0199b3a0-0000-7000-8000-000000000004</a></dd><dt>Condition</dt><dd>OnAnyFinished</dd></dl>
+    <h2>Arguments</h2>
     <pre>{&#xA;  &quot;day&quot;: &quot;2026-10-05&quot;,&#xA;  &quot;имя&quot;: &quot;отчёт&quot;&#xA;}</pre>
-    <h2>События</h2><div class="pgbolt-table-wrap"><table><thead><tr><th>Событие</th><th>Время</th><th>Сервер</th><th>Попытка</th><th>Сообщение</th><th>Исключение</th></tr></thead>
+    <h2>Events</h2><div class="pgbolt-table-wrap"><table><thead><tr><th>Event</th><th>Time</th><th>Server</th><th>Attempt</th><th>Message</th><th>Exception</th></tr></thead>
                 <tbody><tr><td>Retry</td>
                             <td><time datetime="2026-10-05T11:01:03.000Z">2026-10-05T11:01:03.000Z</time></td>
                             <td>0199b3a0-0000-7000-8000-0000000000aa</td>
@@ -22,7 +22,7 @@
                             <td>0199b3a0-0000-7000-8000-0000000000aa</td>
                             <td>2</td>
                             <td><pre>boom</pre></td>
-                            <td><pre>System.Exception: boom&#xA;   at Job.Run()</pre></td></tr></tbody></table></div><h2>Продолжения</h2>
-    <ul hx-get="jobs/0199b3a0-0000-7000-8000-000000000002/continuations" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">загрузка…</li></ul>
-    <h2>Batch-продолжения</h2>
-    <ul hx-get="jobs/0199b3a0-0000-7000-8000-000000000002/batch-continuations" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">загрузка…</li></ul></article>
+                            <td><pre>System.Exception: boom&#xA;   at Job.Run()</pre></td></tr></tbody></table></div><h2>Continuations</h2>
+    <ul hx-get="jobs/0199b3a0-0000-7000-8000-000000000002/continuations" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">Loading…</li></ul>
+    <h2>Batch continuations</h2>
+    <ul hx-get="jobs/0199b3a0-0000-7000-8000-000000000002/batch-continuations" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">Loading…</li></ul></article>

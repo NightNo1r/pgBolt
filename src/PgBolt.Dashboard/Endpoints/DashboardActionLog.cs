@@ -3,8 +3,7 @@ using Microsoft.Extensions.Logging;
 namespace PgBolt.Dashboard.Endpoints;
 
 /// <summary>
-/// Запись о действии оператора. Отдельный класс: у <see cref="ActionEndpoints"/> уже есть метод <c>Log</c>,
-/// вложенный тип с тем же именем не компилируется.
+/// Operator action log. Kept separate because <see cref="ActionEndpoints"/> already defines a <c>Log</c> method and cannot contain a nested type with the same name.
 /// </summary>
 internal static partial class DashboardActionLog
 {

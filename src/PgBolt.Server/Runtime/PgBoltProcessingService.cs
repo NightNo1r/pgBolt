@@ -14,14 +14,14 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Единственный hosted service процесса: запускает виртуальные серверы и обслуживание, останавливает
-/// все серверы одновременно независимо от порядка остановки hosted services хоста.
+/// The process's single hosted service starts virtual servers and maintenance, then stops all servers concurrently
+/// regardless of the host's hosted-service shutdown order.
 /// </summary>
 internal sealed partial class PgBoltProcessingService : IHostedService
 {
     /// <summary>
-    /// Запас сверх ShutdownTimeout + AckFlushInterval серверов в проверке HostOptions.ShutdownTimeout; в него входит
-    /// финальный сброс счётчиков исходов.
+    /// Allowance above server ShutdownTimeout + AckFlushInterval when validating HostOptions.ShutdownTimeout. Includes
+    /// the final outcome counter flush.
     /// </summary>
     private static readonly TimeSpan ShutdownReserve = TimeSpan.FromSeconds(2);
 
@@ -37,7 +37,10 @@ internal sealed partial class PgBoltProcessingService : IHostedService
     {
     }
 
-    /// <summary>Для тестов: подмена ожидания PgBoltInitializer.Ready (его TaskCompletionSource снаружи не завершить).</summary>
+    /// <summary>
+    /// For tests, replaces the wait for PgBoltInitializer.Ready, whose TaskCompletionSource cannot be completed
+    /// externally.
+    /// </summary>
     internal PgBoltProcessingService(IServiceProvider services, Func<CancellationToken, Task> waitReady)
     {
         _services = services;
@@ -49,13 +52,13 @@ internal sealed partial class PgBoltProcessingService : IHostedService
 
     internal IReadOnlyList<PgBoltServer> Servers => _servers;
 
-    /// <summary>Для тестов: null — серверов нет, сброс счётчиков не запускался.</summary>
+    /// <summary>For tests, null means there are no servers and outcome counter flushing never started.</summary>
     internal OutcomeStatsFlusher? Flusher { get; private set; }
 
-    /// <summary>Для тестов: null — обслуживание не запускалось.</summary>
+    /// <summary>For tests, null means maintenance never started.</summary>
     internal ProcessingMaintenance? Maintenance { get; private set; }
 
-    /// <summary>Для тестов: null — серверов нет, настройки очередей не синхронизировались.</summary>
+    /// <summary>For tests, null means there are no servers and queue settings were not synchronized.</summary>
     internal QueueSettingsCache? QueueSettings { get; private set; }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -154,8 +157,8 @@ internal sealed partial class PgBoltProcessingService : IHostedService
     }
 
     /// <summary>
-    /// Другой процесс недавно опубликовал иные значения тех же очередей (смешанный rolling deploy): побеждает последний
-    /// записавший, поэтому расхождение видно только в логе.
+    /// Another process recently published different values for the same queues during a mixed-version rolling deployment.
+    /// The last write wins, so only the log shows the discrepancy.
     /// </summary>
     private void WarnAboutOverwrittenDefaults(IReadOnlyList<QueueDefault> defaults, IReadOnlyList<QueueDefaultConflict> conflicts)
     {
@@ -171,7 +174,7 @@ internal sealed partial class PgBoltProcessingService : IHostedService
         }
     }
 
-    /// <summary>Серверы останавливаются параллельно, поэтому берётся максимум, а не сумма.</summary>
+    /// <summary>Uses the maximum timeout because servers stop in parallel.</summary>
     private void WarnIfHostShutdownTooShort()
     {
         if (_servers.Count == 0 || _services.GetService<IOptions<HostOptions>>() is not { } host)
@@ -181,7 +184,7 @@ internal sealed partial class PgBoltProcessingService : IHostedService
             Log.HostShutdownTimeoutTooShort(_logger, host.Value.ShutdownTimeout, required);
     }
 
-    /// <summary>Конфигурация, при которой обслуживание не выполняет своих гарантий.</summary>
+    /// <summary>Configuration that prevents maintenance from meeting its guarantees.</summary>
     private void WarnIfMaintenanceMisconfigured(PgBoltProcessingOptions processing, PgBoltOptions core)
     {
         if (!processing.RunMaintenance || _servers.Count == 0)

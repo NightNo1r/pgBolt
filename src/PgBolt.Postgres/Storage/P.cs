@@ -3,7 +3,7 @@ using NpgsqlTypes;
 
 namespace PgBolt.Postgres.Storage;
 
-/// <summary>Типизированные параметры (NpgsqlParameter&lt;T&gt;) без boxing.</summary>
+/// <summary>Typed parameters (NpgsqlParameter&lt;T&gt;) avoid boxing.</summary>
 internal static class P
 {
     public static void Add<T>(NpgsqlParameterCollection ps, string name, T value) =>

@@ -6,7 +6,7 @@ using PgBolt.Dashboard.Data;
 
 namespace PgBolt.Dashboard.Endpoints;
 
-/// <summary>Batches с фильтром состояния, карточка batch и её списки фрагментами (§6.1, §6.2).</summary>
+/// <summary>Lists batches with an optional state filter and renders batch details and related list fragments (§6.1, §6.2).</summary>
 internal static class BatchEndpoints
 {
     public static void Map(RouteGroupBuilder g)

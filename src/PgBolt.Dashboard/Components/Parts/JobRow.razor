@@ -1,9 +1,9 @@
 <tr>
     @if (Context.CanAct)
     {
-        <td><input type="checkbox" name="ids" value="@Row.Id" aria-label="выбрать"></td>
+        <td><input type="checkbox" name="ids" value="@Row.Id" aria-label="Select"></td>
     }
-    <td><a href="jobs/@Row.Id">@Row.Id</a>@if (State is { } state) { <text> </text><StateBadge State="state" /> }@if (Row.CancelRequested) { <span class="muted"> отмена запрошена</span> }</td>
+    <td><a href="jobs/@Row.Id">@Row.Id</a>@if (State is { } state) { <text> </text><StateBadge State="state" /> }@if (Row.CancelRequested) { <span class="muted"> cancellation requested</span> }</td>
     <td>@Row.Type</td>
     <td>@Row.Queue</td>
     <td>@Row.Priority</td>
@@ -31,7 +31,7 @@
                 }
                 else if (Row.EventKind == JobEventKind.LeaseExpired)
                 {
-                    <text>lease истёк на последней попытке</text>
+                    <text>Lease expired on the final attempt</text>
                 }
             </td>
             break;
@@ -47,6 +47,6 @@
     [Parameter] public JobState Kind { get; set; }
     [Parameter] public DashboardContext Context { get; set; } = null!;
 
-    /// <summary>Строка после действия (§7): состояние из GetAsync — бейджем в колонках вкладки Kind; null — состояние вкладки.</summary>
+    /// <summary>After an action, shows the GetAsync state as a badge in the Kind tab columns. Null uses the tab state (§7).</summary>
     [Parameter] public JobState? State { get; set; }
 }

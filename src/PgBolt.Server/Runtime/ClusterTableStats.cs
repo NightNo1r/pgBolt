@@ -3,8 +3,8 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Последняя прочитанная статистика таблиц для кластерных gauges bloat. Значения читаются из PostgreSQL на каждом поде и
-/// скрываются, если успешного чтения не было дольше 4 × StatsSnapshotInterval: ряд пропадает, а не застывает. Потокобезопасен.
+/// Latest table statistics for cluster bloat gauges. Each pod reads the values from PostgreSQL. If no read succeeds for
+/// more than 4 × StatsSnapshotInterval, the series disappear. Thread-safe.
 /// </summary>
 internal sealed class ClusterTableStats(MonoClock clock, PgBoltProcessingOptions options)
     : FreshRows<TableStatsRow>(clock, options)

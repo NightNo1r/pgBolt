@@ -5,11 +5,11 @@
     <p class="pgbolt-pager">
         @if (ScannedTo is { } scanned)
         {
-            <text>Просмотрено до </text><Time Utc="scanned.UtcDateTime" /><text> — </text><a href="@href" hx-push-url="true">продолжить поиск</a>
+            <text>Scanned through </text><Time Utc="scanned.UtcDateTime" /><text> — </text><a href="@href" hx-push-url="true">Continue search</a>
         }
         else
         {
-            <a href="@href" hx-push-url="true">следующая страница</a>
+            <a href="@href" hx-push-url="true">Next page</a>
         }
     </p>
 }
@@ -18,6 +18,6 @@
     [Parameter] public string? Next { get; set; }
     [Parameter] public DateTimeOffset? ScannedTo { get; set; }
 
-    /// <summary>Url списка без after.</summary>
+    /// <summary>List URL without the after cursor.</summary>
     [Parameter] public string BaseUrl { get; set; } = "";
 }

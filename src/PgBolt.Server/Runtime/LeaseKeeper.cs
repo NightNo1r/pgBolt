@@ -3,14 +3,12 @@ using PgBolt.Postgres.Storage;
 
 namespace PgBolt.Server.Runtime;
 
-/// <summary>
-/// Таблица выполнений сервера, heartbeat по известным lease и проверка срока lease каждого выполнения.
-/// </summary>
+/// <summary>Tracks server executions, sends heartbeats for known leases and checks each execution's lease deadline.</summary>
 /// <remarks>
-/// Heartbeat-цикл: вызов раз в <c>HeartbeatInterval × (1 ± 0.1)</c>, расписание — от sentAt предыдущего вызова;
-/// таймаут вызова — <c>HeartbeatInterval / 2</c>, поэтому вызовы не перекрываются.
-/// Таймер сроков взведён на ближайший рубеж <c>validUntil − HeartbeatInterval</c> среди неотменённых записей
-/// <see cref="ExecutionState.Running"/> и не зависит от того, завершился ли текущий вызов heartbeat.
+/// Heartbeats run every <c>HeartbeatInterval × (1 ± 0.1)</c> from the previous request's sentAt. Each request times out
+/// after <c>HeartbeatInterval / 2</c>, so requests cannot overlap. The deadline timer targets the earliest <c>validUntil
+/// − HeartbeatInterval</c> among uncanceled <see cref="ExecutionState.Running"/> entries, independently of the current
+/// heartbeat request's completion.
 /// </remarks>
 internal sealed partial class LeaseKeeper
 {
@@ -50,16 +48,21 @@ internal sealed partial class LeaseKeeper
         _lastSuccess = clock.Now;
     }
 
-    /// <summary>Источник U[0, 1) для разброса расписания ±10 %; заменяется в тестах.</summary>
+    /// <summary>Uniform random source on [0, 1) for ±10% schedule jitter. Tests can replace it.</summary>
     internal Func<double> Jitter { get; set; } = static () => Random.Shared.NextDouble();
 
-    /// <summary>Число пауз цикла heartbeat, начатых до текущего момента (тесты: таймер паузы уже создан).</summary>
+    /// <summary>Number of heartbeat loop pauses started so far. Tests can rely on the pause timer being armed.</summary>
     internal int HeartbeatWaits => Volatile.Read(ref _heartbeatWaits);
 
-    /// <summary>now ≥ lastSuccess + LeaseDuration − HeartbeatInterval; до первого успеха отсчёт — от <see cref="Start"/>.</summary>
+    /// <summary>
+    /// True when now ≥ lastSuccess + LeaseDuration − HeartbeatInterval. Before the first success, measures from
+    /// <see cref="Start"/>.
+    /// </summary>
     public bool HeartbeatLost => _clock.Now >= _clock.Add(Volatile.Read(ref _lastSuccess), _lease - _interval);
 
-    /// <summary>Регистрирует взятую задачу как <see cref="ExecutionState.Running"/> (до запуска JobRunner).</summary>
+    /// <summary>Registers a claimed job as <see cref="ExecutionState.Running"/> before starting JobRunner.</summary>
+    /// <param name="job">Job returned by the fetch.</param>
+    /// <param name="queue">Queue from which the job was fetched.</param>
     /// <param name="validUntil">fetchStartedAt + LeaseDuration.</param>
     public Execution Register(LeasedJob job, string queue, long validUntil)
     {
@@ -69,7 +72,9 @@ internal sealed partial class LeaseKeeper
         return execution;
     }
 
-    /// <summary>Регистрирует задачу, которая не будет запускаться: сразу OutcomePending с исходом release, ran = false.</summary>
+    /// <summary>
+    /// Registers a job that will never start, immediately setting OutcomePending with a release outcome and ran = false.
+    /// </summary>
     public Execution RegisterForRelease(LeasedJob job, string queue, long validUntil)
     {
         var execution = new Execution(job, queue, validUntil, ExecutionState.OutcomePending)
@@ -81,11 +86,14 @@ internal sealed partial class LeaseKeeper
     }
 
     /// <summary>
-    /// Откат <see cref="Register"/> для выполнения, которое диспетчер не смог запустить: Running → Removed и удаление из
-    /// таблицы — heartbeat его больше не продлевает, lease истекает не позже validUntil.
+    /// Rolls back <see cref="Register"/> when the dispatcher cannot start execution. Moves Running to Removed and deletes
+    /// the entry, so heartbeats stop renewing it and its lease expires no later than validUntil.
     /// </summary>
-    /// <param name="dropReason">Причина для метрики <c>outcome.dropped</c>; <c>null</c> — выполнение не считается потерянным.</param>
-    /// <returns>false — запись уже не Running (откатывать нечего, метрика не пишется).</returns>
+    /// <param name="execution">Execution to unregister.</param>
+    /// <param name="dropReason">
+    /// Reason for the <c>outcome.dropped</c> metric. With <c>null</c>, the execution does not count as dropped.
+    /// </param>
+    /// <returns>False if the entry is no longer Running. No rollback or metric is needed.</returns>
     public bool Unregister(Execution execution, string? dropReason = null)
     {
         if (!execution.TryTransition(ExecutionState.Running, ExecutionState.Removed))
@@ -109,7 +117,7 @@ internal sealed partial class LeaseKeeper
         _loop = RunHeartbeatLoopAsync(startedAt, _stop.Token);
     }
 
-    /// <summary>Останавливает цикл (текущий вызов heartbeat отменяется и дожидается) и таймер сроков.</summary>
+    /// <summary>Stops the heartbeat loop and the deadline timer. Cancels and awaits the current heartbeat request.</summary>
     public async Task StopAsync()
     {
         if (Volatile.Read(ref _started) == 0)
@@ -124,12 +132,12 @@ internal sealed partial class LeaseKeeper
         }
     }
 
-    /// <summary>Один вызов heartbeat; не бросает.</summary>
+    /// <summary>Performs one heartbeat call without propagating exceptions.</summary>
     internal Task HeartbeatOnceAsync(CancellationToken ct) => HeartbeatCoreAsync(_clock.Now, ct);
 
     /// <summary>
-    /// Отменяет с причиной HeartbeatLost каждое неотменённое выполнение Running, достигшее рубежа
-    /// validUntil − HeartbeatInterval, и перевзводит таймер. Её же вызывает таймер.
+    /// Cancels every uncanceled Running execution that has reached validUntil − HeartbeatInterval with reason
+    /// HeartbeatLost, then rearms the timer. The timer calls this method as well.
     /// </summary>
     internal void CheckDeadlines()
     {
@@ -259,9 +267,9 @@ internal sealed partial class LeaseKeeper
     }
 
     /// <summary>
-    /// Строки servers нет (удалена уборкой после паузы дольше DeadServerTimeout) — upsert регистрации.
-    /// Таймаут — HeartbeatInterval / 2, поэтому следующий успешный ответ не позже S + 1.6 H; не бросает.
-    /// Выполняется внутри цикла под его токеном: StopAsync отменяет и дожидается её до удаления строк серверов.
+    /// Upserts the server registration when cleanup removed its servers row after a pause longer than DeadServerTimeout.
+    /// The timeout is HeartbeatInterval / 2, so the next successful response is due by S + 1.6 H. The method does not
+    /// throw. It uses the loop's token so StopAsync cancels and awaits it before deleting server rows.
     /// </summary>
     private async Task RegisterAgainAsync(CancellationToken ct)
     {
@@ -296,15 +304,18 @@ internal sealed partial class LeaseKeeper
     }
 
     /// <summary>
-    /// Таймер следит только за Running без причины отмены: выполнение, уже отменённое по любой причине
-    /// (в том числе HeartbeatLost), повторная отмена не меняет, а его прошедший рубеж зациклил бы таймер.
+    /// The timer tracks only Running entries without a cancellation reason. Canceling an already-canceled execution
+    /// again, including one canceled for HeartbeatLost, has no effect. Tracking its expired deadline would cause a timer
+    /// loop.
     /// </summary>
     private static bool IsWatched(Execution execution) =>
         execution.State == ExecutionState.Running && execution.FirstReason == CancelReason.None;
 
     private long DeadlineOf(Execution execution) => _clock.Add(execution.ValidUntil, -_interval);
 
-    /// <summary>Сдвигает таймер на более ранний рубеж (регистрация). Change может сработать синхронно — Lock реентерабелен.</summary>
+    /// <summary>
+    /// Moves the timer to an earlier deadline on registration. Change may fire synchronously; Lock is reentrant.
+    /// </summary>
     private void ArmAtMost(long deadline)
     {
         lock (_timerLock)
@@ -316,7 +327,7 @@ internal sealed partial class LeaseKeeper
         }
     }
 
-    /// <summary>Взводит таймер на ближайший рубеж среди отслеживаемых записей (или выключает).</summary>
+    /// <summary>Arms the timer for the earliest tracked deadline or disables it when none remain.</summary>
     private void RearmDeadlineTimer()
     {
         lock (_timerLock)
@@ -335,7 +346,9 @@ internal sealed partial class LeaseKeeper
         }
     }
 
-    /// <summary>Задержка до рубежа, не больше предела таймера (≈ 49 дней); раннее срабатывание безвредно — таймер перевзведётся.</summary>
+    /// <summary>
+    /// Delay until the deadline, capped at the timer limit (about 49 days). An early callback simply rearms the timer.
+    /// </summary>
     private TimeSpan DueIn(long deadline)
     {
         var due = _clock.Until(deadline);

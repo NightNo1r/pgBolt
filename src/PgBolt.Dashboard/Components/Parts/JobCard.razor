@@ -4,30 +4,30 @@
     <h1>@Job.Name <StateBadge State="Job.State" /></h1><JobActions Id="Job.Id.Value" State="Job.State" View="card" Context="Context" />
     <dl class="pgbolt-props">
         <dt>Id</dt><dd>@Job.Id</dd>
-        <dt>Очередь</dt><dd>@Job.Queue</dd>
-        <dt>Приоритет</dt><dd>@Job.Priority</dd>
-        <dt>Попытка</dt><dd>@Job.Attempt / @Job.MaxAttempts</dd>
-        <dt>Создана</dt><dd><Time Utc="Job.CreatedAt.UtcDateTime" /></dd>
-        <dt>Запуск</dt><dd><Time Utc="Job.RunAt?.UtcDateTime" /></dd>
-        <dt>Начата</dt><dd><Time Utc="Job.StartedAt?.UtcDateTime" /></dd>
-        <dt>Завершена</dt><dd><Time Utc="Job.FinishedAt?.UtcDateTime" /></dd>
-        <dt>Сервер</dt><dd>@Job.ServerId</dd>
+        <dt>Queue</dt><dd>@Job.Queue</dd>
+        <dt>Priority</dt><dd>@Job.Priority</dd>
+        <dt>Attempt</dt><dd>@Job.Attempt / @Job.MaxAttempts</dd>
+        <dt>Created</dt><dd><Time Utc="Job.CreatedAt.UtcDateTime" /></dd>
+        <dt>Run at</dt><dd><Time Utc="Job.RunAt?.UtcDateTime" /></dd>
+        <dt>Started</dt><dd><Time Utc="Job.StartedAt?.UtcDateTime" /></dd>
+        <dt>Finished</dt><dd><Time Utc="Job.FinishedAt?.UtcDateTime" /></dd>
+        <dt>Server</dt><dd>@Job.ServerId</dd>
         <dt>Unique key</dt><dd>@Job.UniqueKey</dd>
         @if (Job.CancellationRequested)
         {
-            <dt>Отмена</dt><dd>запрошена</dd>
+            <dt>Cancellation</dt><dd>requested</dd>
         }
         @if (Job.RecurringJobId is { } recurring)
         {
-            <dt>Расписание</dt><dd><a href="recurring/item?id=@Uri.EscapeDataString(recurring)">@recurring</a> <Time Utc="Job.ScheduledAt?.UtcDateTime" /></dd>
+            <dt>Schedule</dt><dd><a href="recurring/item?id=@Uri.EscapeDataString(recurring)">@recurring</a> <Time Utc="Job.ScheduledAt?.UtcDateTime" /></dd>
         }
         @if (Job.ParentId is { } parent)
         {
-            <dt>Родитель</dt><dd><a href="jobs/@parent">@parent</a></dd>
+            <dt>Parent</dt><dd><a href="jobs/@parent">@parent</a></dd>
         }
         else if (Job.ParentBatchId is { } parentBatch)
         {
-            <dt>Родитель</dt><dd><a href="batches/@parentBatch">@parentBatch</a></dd>
+            <dt>Parent</dt><dd><a href="batches/@parentBatch">@parentBatch</a></dd>
         }
         @if (Job.BatchId is { } batch)
         {
@@ -35,22 +35,22 @@
         }
         @if (Job.Continuation is { } condition)
         {
-            <dt>Условие</dt><dd>@condition</dd>
+            <dt>Condition</dt><dd>@condition</dd>
         }
     </dl>
-    <h2>Аргументы</h2>
+    <h2>Arguments</h2>
     <pre>@Json(Job.Args)</pre>
-    <h2>События</h2>
+    <h2>Events</h2>
     @if (Job.Events.Count == 0)
     {
-        <p class="muted">событий нет</p>
+        <p class="muted">No events</p>
     }
     else
     {
         <div class="pgbolt-table-wrap">
             <table>
                 <thead>
-                    <tr><th>Событие</th><th>Время</th><th>Сервер</th><th>Попытка</th><th>Сообщение</th><th>Исключение</th></tr>
+                    <tr><th>Event</th><th>Time</th><th>Server</th><th>Attempt</th><th>Message</th><th>Exception</th></tr>
                 </thead>
                 <tbody>
                     @foreach (var e in Job.Events)
@@ -68,10 +68,10 @@
             </table>
         </div>
     }
-    <h2>Продолжения</h2>
-    <ul hx-get="jobs/@Job.Id/continuations" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">загрузка…</li></ul>
-    <h2>Batch-продолжения</h2>
-    <ul hx-get="jobs/@Job.Id/batch-continuations" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">загрузка…</li></ul>
+    <h2>Continuations</h2>
+    <ul hx-get="jobs/@Job.Id/continuations" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">Loading…</li></ul>
+    <h2>Batch continuations</h2>
+    <ul hx-get="jobs/@Job.Id/batch-continuations" hx-trigger="load" hx-target="this" hx-swap="innerHTML"><li class="muted">Loading…</li></ul>
 </article>
 
 @code {
@@ -81,6 +81,6 @@
     [Parameter] public JobInfo Job { get; set; } = null!;
     [Parameter] public DashboardContext Context { get; set; } = null!;
 
-    /// <summary>Args с отступами — текстом в &lt;pre&gt;.</summary>
+    /// <summary>Renders indented arguments as text inside &lt;pre&gt;.</summary>
     internal static string Json(JsonElement args) => JsonSerializer.Serialize(args, Indented);
 }

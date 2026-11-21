@@ -3,8 +3,8 @@ using Cronos;
 namespace PgBolt.Postgres.Recurring;
 
 /// <summary>
-/// Cron-выражение в таймзоне (часть 4 §2 «Cron», §5.4). Формат выбирается по строке одинаково в API, синхронизации и тике:
-/// макрос @… — Standard (макросы разбираются одинаково в обоих форматах), иначе 5 полей — Standard, 6 — IncludeSeconds.
+/// Cron expression in a time zone (Part 4 §2, §5.4). The API, synchronization, and scheduler tick infer the same format: Standard for @ macros
+/// or five fields, IncludeSeconds for six fields. Macros parse identically in either format.
 /// </summary>
 internal sealed class CronSchedule
 {
@@ -18,7 +18,10 @@ internal sealed class CronSchedule
 
     public TimeZoneInfo Zone { get; }
 
-    /// <summary>FormatException (включая CronFormatException) — cron не разбирается; TimeZoneNotFoundException — нет таймзоны на поде.</summary>
+    /// <summary>
+    /// FormatException (including CronFormatException) indicates invalid cron syntax. TimeZoneNotFoundException means the zone is unavailable on
+    /// this pod.
+    /// </summary>
     public static CronSchedule Parse(string cron, string timeZoneId)
     {
         ArgumentNullException.ThrowIfNull(cron);
@@ -38,7 +41,7 @@ internal sealed class CronSchedule
         };
     }
 
-    /// <summary>IANA id таймзоны (хранимая форма, §4.2).</summary>
+    /// <summary>IANA time zone ID used in storage (§4.2).</summary>
     public static string IanaId(TimeZoneInfo zone)
     {
         if (zone.HasIanaId)
@@ -49,8 +52,8 @@ internal sealed class CronSchedule
     }
 
     /// <summary>
-    /// after(t) §5.3: первое срабатывание строго после t; null — срабатываний больше нет. after(t) &gt; t и не убывает по t
-    /// (см. <see cref="Repair"/>); InvalidOperationException — Cronos не дал корректного ответа (ошибка строки тика, §5.2).
+    /// Returns the first occurrence strictly after t, or null if none remain (§5.3). The result is &gt; t and nondecreasing in t (see
+    /// <see cref="Repair"/>). If Cronos cannot produce a valid answer, InvalidOperationException becomes a scheduler tick row error (§5.2).
     /// </summary>
     public DateTime? After(DateTime utc)
     {
@@ -60,9 +63,9 @@ internal sealed class CronSchedule
     }
 
     /// <summary>
-    /// Срабатывания в [fromUtc, toUtc]: обе границы включены (§5.4). Цепочка <see cref="After"/>, а не GetOccurrences Cronos:
-    /// на той же ошибке Cronos GetOccurrences повторяет одно срабатывание бесконечно. Срабатывания — на целых секундах (не
-    /// чаще тика), поэтому первое ≥ from — это after(from − 1 тик).
+    /// Enumerates occurrences in [fromUtc, toUtc], including both bounds (§5.4). Uses successive <see cref="After"/> calls because Cronos
+    /// GetOccurrences can repeat an occurrence indefinitely on a faulty transition. Occurrences fall on whole seconds, so the first occurrence ≥
+    /// from is after(from − 1 tick).
     /// </summary>
     public IEnumerable<DateTime> Between(DateTime fromUtc, DateTime toUtc)
     {
@@ -72,12 +75,12 @@ internal sealed class CronSchedule
     }
 
     /// <summary>
-    /// Cronos 0.13 при смене стандартного смещения зоны (не DST: Europe/Moscow 2011-03-27 02:00 MSK+3 → 03:00 MSK+4) в часе перед
-    /// переходом возвращает after(t) ≤ t (для <c>0 * * * *</c> — 22:00Z для любого t из [22:00Z, 23:00Z)), и тик ставил бы одно
-    /// срабатывание до ~3600 раз подряд. Срабатывания — на целых секундах, поэтому первое &gt; t — это первое ≥ s, где s — целая
-    /// секунда после t. Точка s «исправна», если Cronos отвечает срабатыванием ≥ s (или null). От s с удвоением шага ищется
-    /// исправная точка, затем бинарным поиском — ближайшая исправная после последней неисправной; ответ — срабатывание от неё.
-    /// Не больше ~2 × <see cref="MaxRepairDoublings"/> вызовов, только на неисправном участке.
+    /// Cronos 0.13 can return after(t) ≤ t in the hour before a change to the standard offset, e.g. Europe/Moscow on 2011-03-27 from 02:00 MSK+3 to
+    /// 03:00 MSK+4. For <c>0 * * * *</c>, it returns 22:00Z throughout [22:00Z, 23:00Z), which could enqueue one occurrence about 3600 times.
+    /// Occurrences fall on whole seconds, so the first occurrence &gt; t is the first ≥ the next whole second s. A probe is valid if Cronos returns
+    /// null or an occurrence at or after the probe. Starting at s, double the step until a valid probe is found, then binary-search for the first
+    /// valid probe after the last invalid one. Return its occurrence. Only faulty ranges require these extra calls, at most about 2 ×
+    /// <see cref="MaxRepairDoublings"/>.
     /// </summary>
     private DateTime? Repair(DateTime utc)
     {
@@ -115,7 +118,7 @@ internal sealed class CronSchedule
 
     private static bool Sane(DateTime from, DateTime? occurrence) => occurrence is not { } o || o >= from;
 
-    /// <summary>timestamptz из Npgsql приходит с Kind = Utc; Cronos требует его явно.</summary>
+    /// <summary>Npgsql returns timestamptz with Kind = Utc, which Cronos requires explicitly.</summary>
     private static DateTime AsUtc(DateTime value) =>
         value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
 }

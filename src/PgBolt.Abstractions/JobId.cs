@@ -1,6 +1,6 @@
 namespace PgBolt;
 
-/// <summary>Идентификатор задачи (UUIDv7, генерируется на клиенте).</summary>
+/// <summary>Identifies a job with a client-generated UUIDv7.</summary>
 public readonly record struct JobId(Guid Value)
 {
     public static JobId New() => new(Guid.CreateVersion7());

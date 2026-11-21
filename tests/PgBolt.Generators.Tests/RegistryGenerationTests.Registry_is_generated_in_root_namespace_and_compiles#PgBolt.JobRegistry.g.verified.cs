@@ -4,7 +4,7 @@
 
 namespace Test.Jobs
 {
-    /// <summary>Исполнители PgBolt этой сборки: o.AddJobs(PgBoltJobRegistry.Register).</summary>
+    /// <summary>Register this assembly’s PgBolt job handlers with o.AddJobs(PgBoltJobRegistry.Register).</summary>
     public static class PgBoltJobRegistry
     {
         public static void Register(global::PgBolt.IPgBoltJobsBuilder builder)

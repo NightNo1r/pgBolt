@@ -4,16 +4,16 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace PgBolt.Server;
 
-/// <summary>Настройки виртуального сервера (§3.2). Проверяются <see cref="Validate"/> при регистрации.</summary>
+/// <summary>Virtual server settings (§3.2). Registration calls <see cref="Validate"/>.</summary>
 public sealed class PgBoltServerOptions
 {
     /// <summary>
-    /// Верхняя граница интервалов (LeaseDuration, ShutdownTimeout, AckFlushInterval, MaxPollInterval, интервалы
-    /// обслуживания): все они становятся задержками таймеров .NET (предел 2³² − 2 мс), 1 сут — с запасом на jitter.
+    /// Upper bound for LeaseDuration, ShutdownTimeout, AckFlushInterval, MaxPollInterval, and maintenance intervals. All become .NET timer delays,
+    /// limited to 2³² − 2 ms. A one-day cap leaves room for jitter.
     /// </summary>
     internal static readonly TimeSpan MaxInterval = TimeSpan.FromDays(1);
 
-    /// <summary>Наибольшая задержка таймера .NET (2³² − 2 мс ≈ 49,7 сут): предел DefaultJobTimeout и [Job(TimeoutSeconds)].</summary>
+    /// <summary>Maximum .NET timer delay (2³² − 2 ms, about 49.7 days), which bounds DefaultJobTimeout and [Job(TimeoutSeconds)].</summary>
     internal static readonly TimeSpan MaxJobTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
 
     // Стенд объединяет длительности FetchAsync обоих хостов в одну гистограмму.
@@ -23,30 +23,30 @@ public sealed class PgBoltServerOptions
     private readonly List<Type> _filterTypes = [];
     private readonly List<Action<IServiceCollection>> _filterRegistrations = [];
 
-    /// <summary>Регистрирует тип фильтра как scoped (AOT: T аннотирован в AddFilter), в порядке AddFilter.</summary>
+    /// <summary>Registers a scoped filter in AddFilter call order. AddFilter annotates T for AOT.</summary>
     internal IReadOnlyList<Action<IServiceCollection>> FilterRegistrations => _filterRegistrations;
 
-    /// <summary>Общий пул слотов.</summary>
+    /// <summary>Number of slots in the shared worker pool.</summary>
     public int Workers { get; set; } = Environment.ProcessorCount * 2;
 
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromSeconds(60);
 
-    /// <summary>Не больше <c>LeaseDuration / 3</c>.</summary>
+    /// <summary>Must not exceed <c>LeaseDuration / 3</c>.</summary>
     public TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(15);
 
     public TimeSpan ShutdownTimeout { get; set; } = TimeSpan.FromSeconds(25);
 
-    /// <summary>Таймаут задачи без <c>[Job(TimeoutSeconds)]</c>; null — нет таймаута.</summary>
+    /// <summary>Timeout for jobs without <c>[Job(TimeoutSeconds)]</c>. Null disables the default timeout.</summary>
     public TimeSpan? DefaultJobTimeout { get; set; }
 
-    /// <summary>Политика повтора, если у задачи нет <c>retry_delays</c> (§3.4).</summary>
+    /// <summary>Retry policy for jobs without <c>retry_delays</c> (§3.4).</summary>
     public RetryPolicy RetryPolicy { get; set; } = RetryPolicy.Default;
 
     public int AckBatchSize { get; set; } = 100;
 
     public TimeSpan AckFlushInterval { get; set; } = TimeSpan.FromMilliseconds(20);
 
-    /// <summary>Добавляет очередь; порядок вызовов — приоритет в общем пуле (§4.2).</summary>
+    /// <summary>Adds a queue. Registration order determines priority in the shared pool (§4.2).</summary>
     public PgBoltServerOptions Queue(string name, Action<QueueOptions>? configure = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -56,7 +56,7 @@ public sealed class PgBoltServerOptions
         return this;
     }
 
-    /// <summary>Фильтр только этого сервера; выполняется после глобальных (§3.6).</summary>
+    /// <summary>Adds a filter for this server. It runs after global filters (§3.6).</summary>
     public PgBoltServerOptions AddFilter<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] T>()
         where T : class, IJobFilter
     {
@@ -69,7 +69,7 @@ public sealed class PgBoltServerOptions
 
     internal IReadOnlyList<Type> FilterTypes => _filterTypes;
 
-    /// <summary>Ёмкость сервера <c>Workers + Σ Reserved</c> (§3.3), публикуется в <c>servers.capacity</c>.</summary>
+    /// <summary>Server capacity, <c>Workers + Σ Reserved</c> (§3.3), published in <c>servers.capacity</c>.</summary>
     internal int Capacity
     {
         get

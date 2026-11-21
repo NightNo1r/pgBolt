@@ -1,6 +1,6 @@
 <h1>Batches</h1>
 <nav class="pgbolt-tabs">
-    <a href="batches" aria-current="@(State is null ? "page" : null)">все</a>
+    <a href="batches" aria-current="@(State is null ? "page" : null)">All</a>
     @foreach (var s in Enum.GetValues<BatchState>())
     {
         <a href="batches?state=@s" aria-current="@(s == State ? "page" : null)">@s</a>
@@ -9,13 +9,13 @@
 <div class="pgbolt-table-wrap">
     <table>
         <thead>
-            <tr><th>Id</th><th>Состояние</th><th>Succeeded / всего</th><th>Failed</th><th>Cancelled</th><th>Создан</th><th>Завершён</th></tr>
+            <tr><th>Id</th><th>State</th><th>Succeeded / total</th><th>Failed</th><th>Cancelled</th><th>Created</th><th>Finished</th></tr>
         </thead>
         <tbody>
             @foreach (var b in Page.Rows)
             {
                 <tr>
-                    <td><a href="batches/@b.Id">@b.Id</a>@if (b.CancelRequested) { <span class="muted"> отмена запрошена</span> }</td>
+                    <td><a href="batches/@b.Id">@b.Id</a>@if (b.CancelRequested) { <span class="muted"> cancellation requested</span> }</td>
                     <td><StateBadge State="b.State" /></td>
                     <td>@b.Succeeded / @b.Total</td>
                     <td>@b.Failed</td>
@@ -29,7 +29,7 @@
 </div>
 @if (Page.Rows.Count == 0)
 {
-    <p class="muted">batches нет</p>
+    <p class="muted">No batches</p>
 }
 <Pager Next="@Page.Next" ScannedTo="Page.ScannedTo" BaseUrl="@(State is null ? "batches" : $"batches?state={State}")" />
 

@@ -3,7 +3,7 @@ using PgBolt.Postgres.Storage;
 
 namespace PgBolt.Postgres.Client;
 
-/// <summary>Умолчания динамического enqueue из job_types с TTL (§6.2).</summary>
+/// <summary>Caches job_types defaults for enqueue by name with a TTL (§6.2).</summary>
 internal sealed class JobTypesCache(PgBoltStore store, TimeSpan ttl, TimeProvider time)
 {
     private readonly ConcurrentDictionary<string, (JobTypeRecord? Record, DateTimeOffset ExpiresAt)> _entries = new(StringComparer.Ordinal);
@@ -18,7 +18,7 @@ internal sealed class JobTypesCache(PgBoltStore store, TimeSpan ttl, TimeProvide
         return record;
     }
 
-    /// <summary>Умолчания динамического типа (enqueue по имени); нет типа — UnknownJobException.</summary>
+    /// <summary>Gets defaults for enqueue by name. Throws UnknownJobException if the type is missing.</summary>
     public async ValueTask<JobDescriptor> GetDescriptorAsync(string name, CancellationToken ct)
     {
         var type = await GetAsync(name, ct) ?? throw new UnknownJobException(name);

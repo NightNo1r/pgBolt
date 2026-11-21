@@ -25,9 +25,9 @@ public sealed partial class PgBoltStore
     internal string HeartbeatSql => field ??= Render(HeartbeatTemplate);
 
     /// <summary>
-    /// Продлевает lease из списка (только строки этого сервера с тем же lease_id), обновляет servers.heartbeat_at
-    /// и доставляет запросы отмены (часть 3 §8.1). Lease из списка, отсутствующий в ответе, потерян. ServerPresent = false —
-    /// строки servers нет (удалена уборкой), сервер должен зарегистрироваться заново (часть 2 §9.2).
+    /// Renews listed leases matching this server and lease_id, updates servers.heartbeat_at, and delivers cancellation requests (Part 3 §8.1). A
+    /// requested lease missing from the response has been lost. ServerPresent = false means cleanup removed the server row and the server must
+    /// register again (Part 2 §9.2).
     /// </summary>
     public Task<HeartbeatResult> HeartbeatAsync(Guid serverId, IReadOnlyCollection<LeaseRef> leases, TimeSpan lease,
         CancellationToken ct)

@@ -1,7 +1,7 @@
 namespace PgBolt;
 
 /// <summary>
-/// Аргументы задачи не удалось десериализовать (битый JSON, неподдерживаемый тип, null вместо объекта).
-/// Бросается invoker'ом до вызова исполнителя; исход — окончательный Failed (часть 3 §5.1, §5.2). Публичен для фильтров.
+/// The invoker could not deserialize the job arguments before calling the executor. Causes include malformed JSON, an unsupported type, or null
+/// instead of an object. The job ends in Failed (Part 3 §5.1, §5.2). Filters can inspect this exception.
 /// </summary>
 public sealed class JobArgumentsException(string message, Exception? inner = null) : Exception(message, inner);

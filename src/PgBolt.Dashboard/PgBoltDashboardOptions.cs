@@ -1,38 +1,38 @@
 namespace PgBolt.Dashboard;
 
-/// <summary>Настройки dashboard (<c>services.AddPgBoltDashboard(o => …)</c>).</summary>
+/// <summary>Dashboard options configured through <c>services.AddPgBoltDashboard(o => …)</c>.</summary>
 public sealed class PgBoltDashboardOptions
 {
     private static readonly TimeSpan MaxInterval = TimeSpan.FromDays(1);
 
-    /// <summary>Политика авторизации для действий и запуска задач; null — действия разрешены всем, кто видит dashboard.</summary>
+    /// <summary>Authorization policy for actions and enqueueing. With null, anyone who can view the dashboard can perform actions.</summary>
     public string? ActionsPolicy { get; set; }
 
-    /// <summary>Действия не рендерятся, POST → 403.</summary>
+    /// <summary>Hides actions and rejects POST requests with 403.</summary>
     public bool ReadOnly { get; set; }
 
-    /// <summary>Разрешить нелокальный доступ без авторизации на группе dashboard.</summary>
-    /// <remarks>
-    /// Без авторизации на группе и при false пропускаются только локальные запросы: <c>RemoteIpAddress</c> loopback и нет
-    /// заголовков <c>Forwarded</c>, <c>X-Forwarded-For</c>, <c>X-Real-IP</c>. Ограничение: sidecar service mesh (Envoy / Istio:
-    /// 127.0.0.6, 127.0.0.1), не добавляющий заголовков, неотличим от локального клиента — в mesh авторизация на группе
-    /// (<c>RequireAuthorization</c>) обязательна.
-    /// </remarks>
+    /// <summary>
+    /// Allows remote access without authorization on the dashboard route group.
+    /// </summary>
+    /// <remarks>By default, a group without authorization accepts only loopback <c>RemoteIpAddress</c> requests with no
+    /// <c>Forwarded</c>, <c>X-Forwarded-For</c> or <c>X-Real-IP</c> headers. A service mesh sidecar such as Envoy or Istio
+    /// can appear local (127.0.0.6 or 127.0.0.1) when it omits these headers. Configure group authorization with
+    /// <c>RequireAuthorization</c> in a mesh.</remarks>
     public bool AllowAnonymousRemote { get; set; }
 
-    /// <summary><c>SET LOCAL statement_timeout</c> каждого statement'а dashboard.</summary>
+    /// <summary>Sets <c>SET LOCAL statement_timeout</c> for each dashboard statement.</summary>
     public TimeSpan QueryTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
-    /// <summary>Бюджет обхода порциями (списки Succeeded / Failed / Cancelled и др.).</summary>
+    /// <summary>Time budget for chunked scans, including the Succeeded, Failed and Cancelled lists.</summary>
     public TimeSpan ScanBudget { get; set; } = TimeSpan.FromSeconds(2);
 
-    /// <summary>Период polling обзора за час и счётчиков очередей.</summary>
+    /// <summary>Poll interval for the hourly overview and queue counts.</summary>
     public TimeSpan RefreshInterval { get; set; } = TimeSpan.FromSeconds(5);
 
-    /// <summary>Сервер без heartbeat дольше — «не отвечает».</summary>
+    /// <summary>Marks a server unresponsive when its heartbeat is older than this threshold.</summary>
     public TimeSpan ServerStaleAfter { get; set; } = TimeSpan.FromMinutes(1);
 
-    /// <summary>Срок задачи <c>stats</c> (<c>next_run_at</c>) просрочен дольше (сверх допуска по интервалу) — баннер устаревшей статистики.</summary>
+    /// <summary>Shows the stale statistics banner when the <c>stats</c> task is past <c>next_run_at</c> by this threshold plus the interval allowance.</summary>
     public TimeSpan StatsStaleAfter { get; set; } = TimeSpan.FromMinutes(1);
 
     internal void Validate()

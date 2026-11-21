@@ -5,7 +5,10 @@ using PgBolt.Postgres.Schema;
 
 namespace PgBolt.Server.Runtime;
 
-/// <summary>Логи и метрика отложенных партиций по результату retention: core их не пишет, уровни выбираются здесь.</summary>
+/// <summary>
+/// Logs retention results and records deferred partitions. The core does not emit them; this component selects the log
+/// levels.
+/// </summary>
 internal static partial class RetentionReport
 {
     internal const int PinnedWarningDays = 7;
@@ -71,7 +74,7 @@ internal static partial class RetentionReport
 
     private static string Days(IEnumerable<DateOnly> days) => string.Join(", ", days.Select(Day));
 
-    /// <summary>LiveJobs = T + 1 означает «больше T».</summary>
+    /// <summary>LiveJobs = T + 1 means more than T.</summary>
     private static string LiveText(int? live, int max) =>
         live > max ? $">{max}" : (live ?? 0).ToString(CultureInfo.InvariantCulture);
 

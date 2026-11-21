@@ -36,7 +36,8 @@ public sealed partial class PgBoltStore
           AND (p.default_max_concurrency IS DISTINCT FROM u.lim OR p.default_weight IS DISTINCT FROM u.weight)
         """;
 
-    /// <summary>Эффективный лимит строки queue_settings: переопределение поверх значения из кода; NULL — без лимита.</summary>
+    /// <summary>Effective concurrency limit in queue_settings. An override takes precedence over the code-defined value. NULL means
+    /// unlimited.</summary>
     private const string EffectiveLimit =
         "CASE WHEN override_concurrency_set THEN override_max_concurrency ELSE default_max_concurrency END";
 
@@ -98,9 +99,8 @@ public sealed partial class PgBoltStore
     private string ResetWeightOverrideSql => field ??= Render(ResetWeightOverrideTemplate);
 
     /// <summary>
-    /// Публикует значения очередей из кода. <paramref name="defaults"/> уникальны по <see cref="QueueDefault.Queue"/>;
-    /// порядок блокировок задаёт ORDER BY в SQL. Возвращает строки, которые недавно (за 5 минут) записал другой процесс с
-    /// иными значениями; переопределения не трогает.
+    /// Publishes code-defined queue defaults. Entries in <paramref name="defaults"/> are unique by <see cref="QueueDefault.Queue"/>. SQL ORDER BY
+    /// determines lock order. Returns rows another process wrote with different values within the last five minutes. Preserves overrides.
     /// </summary>
     public Task<IReadOnlyList<QueueDefaultConflict>> SyncQueueDefaultsAsync(IReadOnlyList<QueueDefault> defaults, string publishedBy, CancellationToken ct)
     {
@@ -121,7 +121,7 @@ public sealed partial class PgBoltStore
                 r.GetString(0), r.GetNullableValue<int>(1), r.GetNullableValue<int>(2), r.GetString(3)), c), ct);
     }
 
-    /// <summary>Очереди с эффективным (переопределение поверх значения из кода) лимитом или весом.</summary>
+    /// <summary>Queues with an effective limit or weight, applying overrides before code-defined defaults.</summary>
     public Task<IReadOnlyList<ActiveQueueSetting>> GetActiveQueueSettingsAsync(CancellationToken ct) =>
         QueryAsync<IReadOnlyList<ActiveQueueSetting>>(ActiveQueueSettingsSql, static _ => { },
             async (r, c) => await r.ReadAllAsync(static r => new ActiveQueueSetting(

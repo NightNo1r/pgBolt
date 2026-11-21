@@ -1,10 +1,9 @@
 namespace PgBolt.Postgres.Client;
 
 /// <summary>
-/// Снимок списка настроек очередей с TTL на <see cref="TimeProvider"/>; без <c>duration</c> каждое чтение идёт в загрузку.
-/// Параллельные промахи ждут одну загрузку; она идёт без токена вызывающего, чтобы отмена одного не обрывала её остальным.
-/// Ошибка не кэшируется. Инвалидация увеличивает поколение: загрузка, начатая до неё, свой результат в кэш не кладёт —
-/// иначе снимок, прочитанный до записи, жил бы до конца TTL, — а следующий вызывающий начинает новую загрузку.
+/// Caches queue settings for a TTL measured by <see cref="TimeProvider"/>. Without <c>duration</c>, every read starts a load. Concurrent misses
+/// share a load independent of caller cancellation. Failures are never cached. Invalidation advances the generation so an earlier load cannot
+/// cache stale data for the full TTL. The next caller starts a new load.
 /// </summary>
 internal sealed class QueueSettingsReadCache(TimeSpan? duration, TimeProvider time)
 {

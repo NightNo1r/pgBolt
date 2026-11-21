@@ -6,7 +6,10 @@ namespace PgBolt.Postgres.Schema;
 
 internal enum CatalogKind { JobsPartition, EventsPartition, DetachedJobs, DetachedEvents, CompactionRemnant }
 
-/// <param name="Oid">oid таблицы — её идентичность на весь запуск (§5.2).</param>
+/// <param name="Oid">Table OID, used to identify the table throughout the run (§5.2).</param>
+/// <param name="Name">Table name in the PgBolt schema.</param>
+/// <param name="Kind">Partition or remnant classification.</param>
+/// <param name="Day">UTC date encoded in the table name.</param>
 internal sealed record CatalogTable(long Oid, string Name, CatalogKind Kind, DateOnly Day)
 {
     public bool IsJobs => Kind is CatalogKind.JobsPartition or CatalogKind.DetachedJobs or CatalogKind.CompactionRemnant;
@@ -14,11 +17,11 @@ internal sealed record CatalogTable(long Oid, string Name, CatalogKind Kind, Dat
     public string Table => IsJobs ? "jobs" : "job_events";
 }
 
-/// <param name="Today">«Сегодня» — сутки UTC сервера БД (§3).</param>
-/// <param name="Tables">Таблицы схемы с именами партиций PgBolt.</param>
+/// <param name="Today">Current UTC date on the database server (§3).</param>
+/// <param name="Tables">Tables in the schema with PgBolt partition names.</param>
 internal sealed record PartitionListing(DateOnly Today, List<CatalogTable> Tables);
 
-/// <summary>Таблицы схемы, которые создаёт PgBolt, и сутки retention (часть 2 §5.2, §3).</summary>
+/// <summary>Tables created by PgBolt and UTC days used by retention (Part 2 §5.2, §3).</summary>
 internal static partial class PartitionCatalog
 {
     [GeneratedRegex("^jobs_([0-9]{8})(?:_r([0-9]{1,10}))?$", RegexOptions.CultureInvariant)]
@@ -27,7 +30,9 @@ internal static partial class PartitionCatalog
     [GeneratedRegex("^job_events_([0-9]{8})$", RegexOptions.CultureInvariant)]
     private static partial Regex EventsName();
 
-    /// <summary>§5.2, таблица имён. null — не наша таблица (чужой родитель, присоединённый остаток, другое имя).</summary>
+    /// <summary>
+    /// Classifies partition names according to §5.2. Returns null for a different parent, an attached remnant, or an unrecognized name.
+    /// </summary>
     public static CatalogTable? Classify(long oid, string name, string? parent)
     {
         var jobs = JobsName().Match(name);
@@ -56,20 +61,19 @@ internal static partial class PartitionCatalog
         };
     }
 
-    /// <summary>Rd = ceil(retention / 1 сутки), минимум 1.</summary>
+    /// <summary>Rd = ceil(retention / 1 day), with a minimum of 1.</summary>
     public static int RetentionDays(TimeSpan retention) =>
         checked((int)((retention.Ticks + TimeSpan.TicksPerDay - 1) / TimeSpan.TicksPerDay));
 
-    /// <summary>§5.2: последние сутки-кандидат today − 1 − Rd; null — retention выключен.</summary>
+    /// <summary>The last eligible day is today − 1 − Rd (§5.2). Null disables retention.</summary>
     public static DateOnly? Horizon(DateOnly today, TimeSpan? retention) =>
         retention is { } r ? today.AddDays(-1 - RetentionDays(r)) : null;
 
     public static int Overdue(DateOnly horizon, DateOnly day) => horizon.DayNumber - day.DayNumber;
 
     /// <summary>
-    /// «Сегодня» (сутки UTC сервера БД, §3) и все таблицы схемы с именами партиций PgBolt — присоединённые и отсоединённые,
-    /// одним запросом (§5.2). Чужой родитель — числом oid, а не regclass::text: тот выводит имя без схемы, если таблица
-    /// видна через search_path, и чужой <c>other.jobs</c> совпал бы с 'jobs'.
+    /// Reads the database server's current UTC day (§3) and all tables with PgBolt partition names, attached or detached, in one query (§5.2).
+    /// Identifies parents by OID. A regclass::text name can omit the schema when visible in search_path, allowing <c>other.jobs</c> to match 'jobs'.
     /// </summary>
     public static async Task<PartitionListing> ListAsync(NpgsqlDataSource dataSource, string schema, CancellationToken ct)
     {

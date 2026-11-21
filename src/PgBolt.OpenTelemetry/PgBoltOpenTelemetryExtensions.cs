@@ -3,16 +3,16 @@ using OpenTelemetry.Trace;
 
 namespace PgBolt;
 
-/// <summary>Подключение трассировки и метрик PgBolt к OpenTelemetry SDK.</summary>
+/// <summary>Connects PgBolt traces and metrics to the OpenTelemetry SDK.</summary>
 public static class PgBoltOpenTelemetryExtensions
 {
-    /// <summary>Подписывает провайдер трассировки на источник span'ов PgBolt.</summary>
+    /// <summary>Subscribes the tracer provider to the PgBolt activity source.</summary>
     public static TracerProviderBuilder AddPgBoltInstrumentation(this TracerProviderBuilder builder) =>
         builder.AddSource(PgBoltDiagnostics.ActivitySourceName);
 
     /// <summary>
-    /// Подписывает провайдер метрик на <c>Meter</c> PgBolt и задаёт границы бакетов гистограмм View'ами:
-    /// SDK, не учитывающие advice instrument'а, получают те же границы.
+    /// Subscribes the meter provider to the PgBolt <c>Meter</c> and configures histogram views so SDKs that ignore instrument advice use the same
+    /// bucket boundaries.
     /// </summary>
     public static MeterProviderBuilder AddPgBoltInstrumentation(this MeterProviderBuilder builder) =>
         builder

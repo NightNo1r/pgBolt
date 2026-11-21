@@ -106,14 +106,14 @@ public sealed partial class JobPagesTests(PostgresFixture pg)
         await using var db = await TestDb.CreateAsync(pg, ConnectionMode.Direct);
         await using (var week = await DashboardHost.StartAsync(db, core: o => o.EventsRetention = TimeSpan.FromDays(7)))
         {
-            Assert.Contains("переходы за 7 сут", await BodyAsync(week.GetAsync("/pgbolt/jobs/failed")), StringComparison.Ordinal);
-            Assert.Contains("переходы за 7 сут", await BodyAsync(week.GetAsync("/pgbolt/jobs/cancelled")), StringComparison.Ordinal);
-            Assert.DoesNotContain("переходы за", await BodyAsync(week.GetAsync("/pgbolt/jobs/succeeded")), StringComparison.Ordinal);
+            Assert.Contains("Transitions over 7 days", await BodyAsync(week.GetAsync("/pgbolt/jobs/failed")), StringComparison.Ordinal);
+            Assert.Contains("Transitions over 7 days", await BodyAsync(week.GetAsync("/pgbolt/jobs/cancelled")), StringComparison.Ordinal);
+            Assert.DoesNotContain("Transitions over", await BodyAsync(week.GetAsync("/pgbolt/jobs/succeeded")), StringComparison.Ordinal);
         }
 
         await using var forever = await DashboardHost.StartAsync(db, core: o => o.EventsRetention = null);
-        Assert.Contains("переходы за всё время хранения", await BodyAsync(forever.GetAsync("/pgbolt/jobs/failed")), StringComparison.Ordinal);
-        Assert.Contains("переходы за всё время хранения", await BodyAsync(forever.GetAsync("/pgbolt/jobs/cancelled")), StringComparison.Ordinal);
+        Assert.Contains("Transitions over the retention period", await BodyAsync(forever.GetAsync("/pgbolt/jobs/failed")), StringComparison.Ordinal);
+        Assert.Contains("Transitions over the retention period", await BodyAsync(forever.GetAsync("/pgbolt/jobs/cancelled")), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public sealed partial class JobPagesTests(PostgresFixture pg)
         var row = RowRegex().Matches(await BodyAsync(host.GetAsync("/pgbolt/jobs/failed"))).Single(m => m.Value.Contains(id.ToString(),
             StringComparison.Ordinal)).Value;
 
-        Assert.Contains("lease истёк на последней попытке", row, StringComparison.Ordinal);
+        Assert.Contains("Lease expired on the final attempt", row, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -146,8 +146,8 @@ public sealed partial class JobPagesTests(PostgresFixture pg)
 
         var page = await BodyAsync(host.GetAsync("/pgbolt/jobs/scheduled?type=needle"));
 
-        Assert.Matches("Просмотрено до <time datetime=\"[^\"]+\">[^<]+</time>", page);
-        Assert.Matches("<a href=\"jobs/scheduled\\?type=needle&amp;after=[^\"]+\" hx-push-url=\"true\">продолжить поиск</a>", page);
+        Assert.Matches("Scanned through <time datetime=\"[^\"]+\">[^<]+</time>", page);
+        Assert.Matches("<a href=\"jobs/scheduled\\?type=needle&amp;after=[^\"]+\" hx-push-url=\"true\">Continue search</a>", page);
     }
 
     [Fact]
@@ -165,13 +165,13 @@ public sealed partial class JobPagesTests(PostgresFixture pg)
         Assert.Contains("name=\"queue\" value=\"default\"", form, StringComparison.Ordinal);
         Assert.Contains("name=\"type\" value=\"dash.job\"", form, StringComparison.Ordinal);
         Assert.Equal(50, JobLinkRegex().Count(page));
-        var next = Regex.Match(page, "<a href=\"(jobs/scheduled\\?queue=default&amp;type=dash.job&amp;after=[^\"]+)\" hx-push-url=\"true\">следующая страница</a>");
+        var next = Regex.Match(page, "<a href=\"(jobs/scheduled\\?queue=default&amp;type=dash.job&amp;after=[^\"]+)\" hx-push-url=\"true\">Next page</a>");
         Assert.True(next.Success);
 
         var second = await BodyAsync(host.GetAsync("/pgbolt/" + WebUtility.HtmlDecode(next.Groups[1].Value)));
 
         Assert.Equal(5, JobLinkRegex().Count(second));
-        Assert.DoesNotContain("следующая страница", second, StringComparison.Ordinal);
+        Assert.DoesNotContain("Next page", second, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -379,7 +379,7 @@ public sealed partial class JobPagesTests(PostgresFixture pg)
         var card = await BodyAsync(host.GetAsync("/pgbolt/" + link));
         Assert.Contains(Id, card, StringComparison.Ordinal);
         Assert.Equal(50, JobLinkRegex().Count(card));
-        var next = Regex.Match(card, "<a href=\"(recurring/item\\?id=[^\"&]+&amp;after=[^\"]+)\" hx-push-url=\"true\">следующая страница</a>");
+        var next = Regex.Match(card, "<a href=\"(recurring/item\\?id=[^\"&]+&amp;after=[^\"]+)\" hx-push-url=\"true\">Next page</a>");
         Assert.True(next.Success);
 
         var second = await BodyAsync(host.GetAsync("/pgbolt/" + WebUtility.HtmlDecode(next.Groups[1].Value)));
@@ -430,7 +430,7 @@ public sealed partial class JobPagesTests(PostgresFixture pg)
     private static async Task AssertNotFoundPageAsync(HttpResponseMessage response)
     {
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        Assert.Contains("Ошибка 404", await response.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+        Assert.Contains("Error 404", await response.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
     }
 
     /// <summary>Открывающий тег элемента с атрибутом attribute.</summary>

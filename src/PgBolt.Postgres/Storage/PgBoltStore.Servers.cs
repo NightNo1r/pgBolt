@@ -17,7 +17,10 @@ public sealed partial class PgBoltStore
     private string RegisterServerSql => field ??= Render(RegisterServerTemplate);
     private string RemoveServerSql => field ??= Render(RemoveServerTemplate);
 
-    /// <summary>Регистрирует виртуальный сервер или восстанавливает его строку (часть 3 §7.2, часть 2 §9.2): upsert, started_at существующей строки не меняется. host — Environment.MachineName.</summary>
+    /// <summary>
+    /// Registers a virtual server or restores its row with an upsert, preserving an existing started_at (Part 3 §7.2, Part 2 §9.2). The host is
+    /// Environment.MachineName.
+    /// </summary>
     public Task RegisterServerAsync(Guid serverId, string name, string host, string[] queues, int capacity, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(name);
@@ -33,7 +36,7 @@ public sealed partial class PgBoltStore
         }, ct);
     }
 
-    /// <summary>Удаляет строку сервера при остановке (часть 3 §6.4 п. 6). Отсутствующая строка — не ошибка.</summary>
+    /// <summary>Removes the server row at shutdown (Part 3 §6.4, step 6). A missing row is harmless.</summary>
     public Task RemoveServerAsync(Guid serverId, CancellationToken ct) =>
         NonQueryAsync(RemoveServerSql, ps => P.Add(ps, "id", serverId), ct);
 }

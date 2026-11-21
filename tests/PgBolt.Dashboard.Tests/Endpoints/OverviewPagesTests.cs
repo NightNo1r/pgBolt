@@ -10,7 +10,7 @@ namespace PgBolt.Dashboard.Tests.Endpoints;
 
 public sealed partial class OverviewPagesTests(PostgresFixture pg)
 {
-    private const string NotRunning = "снимок не обновляется: ни один процесс не выполняет обслуживание (<code>RunMaintenance</code>)";
+    private const string NotRunning = "The snapshot is stale. No process is running maintenance (<code>RunMaintenance</code>)";
 
     /// <summary>queue_stats (суммы 11 / 22 / 33 / 44), исходы текущей минуты и 30 минут назад, живой сервер, свежая строка stats.</summary>
     private static Task SeedAsync(TestDb db) => db.ExecAsync("""
@@ -33,7 +33,7 @@ public sealed partial class OverviewPagesTests(PostgresFixture pg)
         var body = await BodyAsync(host.GetAsync("/pgbolt/"));
 
         Assert.Contains(NotRunning, body, StringComparison.Ordinal);
-        Assert.Contains("нет данных", HourSection(body), StringComparison.Ordinal);
+        Assert.Contains("No data", HourSection(body), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public sealed partial class OverviewPagesTests(PostgresFixture pg)
         Assert.Contains("hx-trigger=\"load, every 60000ms, pgbolt:refresh\"", dayTag, StringComparison.Ordinal);
         Assert.Contains("hx-swap=\"innerHTML\"", dayTag, StringComparison.Ordinal);
         Assert.Contains("data-pgbolt-poll", dayTag, StringComparison.Ordinal);
-        Assert.Contains("статистика приблизительная", page, StringComparison.Ordinal);
+        Assert.Contains("Statistics are approximate", page, StringComparison.Ordinal);
         Assert.DoesNotContain(NotRunning, page, StringComparison.Ordinal);
 
         await db.ExecAsync("UPDATE {schema}.maintenance_tasks SET next_run_at = now() - interval '1 hour', last_run_at = now() - interval '1 hour'");
@@ -185,26 +185,26 @@ public sealed partial class OverviewPagesTests(PostgresFixture pg)
         var fragment = await BodyAsync(host.GetAsync("/pgbolt/queues/rows", htmx: true));
 
         var header = Regex.Match(page, "<thead>.*?</thead>", RegexOptions.Singleline).Value;
-        Assert.Contains("<th>Лимит</th>", header, StringComparison.Ordinal);
-        Assert.Contains("<th>Вес</th>", header, StringComparison.Ordinal);
+        Assert.Contains("<th>Limit</th>", header, StringComparison.Ordinal);
+        Assert.Contains("<th>Weight</th>", header, StringComparison.Ordinal);
         var rows = RowRegex().Matches(TbodyRegex().Match(page).Value).Select(m => m.Value).ToList();
         Assert.Equal(rows, RowRegex().Matches(fragment).Select(m => m.Value));
         Assert.All(rows, r => Assert.Equal(Regex.Count(header, "<th[ >]"), Regex.Count(r, "<td[ >]")));
 
         var a = Cells(rows.Single(r => r.Contains("queue=a\"", StringComparison.Ordinal)));
-        Assert.Matches("^1 / 3\\s*<span class=\"muted\">из кода</span>$", a[7]);
-        Assert.Matches("^2\\s*<span class=\"muted\">из кода</span>$", a[8]);
+        Assert.Matches("^1 / 3\\s*<span class=\"muted\">configured default</span>$", a[7]);
+        Assert.Matches("^2\\s*<span class=\"muted\">configured default</span>$", a[8]);
         var paused = Cells(rows.Single(r => r.Contains("queue=b%20c\"", StringComparison.Ordinal)));
-        Assert.Matches("^0 / 0\\s*<span class=\"pgbolt-state\">Пауза</span>\\s*<span class=\"muted\">переопределён: ops, <time datetime=\"2026-01-02T03:04:05.000Z\">", paused[7]);
-        Assert.Matches("^7\\s*<span class=\"muted\">переопределён: ops2, <time datetime=\"2026-01-02T03:04:06.000Z\">", paused[8]);
+        Assert.Matches("^0 / 0\\s*<span class=\"pgbolt-state\">Paused</span>\\s*<span class=\"muted\">overridden by ops, <time datetime=\"2026-01-02T03:04:05.000Z\">", paused[7]);
+        Assert.Matches("^7\\s*<span class=\"muted\">overridden by ops2, <time datetime=\"2026-01-02T03:04:06.000Z\">", paused[8]);
         var plain = Cells(rows.Single(r => r.Contains("queue=plain\"", StringComparison.Ordinal)));
         Assert.Equal(("—", "—"), (plain[7], plain[8]));
 
-        Assert.Contains("Сбросить кэш настроек", page, StringComparison.Ordinal);
-        Assert.Contains("другие поды подхватят изменения в пределах QueueSettingsRefreshInterval и TTL их кэша", page, StringComparison.Ordinal);
+        Assert.Contains("Reset settings cache", page, StringComparison.Ordinal);
+        Assert.Contains("Other pods pick up changes according to QueueSettingsRefreshInterval and their cache TTL", page, StringComparison.Ordinal);
         await using var readOnly = await DashboardHost.StartAsync(db, o => o.ReadOnly = true);
         var hidden = await BodyAsync(readOnly.GetAsync("/pgbolt/queues"));
-        Assert.DoesNotContain("Сбросить кэш настроек", hidden, StringComparison.Ordinal);
+        Assert.DoesNotContain("Reset settings cache", hidden, StringComparison.Ordinal);
         Assert.Contains("0 / 0", hidden, StringComparison.Ordinal);
     }
 
@@ -223,12 +223,12 @@ public sealed partial class OverviewPagesTests(PostgresFixture pg)
         var page = await BodyAsync(host.GetAsync("/pgbolt/servers"));
         var rows = RowRegex().Matches(page).Select(m => m.Value).ToList();
 
-        Assert.Contains("не отвечает", rows.Single(r => r.Contains("beta", StringComparison.Ordinal)), StringComparison.Ordinal);
-        Assert.DoesNotContain("не отвечает", rows.Single(r => r.Contains("alpha", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.Contains("unresponsive", rows.Single(r => r.Contains("beta", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.DoesNotContain("unresponsive", rows.Single(r => r.Contains("alpha", StringComparison.Ordinal)), StringComparison.Ordinal);
         var retention = rows.Single(r => r.Contains("retention", StringComparison.Ordinal));
         var partitions = rows.Single(r => r.Contains("partitions", StringComparison.Ordinal));
-        Assert.Contains("идёт", retention, StringComparison.Ordinal);
-        Assert.DoesNotContain("идёт", partitions, StringComparison.Ordinal);
+        Assert.Contains("running", retention, StringComparison.Ordinal);
+        Assert.DoesNotContain("running", partitions, StringComparison.Ordinal);
         Assert.Contains("<pre>disk full</pre>", partitions, StringComparison.Ordinal);
     }
 

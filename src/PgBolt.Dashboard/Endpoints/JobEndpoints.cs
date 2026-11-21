@@ -7,7 +7,7 @@ using PgBolt.Dashboard.Views;
 
 namespace PgBolt.Dashboard.Endpoints;
 
-/// <summary>Вкладки задач по состояниям, карточка задачи и её продолжения фрагментами (§6.1, §6.2, §9).</summary>
+/// <summary>Job tabs by state, job details and continuation fragments (§6.1, §6.2, §9).</summary>
 internal static class JobEndpoints
 {
     public static void Map(RouteGroupBuilder g)
@@ -20,7 +20,7 @@ internal static class JobEndpoints
             type = string.IsNullOrEmpty(type) ? null : type;
             // Отклонение 22: Enqueued без очереди — выбор очереди, ListJobsAsync не вызывается.
             var chooseQueue = kind == JobState.Enqueued && queue is null;
-            return await DashboardView.PageAsync<JobsPage>(http, "Задачи", new Dictionary<string, object?>
+            return await DashboardView.PageAsync<JobsPage>(http, "Jobs", new Dictionary<string, object?>
             {
                 [nameof(JobsPage.Kind)] = kind,
                 [nameof(JobsPage.Queue)] = queue,
@@ -31,7 +31,7 @@ internal static class JobEndpoints
             });
         });
         DashboardRoutes.Get(g, "/jobs/{id:guid}", async (Guid id, HttpContext http, IJobClient client) =>
-            await DashboardView.PageAsync<JobPage>(http, "Задача", new Dictionary<string, object?>
+            await DashboardView.PageAsync<JobPage>(http, "Job", new Dictionary<string, object?>
             {
                 [nameof(JobPage.Job)] = await GetJobAsync(client, id, http.RequestAborted),
                 [nameof(JobPage.Context)] = DashboardContext.Of(http),
@@ -52,7 +52,7 @@ internal static class JobEndpoints
         });
     }
 
-    /// <summary>Порция связанных задач (RelatedJobs) — фрагмент без &lt;title&gt;.</summary>
+    /// <summary>Renders one page of related jobs (RelatedJobs) as a fragment without &lt;title&gt;.</summary>
     internal static Task<IResult> FragmentAsync(HttpContext http, string baseUrl, Page<RelatedJobRow> page) =>
         DashboardView.PageAsync<RelatedJobs>(http, "", new Dictionary<string, object?>
         {
@@ -60,7 +60,7 @@ internal static class JobEndpoints
             [nameof(RelatedJobs.BaseUrl)] = baseUrl,
         }, partial: true);
 
-    /// <summary>Порция связанных batches (RelatedBatches) — фрагмент без &lt;title&gt;.</summary>
+    /// <summary>Renders one page of related batches (RelatedBatches) as a fragment without &lt;title&gt;.</summary>
     internal static Task<IResult> FragmentAsync(HttpContext http, string baseUrl, Page<BatchRow> page) =>
         DashboardView.PageAsync<RelatedBatches>(http, "", new Dictionary<string, object?>
         {

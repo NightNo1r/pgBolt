@@ -35,8 +35,8 @@ public sealed partial class PgBoltStore
     internal string AckSql => field ??= Render(AckTemplate);
 
     /// <summary>
-    /// Пакетный ack (§5.3). Задачи с потерянным lease игнорируются. Возвращает id подтверждённых задач (часть 6 §4.1);
-    /// сигналы — часть 5 §6.3.
+    /// Acknowledges jobs in a batch (§5.3), ignoring lost leases. Returns acknowledged job IDs (Part 6 §4.1) and emits signals as specified in Part
+    /// 5 §6.3.
     /// </summary>
     public Task<IReadOnlyList<Guid>> AckAsync(Guid serverId, IReadOnlyList<LeaseRef> leases, CancellationToken ct)
     {

@@ -5,9 +5,9 @@ using Npgsql;
 namespace PgBolt.Postgres.Schema;
 
 /// <summary>
-/// Retention jobs/job_events (часть 2 §5.2–§5.5): остатки прошлых запусков, отсоединение группами под LOCK TABLE ONLY
-/// родителя с таймаутами удержания (транзакция 1), компактирование закреплённых партиций jobs (RetentionRunner.Jobs.cs),
-/// DROP отдельной транзакцией на таблицу только по тому же oid (транзакция 2).
+/// Runs retention on jobs and job_events (Part 2 §5.2–§5.5). Clears earlier remnants, detaches groups under LOCK TABLE ONLY on the parent with
+/// hold timeouts (transaction 1), and compacts pinned jobs partitions (RetentionRunner.Jobs.cs). Drops tables in separate transactions only if
+/// each OID still matches (transaction 2).
 /// </summary>
 internal sealed partial class RetentionRunner
 {
@@ -31,7 +31,7 @@ internal sealed partial class RetentionRunner
 
     private string LockTimeoutSql => $"SET LOCAL lock_timeout = '{Ms(_options.RetentionLockTimeout)}ms'";
 
-    /// <summary>§5.5: остатки → jobs → job_events → число присоединённых партиций jobs.</summary>
+    /// <summary>Processes remnants, jobs, then job_events, and counts attached jobs partitions (§5.5).</summary>
     public async Task<RetentionResult> ApplyAsync(CancellationToken ct = default)
     {
         var listing = await PartitionCatalog.ListAsync(_dataSource, _schema, ct);
@@ -86,7 +86,7 @@ internal sealed partial class RetentionRunner
                   .OrderBy(t => t.Day)
                   .Select(t => new Candidate(t, PartitionCatalog.Overdue(horizon, t.Day)))];
 
-    /// <summary>§5.3 п. 3: партиции, которые держат в обход родителя, исключаются из группы → Deferred(LockTimeout).</summary>
+    /// <summary>Excludes partitions locked independently of the parent from the group and reports Deferred(LockTimeout) (§5.3, step 3).</summary>
     private async Task<List<Candidate>> ExcludeHeldAsync(string parent, IReadOnlyList<Candidate> chunk, Accumulator acc, CancellationToken ct)
     {
         var held = await HeldAsync(parent, [.. chunk.Select(c => c.Table.Oid)], ct);
@@ -104,11 +104,9 @@ internal sealed partial class RetentionRunner
     }
 
     /// <remarks>
-    /// Держатель сопоставляется по pid или virtualtransaction. У блокировок prepared-транзакций (2PC) pid IS NULL
-    /// (поэтому и собственный сеанс исключается через IS DISTINCT FROM), virtualtransaction есть и уникален — для них
-    /// срабатывает он. Только virtualtransaction недостаточно: pg_locks не согласованный снимок (fast-path блокировки
-    /// собираются раньше основной таблицы), и сеанс горячего пути между чтениями может сменить транзакцию — родитель
-    /// попадёт со старым vxid, партиция с новым; совпадение pid это покрывает.
+    /// Matches a holder by pid or virtualtransaction. A prepared transaction (2PC) has a NULL pid, hence IS DISTINCT FROM when excluding this
+    /// session, but has a unique virtualtransaction. Matching only virtualtransaction would miss a session that changed transactions between reads:
+    /// pg_locks collects fast-path locks before the main lock table, so the parent and partition can show different vxids for the same pid.
     /// </remarks>
     private async Task<HashSet<long>> HeldAsync(string parent, long[] oids, CancellationToken ct)
     {
@@ -133,8 +131,8 @@ internal sealed partial class RetentionRunner
     }
 
     /// <summary>
-    /// §5.3 п. 5 / §5.4: транзакция 1 отсоединения группы. has_live (только jobs) — повтор проверки живых под блокировкой;
-    /// такая партиция пропускается до следующего запуска и в результат не попадает. Неприсоединённая — в транзакцию 2.
+    /// Transaction 1 detaches a group (§5.3, step 5 and §5.4). For jobs, has_live rechecks live rows under lock. Such partitions are omitted from
+    /// the result and left for the next run. Detached tables proceed to transaction 2.
     /// </summary>
     private async Task<GroupResult> DetachGroupAsync(string parent, IReadOnlyList<Candidate> group, CancellationToken ct)
     {
@@ -199,8 +197,8 @@ internal sealed partial class RetentionRunner
         t with { Kind = t.IsJobs ? CatalogKind.DetachedJobs : CatalogKind.DetachedEvents };
 
     /// <summary>
-    /// §5.3 п. 5: транзакция 1 — BeginTransactionAsync, пакет А (lock_timeout, LOCK TABLE ONLY родителя, таймауты удержания,
-    /// проверка), пакет Б (DDL) или откат, CommitAsync. Пустой пакет Б — RollbackAsync сразу после пакета А.
+    /// Transaction 1 (§5.3, step 5): BeginTransactionAsync, batch A (lock_timeout, LOCK TABLE ONLY on the parent, hold timeouts, verification), then
+    /// batch B (DDL) and CommitAsync or a rollback. An empty batch B triggers RollbackAsync immediately after batch A.
     /// </summary>
     private async Task<LockedOutcome> RunLockedAsync(string parent, NpgsqlBatchCommand check, IReadOnlyList<DateOnly> days,
         Func<NpgsqlDataReader, CancellationToken, Task> readCheck, Func<List<NpgsqlBatchCommand>> batchB, CancellationToken ct)
@@ -265,14 +263,13 @@ internal sealed partial class RetentionRunner
     }
 
     /// <summary>
-    /// §5.3 п. 6: транзакция 2 — DROP только если имя указывает на тот же oid и таблица не присоединена. Родитель не блокируется.
+    /// Transaction 2 (§5.3, step 6) drops only an unattached table whose name still identifies the same OID. The parent remains unlocked.
     /// </summary>
     /// <remarks>
-    /// Перекрытие запусков (§5.5): проверка oid не блокирует, поэтому два пода могут пройти её для одной таблицы; DROP второго
-    /// ждёт блокировку, после коммита первого PostgreSQL повторно разрешает имя, не находит таблицу и возвращает 42P01
-    /// (DROP TABLE без IF EXISTS). Такой DROP — Skipped, а не Dropped: иначе сутки попадут в
-    /// DroppedJobsPartitions/DroppedEventsPartitions обоих подов. Признак — только SQLSTATE ошибки: не зависит от NOTICE,
-    /// lc_messages, client_min_messages и event trigger'ов.
+    /// Overlapping runs (§5.5) can both pass the unlocked OID check. The second DROP waits, then PostgreSQL resolves the name again after the first
+    /// commit and returns 42P01 for DROP TABLE without IF EXISTS. Classify this as Skipped to avoid counting the same day in both pods'
+    /// DroppedJobsPartitions or DroppedEventsPartitions. Use only SQLSTATE, independent of NOTICE, lc_messages, client_min_messages, and event
+    /// triggers.
     /// </remarks>
     private async Task<DropResult> DropAsync(string name, long oid, CancellationToken ct)
     {
@@ -348,18 +345,18 @@ internal sealed partial class RetentionRunner
         return command;
     }
 
-    /// <summary>Сверка: имя партиции по-прежнему указывает на oid из списка (NULL — таблицы нет).</summary>
+    /// <summary>Checks that the partition name still identifies the listed OID. NULL means the table is gone.</summary>
     private NpgsqlBatchCommand OidCheckCmd(CatalogTable table) =>
         Cmd("SELECT to_regclass($1) = $2::oid", Arg(Qualified(table.Name)), Arg(table.Oid));
 
-    /// <summary>Первая строка набора — true (нет строки или NULL — false).</summary>
+    /// <summary>True if the first row of the result set contains true. A missing row or NULL returns false.</summary>
     private static async Task<bool> ReadTrueAsync(NpgsqlDataReader reader, CancellationToken ct) =>
         await reader.ReadAsync(ct) && !reader.IsDBNull(0) && reader.GetBoolean(0);
 
-    /// <summary>Позиционный параметр ($N по порядку добавления).</summary>
+    /// <summary>Creates a positional parameter ($N in insertion order).</summary>
     private static NpgsqlParameter Arg<T>(T value) => new NpgsqlParameter<T> { TypedValue = value };
 
-    /// <summary>Читатель на первом наборе строк: SET/LOCK пакета строк не возвращают.</summary>
+    /// <summary>Positions the reader on the first result set. SET and LOCK commands in the batch return no rows.</summary>
     private static async Task<NpgsqlDataReader> ExecuteToRowsAsync(NpgsqlBatch batch, CancellationToken ct)
     {
         var reader = await batch.ExecuteReaderAsync(ct);
@@ -370,8 +367,8 @@ internal sealed partial class RetentionRunner
     }
 
     /// <summary>
-    /// §5.3 п. 5: откат — только на открытом соединении и без токена; при разрыве транзакцию откатил сервер, Npgsql откатит
-    /// незавершённую транзакцию при dispose. Ошибка самого отката не должна подменить исходную.
+    /// Rolls back only on an open connection, without a cancellation token (§5.3, step 5). The server rolls back on disconnect, and Npgsql rolls
+    /// back unfinished transactions on disposal. A rollback error must preserve the original failure.
     /// </summary>
     private static async Task SafeRollbackAsync(NpgsqlConnection conn, NpgsqlTransaction tx)
     {
@@ -388,17 +385,15 @@ internal sealed partial class RetentionRunner
     }
 
     /// <summary>
-    /// §5.3 «Обработка ошибок»: отмена ct — OperationCanceledException (пробрасывается как есть) или NpgsqlException от
-    /// прерванной команды (заменяется на OperationCanceledException(ct)); в обоих случаях откат без токена и до остальных
-    /// фильтров catch — этот фильтр в каждой цепочке идёт первым.
+    /// Handles cancellation first in each catch chain (§5.3, Error Handling). Rolls back without a token, rethrows OperationCanceledException, and
+    /// converts an interrupted command's NpgsqlException into OperationCanceledException(ct).
     /// </summary>
     private static bool IsCancellation(Exception e, CancellationToken ct) =>
         ct.IsCancellationRequested && e is OperationCanceledException or NpgsqlException;
 
     /// <summary>
-    /// §5.3 «Обработка ошибок»: statement_timeout (57014), 25P03 от idle_in_transaction_session_timeout напрямую или любой
-    /// разрыв соединения. Разрыв определяется по состоянию соединения, а не по типу исключения: через PgBouncer вместо 25P03
-    /// может прийти PostgresException от самого PgBouncer (например, 08P01) или обрыв без SQLSTATE.
+    /// Recognizes statement_timeout (57014), idle_in_transaction_session_timeout (25P03), or any broken connection (§5.3, Error Handling). Checks
+    /// connection state because PgBouncer may return its own PostgresException (e.g. 08P01) or disconnect without SQLSTATE.
     /// </summary>
     private static bool IsHoldTimeout(NpgsqlException e, NpgsqlConnection conn) =>
         e is PostgresException { SqlState: PostgresErrorCodes.QueryCanceled or IdleInTransactionTimeout }
@@ -434,7 +429,10 @@ internal sealed partial class RetentionRunner
                 Deferred.Add(new DeferredPartition(table, c.Day, reason, c.Overdue, null));
         }
 
-        /// <param name="countRemnant">false — остаток компактирования этого запуска: в DroppedCompactionRemnants не считается (§5.1).</param>
+        /// <param name="table">Table considered for removal.</param>
+        /// <param name="overdue">Days since the table became eligible for retention.</param>
+        /// <param name="drop">Result of attempting to drop the table.</param>
+        /// <param name="countRemnant">False for a remnant of this run's compaction, which is excluded from DroppedCompactionRemnants (§5.1).</param>
         public void RecordDrop(CatalogTable table, int overdue, DropResult drop, bool countRemnant)
         {
             switch (drop.Status)

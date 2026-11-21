@@ -1,6 +1,6 @@
 @namespace PgBolt.Dashboard.Components
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -15,13 +15,13 @@
     <header class="pgbolt-header">
         <a class="pgbolt-brand" href="./">PgBolt</a>
         <nav class="pgbolt-nav">
-            <a href="./">Обзор</a>
-            <a href="queues">Очереди</a>
-            <a href="jobs/scheduled">Задачи</a>
+            <a href="./">Overview</a>
+            <a href="queues">Queues</a>
+            <a href="jobs/scheduled">Jobs</a>
             <a href="batches">Batches</a>
             <a href="recurring">Recurring</a>
-            <a href="servers">Серверы</a>
-            <a href="types">Типы задач</a>
+            <a href="servers">Servers</a>
+            <a href="types">Job types</a>
         </nav>
     </header>
     <main id="main"><DynamicComponent Type="Body" Parameters="BodyParameters.ToDictionary(p => p.Key, p => p.Value!)" /></main>

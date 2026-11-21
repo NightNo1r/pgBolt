@@ -6,9 +6,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace PgBolt.Postgres.Diagnostics;
 
 /// <summary>
-/// Владеет <c>Meter</c> контейнера и сообщает о сбоях телеметрии. Meter берётся у <see cref="IMeterFactory"/>
-/// контейнера (измерения нескольких контейнеров в одном процессе не смешиваются); без фабрики создаётся собственный
-/// и освобождается вместе с контейнером.
+/// Owns the container's <c>Meter</c> and reports telemetry failures. Uses the container's <see cref="IMeterFactory"/> to keep measurements
+/// separate across containers in one process. Without a factory, the container creates and disposes its own meter.
 /// </summary>
 internal sealed partial class PgBoltInstrumentation : IDisposable
 {
@@ -30,16 +29,16 @@ internal sealed partial class PgBoltInstrumentation : IDisposable
         Meter = meterFactory?.Create(options) ?? new Meter(options);
     }
 
-    /// <summary>Информационная версия сборки <c>PgBolt.Postgres</c>.</summary>
+    /// <summary>Informational version of the <c>PgBolt.Postgres</c> assembly.</summary>
     public static string Version { get; } =
         typeof(PgBoltInstrumentation).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0";
 
     public Meter Meter { get; }
 
-    /// <summary>Сбой точки телеметрии: пишет событие в лог не чаще раза в минуту, сбой логгера глотает.</summary>
+    /// <summary>Logs a telemetry failure at most once per minute and suppresses logger failures.</summary>
     public void ReportFailure(Exception error) => Report(ref _lastFailure, Log.TelemetryFailed, error);
 
-    /// <summary>Сбой observable-callback'а: то же, что <see cref="ReportFailure"/>, но со своим ограничителем.</summary>
+    /// <summary>Reports observable callback failures like <see cref="ReportFailure"/>, with a separate rate limit.</summary>
     public void ReportCallbackFailure(Exception error) => Report(ref _lastCallbackFailure, Log.MetricCallbackFailed, error);
 
     public void Dispose()

@@ -4,7 +4,7 @@ using PgBolt.Postgres.Storage;
 
 namespace PgBolt.Server.Runtime;
 
-/// <summary>Чистый проброс <see cref="IServerStore"/> в <see cref="PgBoltStore"/>.</summary>
+/// <summary>Forwards <see cref="IServerStore"/> calls to <see cref="PgBoltStore"/>.</summary>
 internal sealed class PgBoltServerStore(PgBoltStore store) : IServerStore
 {
     private readonly PgBoltStore _store = store ?? throw new ArgumentNullException(nameof(store));
@@ -63,7 +63,10 @@ internal sealed class PgBoltServerStore(PgBoltStore store) : IServerStore
     public Task<DateTime?> TryClaimMaintenanceAsync(string name, TimeSpan interval, CancellationToken ct) =>
         _store.TryClaimMaintenanceAsync(name, interval, ct);
 
-    /// <summary>false от store (строку перезахватил другой под, §5.7) — штатно: результат перекрывшегося запуска не пишется.</summary>
+    /// <summary>
+    /// A false result is expected when another pod has reclaimed the row (§5.7). The overlapping run's result is
+    /// discarded.
+    /// </summary>
     public Task CompleteMaintenanceAsync(string name, DateTime claimedAt, string? error, TimeSpan? retryDelay, CancellationToken ct) =>
         _store.CompleteMaintenanceAsync(name, claimedAt, error, retryDelay, ct);
 

@@ -32,7 +32,7 @@ public sealed partial class RenderingTests(PostgresFixture pg)
         Assert.Contains("<base href=\"/pgbolt/\"", body, StringComparison.Ordinal);
         Assert.Contains("<meta name=\"htmx-config\"", body, StringComparison.Ordinal);
         Assert.Contains("<main id=\"main\">", body, StringComparison.Ordinal);
-        Assert.Contains("<h1>Обзор</h1>", body, StringComparison.Ordinal);
+        Assert.Contains("<h1>Overview</h1>", body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public sealed partial class RenderingTests(PostgresFixture pg)
 
         Assert.DoesNotContain("<!DOCTYPE", body, StringComparison.Ordinal);
         Assert.StartsWith("<title>", body, StringComparison.Ordinal);
-        Assert.Contains("<h1>Обзор</h1>", body, StringComparison.Ordinal);
+        Assert.Contains("<h1>Overview</h1>", body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -243,7 +243,7 @@ public sealed partial class RenderingTests(PostgresFixture pg)
         }
 
         var timeout = await BodyAsync(host.GetAsync("/pgbolt/boom/503", htmx: true));
-        Assert.Contains("запрос не уложился в QueryTimeout, сузьте фильтр", timeout, StringComparison.Ordinal);
+        Assert.Contains("Query exceeded QueryTimeout. Narrow the filter.", timeout, StringComparison.Ordinal);
 
         var internalError = await BodyAsync(host.GetAsync("/pgbolt/boom/500"));
         Assert.Contains("InvalidOperationException", internalError, StringComparison.Ordinal);

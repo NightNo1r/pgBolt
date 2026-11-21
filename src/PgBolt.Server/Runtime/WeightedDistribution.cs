@@ -1,10 +1,10 @@
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Взвешенный round-robin общего пула на уровне слотов (stride scheduling). У очереди виртуальное время <c>pass</c> в «кругах»:
-/// каждый взятый общий слот прибавляет 1 / вес, поэтому за круг, в котором очереди с backlog взяли слоты по весам, pass каждой
-/// растёт на 1. Учёт — по факту взятия (<see cref="OnTaken"/>), а не по выданным записям: доли не зависят от числа свободных
-/// слотов и от того, как план разбит на записи. Reserved-слоты весами не распределяются и pass не меняют.
+/// Distributes shared slots by weighted round-robin (stride scheduling). Each queue tracks virtual time <c>pass</c> in
+/// rounds. Each shared slot taken adds 1 / weight, so serving backlogged queues in proportion to their weights advances
+/// each by one per round. Accounting happens when a slot is taken (<see cref="OnTaken"/>), independently of how many
+/// slots are free or how plan entries are grouped. Reserved slots are outside this distribution and never change pass.
 /// </summary>
 internal sealed class WeightedDistribution : ISharedPoolDistribution
 {
@@ -35,7 +35,7 @@ internal sealed class WeightedDistribution : ISharedPoolDistribution
         _sharedCap = new int[weights.Count];
     }
 
-    /// <summary>Виртуальное время очередей; для тестов.</summary>
+    /// <summary>Queue virtual times, exposed for tests.</summary>
     internal double[] Pass { get; }
 
     public void OnTaken(int queue, bool fromReserved)
@@ -46,13 +46,13 @@ internal sealed class WeightedDistribution : ISharedPoolDistribution
     }
 
     /// <summary>
-    /// Итог прошлого плана. Очереди, взявшие общую долю целиком и не упёршиеся в MaxConcurrency (F), взяли бы ещё — их pass
-    /// и есть текущее виртуальное время V. Недобравшая, упёршаяся или неготовая очередь подтягивается к V, чтобы простой
-    /// и недобор не копили преимущества (иначе после появления задач она получила бы залп); готовая очередь без доли
-    /// отстаёт не больше чем на круг, а набравшая остатки плана опережает не больше чем на два. Затем pass нормируется к V.
-    /// Неготовой считается и очередь, не бывшая кандидаткой в подводимом плане: иначе очередь, ставшая готовой после простоя,
-    /// считалась бы готовой без доли и отставала бы на круг — залп до веса слотов. Без F (все недобирают) текущего времени
-    /// нет, pass не трогается.
+    /// Closes the previous plan. Queues that took their full share and stayed below MaxConcurrency (F) would have taken
+    /// more. Their pass defines current virtual time V. A queue that underfilled, hit its limit, or was ineligible
+    /// catches up to V, preventing a burst of accumulated credit when jobs arrive. A ready queue with no share trails by
+    /// at most one round; a queue that absorbed leftovers leads by at most two. Then pass is normalized to V. A queue
+    /// outside the previous plan's candidates also counts as ineligible; otherwise becoming ready after an idle period
+    /// could create a one-round lag and a burst of up to its weight in slots. Without F (all queues underfilled), there
+    /// is no current time and pass stays unchanged.
     /// </summary>
     public void BeginPlan(int queueCount, Func<int, bool> candidate)
     {
@@ -90,10 +90,10 @@ internal sealed class WeightedDistribution : ISharedPoolDistribution
     }
 
     /// <summary>
-    /// Разыгрывает свободные общие слоты на копии pass среди кандидаток (розыгрыш свой в каждом вызове: уже взятое учтено
-    /// в pass) и выдаёт запись одной из выигравших: сначала недобравшей в прошлый раз — вероятный недобор раньше, чтобы
-    /// остаток достался очередям с backlog, — затем с меньшим pass, затем по порядку объявления. Без выигравших — первой
-    /// очереди со свободными Reserved.
+    /// Simulates shared-slot allocation among candidates on a copy of pass. Repeats the simulation each call because pass
+    /// already reflects slots taken. Returns one winning queue, preferring a queue that underfilled last time so any
+    /// leftover slots can reach backlogged queues. Breaks further ties by lowest pass, then declaration order. With no
+    /// winners, returns the first queue with free Reserved slots.
     /// </summary>
     public (int Queue, int N)? Next(int queueCount, Func<int, bool> candidate, Func<int, int> available,
                                     Func<int, int> freeReserved, int freeShared)

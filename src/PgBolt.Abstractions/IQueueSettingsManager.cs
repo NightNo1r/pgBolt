@@ -1,38 +1,43 @@
 namespace PgBolt;
 
 /// <summary>
-/// Runtime API переопределений кластерного лимита конкурентности и веса очередей. Переопределение лимита и переопределение веса
-/// независимы: запись и сброс одного не трогают другое. Строки очередей не удаляются.
+/// Manages cluster-wide overrides for queue concurrency limits and weights. Setting or resetting one leaves the other in effect. Queue records
+/// are retained.
 /// </summary>
 public interface IQueueSettingsManager
 {
     ValueTask<IReadOnlyList<QueueSettings>> ListAsync(CancellationToken ct = default);
 
-    /// <returns>null — у очереди нет ни значений из кода, ни переопределений.</returns>
+    /// <returns>null if the queue has neither code-defined settings nor overrides.</returns>
     ValueTask<QueueSettings?> GetAsync(string queue, CancellationToken ct = default);
 
     /// <summary>
-    /// Для очереди без записи создаёт её. Число и пауза для уже лимитированной очереди действуют со следующего dequeue;
-    /// лимит, впервые заданный очереди, серверы других процессов начинают соблюдать в пределах
-    /// <c>QueueSettingsRefreshInterval</c> (до этого их dequeue лимит не соблюдает), процесс, выполнивший запись, — сразу.
-    /// Пауза затирает прежнее переопределение лимита: возобновление его число не восстанавливает.
+    /// Creates a queue record if needed. For an already limited queue, the next dequeue honors the new limit or pause. When a queue first gets a
+    /// limit, the writing process enforces it immediately. Other processes can dequeue without the limit until they refresh within
+    /// <c>QueueSettingsRefreshInterval</c>. Pausing overwrites the previous limit override. Resuming does not restore its value.
     /// </summary>
-    /// <param name="maxConcurrency">null — без лимита, 0 — пауза, ≥ 1 — лимит.</param>
+    /// <param name="queue">Name of the queue to update.</param>
+    /// <param name="maxConcurrency">null for unlimited concurrency, 0 to pause, or a positive limit.</param>
+    /// <param name="updatedBy">Optional identifier of the caller making the change.</param>
+    /// <param name="ct">Token for cancelling the operation.</param>
     ValueTask SetConcurrencyOverrideAsync(string queue, int? maxConcurrency, string? updatedBy = null, CancellationToken ct = default);
 
-    /// <summary>Снять переопределение лимита: действует значение из кода.</summary>
+    /// <summary>Removes the concurrency override and restores the code-defined limit.</summary>
     ValueTask ResetConcurrencyOverrideAsync(string queue, CancellationToken ct = default);
 
     /// <summary>
-    /// Для очереди без записи создаёт её. Новый вес серверы начинают учитывать в пределах <c>QueueSettingsRefreshInterval</c>
-    /// (процесс, выполнивший запись, — сразу), с ближайшей границы плана слотов.
+    /// Creates a queue record if needed. Servers pick up the new weight within <c>QueueSettingsRefreshInterval</c>, and the writing process picks it
+    /// up immediately. Each applies the weight at its next slot plan boundary.
     /// </summary>
-    /// <param name="weight">null — без веса, иначе 1…1000.</param>
+    /// <param name="queue">Name of the queue to update.</param>
+    /// <param name="weight">null for no weight, or a weight from 1 through 1000.</param>
+    /// <param name="updatedBy">Optional identifier of the caller making the change.</param>
+    /// <param name="ct">Token for cancelling the operation.</param>
     ValueTask SetWeightOverrideAsync(string queue, int? weight, string? updatedBy = null, CancellationToken ct = default);
 
-    /// <summary>Снять переопределение веса: действует значение из кода.</summary>
+    /// <summary>Removes the weight override and restores the code-defined weight.</summary>
     ValueTask ResetWeightOverrideAsync(string queue, CancellationToken ct = default);
 
-    /// <summary>Сбросить кэш этого процесса; без кэша — ничего не делает.</summary>
+    /// <summary>Clears the cache in this process if caching is enabled.</summary>
     void InvalidateCache();
 }

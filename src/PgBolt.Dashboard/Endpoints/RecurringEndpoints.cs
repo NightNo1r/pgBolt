@@ -5,7 +5,7 @@ using PgBolt.Dashboard.Data;
 
 namespace PgBolt.Dashboard.Endpoints;
 
-/// <summary>Расписания и карточка расписания с историей запусков; id — в query string (отклонение 8).</summary>
+/// <summary>Schedule list, schedule details and run history. The schedule ID travels in the query string (deviation 8).</summary>
 internal static class RecurringEndpoints
 {
     public static void Map(RouteGroupBuilder g)
@@ -23,7 +23,7 @@ internal static class RecurringEndpoints
                 throw new DashboardBadRequestException("id is required");
             var recurring = await manager.GetAsync(id, http.RequestAborted)
                 ?? throw new DashboardNotFoundException($"recurring job {id} not found");
-            return await DashboardView.PageAsync<RecurringPage>(http, "Расписание", new Dictionary<string, object?>
+            return await DashboardView.PageAsync<RecurringPage>(http, "Schedule", new Dictionary<string, object?>
             {
                 [nameof(RecurringPage.Recurring)] = recurring,
                 [nameof(RecurringPage.Runs)] = await store.ListRecurringRunsAsync(id, after, http.RequestAborted),

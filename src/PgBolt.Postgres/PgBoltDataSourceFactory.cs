@@ -3,10 +3,9 @@ using Npgsql;
 namespace PgBolt.Postgres;
 
 /// <summary>
-/// AOT-совместимый источник данных для ConnectionString: slim builder с массивами. Чтобы строка подключения работала и
-/// через PgBouncer в режиме transaction, сброс сессии при возврате соединения в пул выключен всегда (No Reset On Close):
-/// PgBolt не держит состояния сессии, а DISCARD ALL удалил бы на сервере подготовленные statement'ы, которые PgBouncer
-/// считает живыми. Без UsePreparedStatements выключена и авто-подготовка (Max Auto Prepare=0).
+/// AOT-compatible data source for ConnectionString, using the slim builder with array support. No Reset On Close is always enabled for
+/// compatibility with PgBouncer transaction pooling. PgBolt keeps no session state, and DISCARD ALL would remove server-side statements that
+/// PgBouncer still tracks. Disabling UsePreparedStatements also disables automatic preparation (Max Auto Prepare=0).
 /// </summary>
 internal static class PgBoltDataSourceFactory
 {

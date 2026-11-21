@@ -3,40 +3,45 @@ using System.Collections.Frozen;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Распределение общего пула между очередями — внутренняя стратегия <see cref="SlotAllocator"/>.
-/// Порядок вызовов за итерацию диспетчера: <see cref="BeginPlan"/> → <see cref="Next"/> → dequeue → <see cref="OnTaken"/>
-/// на каждый занятый слот → <see cref="Next"/> → … → null. План может оборваться без финального <see cref="Next"/>
-/// (остановка, ошибка dequeue). Все вызовы идут под lock allocator'а.
+/// Internal <see cref="SlotAllocator"/> strategy for distributing shared slots among queues. Each dispatcher iteration
+/// calls <see cref="BeginPlan"/>, then <see cref="Next"/>, dequeues jobs, calls <see cref="OnTaken"/> for each acquired
+/// slot, and repeats <see cref="Next"/> until null. Shutdown or a dequeue error can end a plan without a final
+/// <see cref="Next"/>. All calls hold the allocator lock.
 /// </summary>
 internal interface ISharedPoolDistribution
 {
     /// <summary>
-    /// Граница плана: вызывается перед первым <see cref="Next"/> плана, в том числе для плана без записей, с тем же
-    /// набором кандидаток (isDue вычислен один раз, ни одна очередь ещё не выдана).
+    /// Marks a plan boundary before the first <see cref="Next"/>, including for empty plans. Uses the same candidates:
+    /// isDue has been evaluated once and no queue has yet appeared in the plan.
     /// </summary>
     void BeginPlan(int queueCount, Func<int, bool> candidate);
 
-    /// <summary>Следующая запись плана выборки.</summary>
-    /// <param name="queueCount">Число очередей; индексы — порядок объявления.</param>
-    /// <param name="candidate">Очередь ещё не выдавалась в этом плане и её nextPoll наступил.</param>
-    /// <param name="available">min(свободные Reserved очереди + freeShared, MaxConcurrency − занято), ≥ 0.</param>
-    /// <param name="freeReserved">Свободные Reserved-слоты очереди.</param>
+    /// <summary>Gets the next fetch plan entry.</summary>
+    /// <param name="queueCount">Number of queues. Indexes follow declaration order.</param>
+    /// <param name="candidate">True for a queue whose nextPoll is due and which has not appeared in this plan.</param>
+    /// <param name="available">
+    /// min(free Reserved slots for the queue + freeShared, MaxConcurrency − occupied), at least zero.
+    /// </param>
+    /// <param name="freeReserved">Free Reserved slots for the queue.</param>
     /// <param name="freeShared">
-    /// Остаток общего пула плана: свободные общие слоты на начало плана минус общие, взятые в этом плане; освободившиеся
-    /// посреди плана не входят.
+    /// Shared slots remaining in the plan: slots free at the start minus slots taken during the plan. Excludes slots
+    /// freed mid-plan.
     /// </param>
     /// <returns>
-    /// Индекс очереди и n ≥ 1; null — план исчерпан. null допустим, только если ни у одной кандидатки нет available ≥ 1
-    /// (иначе SlotAllocator бросает InvalidOperationException).
+    /// Queue index and n ≥ 1, or null when the plan is exhausted. Returning null while any candidate has available ≥ 1
+    /// causes SlotAllocator to throw InvalidOperationException.
     /// </returns>
     (int Queue, int N)? Next(int queueCount, Func<int, bool> candidate, Func<int, int> available,
                              Func<int, int> freeReserved, int freeShared);
 
-    /// <summary><see cref="SlotAllocator.Take"/> занял слот очереди; fromReserved — то, что вернул Take.</summary>
+    /// <summary>
+    /// Reports a slot acquired by <see cref="SlotAllocator.Take"/> for this queue. fromReserved is the value returned by
+    /// Take.
+    /// </summary>
     void OnTaken(int queue, bool fromReserved);
 }
 
-/// <summary>Строгий порядок объявления: первая кандидатка со свободным слотом получает всё, что ей доступно.</summary>
+/// <summary>Strict declaration order. The first candidate with a free slot receives all slots available to it.</summary>
 internal sealed class StrictOrderDistribution : ISharedPoolDistribution
 {
     public void BeginPlan(int queueCount, Func<int, bool> candidate) { }
@@ -59,10 +64,10 @@ internal sealed class StrictOrderDistribution : ISharedPoolDistribution
 }
 
 /// <summary>
-/// Счётчики слотов виртуального сервера и план выборки: Reserved очереди доступны только ей, общий
-/// пул — Workers; MaxConcurrency ограничивает очередь целиком. Порядок и доли общего пула задаёт
-/// <see cref="ISharedPoolDistribution"/>: без весов — строгий порядок объявления, с весом хотя бы у одной очереди —
-/// <see cref="WeightedDistribution"/> (очереди без веса — вес 1). Потокобезопасен.
+/// Tracks slots and builds the fetch plan for a virtual server. A queue's Reserved slots belong only to that queue.
+/// Workers sets the shared pool size, and MaxConcurrency caps total occupancy per queue.
+/// <see cref="ISharedPoolDistribution"/> sets queue order and shares: strict declaration order with no weights, or
+/// <see cref="WeightedDistribution"/> when any queue has a weight. Unweighted queues then use weight 1. Thread-safe.
 /// </summary>
 internal sealed class SlotAllocator
 {
@@ -76,19 +81,24 @@ internal sealed class SlotAllocator
     private int[] _appliedVector;
     private int _sharedInUse;
     /// <summary>
-    /// Остаток общего пула текущего плана: свободные общие на его начало минус взятые с тех пор; вне плана не читается.
-    /// Внутри плана не больше FreeShared: Take уменьшает оба, Release увеличивает только FreeShared.
+    /// Shared slots left in the current plan: free at its start minus those taken since. Only read during the plan. Never
+    /// exceeds FreeShared because Take decrements both values and Release increases only FreeShared.
     /// </summary>
     private int _planBudget;
 
-    /// <param name="weights">Текущие веса очередей (ordinal); читается под lock на границе плана, должен быть дешёвым.</param>
+    /// <param name="workers">Number of slots in the shared pool.</param>
+    /// <param name="queues">Queue settings in declaration order.</param>
+    /// <param name="weights">
+    /// Current queue weights using ordinal comparison. Read under the lock at plan boundaries, so this lookup must be
+    /// cheap.
+    /// </param>
     public SlotAllocator(int workers, IReadOnlyList<QueueOptions> queues, Func<FrozenDictionary<string, int>>? weights = null)
         : this(workers, queues, new StrictOrderDistribution())
     {
         _weights = weights;
     }
 
-    /// <summary>Фиксированная стратегия, веса не читаются.</summary>
+    /// <summary>Uses a fixed strategy without reading weights.</summary>
     internal SlotAllocator(int workers, IReadOnlyList<QueueOptions> queues, ISharedPoolDistribution distribution)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(workers);
@@ -103,7 +113,7 @@ internal sealed class SlotAllocator
         _appliedVector = new int[_order.Length];
     }
 
-    /// <summary>Текущая стратегия; для тестов.</summary>
+    /// <summary>Current strategy, exposed for tests.</summary>
     internal ISharedPoolDistribution Distribution
     {
         get
@@ -114,31 +124,29 @@ internal sealed class SlotAllocator
     }
 
     /// <summary>
-    /// План итерации [(queue, n)]. Ленивый: следующая запись вычисляется при MoveNext, то есть после
-    /// Take по предыдущей, поэтому недобранные общие слоты переходят к следующим очередям той же итерации.
-    /// Очередь — не больше раза за план; только isDue и n ≥ 1.
-    /// Общий пул плана — свободные общие слоты на его начало: слоты, освободившиеся посреди плана, ждут следующего.
-    /// Иначе после пачки одновременно закончившихся задач план, начатый по первому освобождению, отдавал бы остальные
-    /// слоты следующим записям мимо порядка и весов стратегии. Reserved-слоты этим не ограничиваются. Планы одного
-    /// allocator'а не перекрываются (их строит один диспетчер).
+    /// Lazy iteration plan of (queue, n) entries. MoveNext computes the next entry after Take on the previous one, so
+    /// unused shared slots pass to later queues in the same iteration. Each queue appears at most once, only when isDue
+    /// and n ≥ 1. Shared capacity is fixed at plan start. Slots freed mid-plan wait for the next plan, so a burst of
+    /// completions cannot give later entries slots outside the strategy's queue order and weights. Reserved slots are
+    /// exempt. A single dispatcher builds plans for an allocator, so plans never overlap.
     /// </summary>
-    /// <param name="isDue">nextPoll очереди наступил; вызывается под lock, должен быть дешёвым.</param>
+    /// <param name="isDue">Whether the queue's nextPoll is due. Called under the lock and must be cheap.</param>
     public IEnumerable<(string Queue, int N)> Plan(Func<string, bool> isDue)
     {
         ArgumentNullException.ThrowIfNull(isDue);
         return PlanIterator(isDue);
     }
 
-    /// <summary>min(свободные Reserved очереди + свободные общие, MaxConcurrency − занято), ≥ 0.</summary>
+    /// <summary>min(free Reserved slots for the queue + free shared slots, MaxConcurrency − occupied), at least zero.</summary>
     public int Available(string queue)
     {
         lock (_lock)
             return AvailableCore(Get(queue), FreeShared);
     }
 
-    /// <summary>Занимает один слот: сначала Reserved очереди, затем общий.</summary>
-    /// <returns>true — слот из Reserved, false — общий.</returns>
-    /// <exception cref="InvalidOperationException">Свободных слотов для очереди нет.</exception>
+    /// <summary>Takes one slot, preferring a Reserved slot for this queue before shared capacity.</summary>
+    /// <returns>True for a Reserved slot, false for a shared slot.</returns>
+    /// <exception cref="InvalidOperationException">No slot is available for this queue.</exception>
     public bool Take(string queue)
     {
         lock (_lock)
@@ -160,7 +168,7 @@ internal sealed class SlotAllocator
         }
     }
 
-    /// <summary>Возвращает слот того же вида, что выдал <see cref="Take"/>.</summary>
+    /// <summary>Returns a slot of the same kind as <see cref="Take"/> allocated.</summary>
     public void Release(string queue, bool fromReserved)
     {
         lock (_lock)
@@ -182,7 +190,7 @@ internal sealed class SlotAllocator
         }
     }
 
-    /// <summary>Занято слотов очереди (reserved + общие).</summary>
+    /// <summary>Occupied slots for the queue (reserved + shared).</summary>
     public int InUse(string queue)
     {
         lock (_lock)
@@ -204,10 +212,10 @@ internal sealed class SlotAllocator
     }
 
     /// <summary>
-    /// Следующая запись по текущим счётчикам; под lock (вне итератора: yield под lock запрещён). isDue вычисляется один
-    /// раз на запись (в candidates), чтобы стратегия и проверка её ответа видели один и тот же набор кандидаток: иначе
-    /// очередь, ставшая готовой между ними по ходу времени, дала бы ложное нарушение контракта. Первая запись плана
-    /// (<paramref name="beginPlan"/>) сообщает стратегии границу плана.
+    /// Builds the next entry using current counters under the lock, outside the iterator because yield under a lock is
+    /// disallowed here. Evaluates isDue once per entry into candidates so the strategy and its result check see the same
+    /// queues. A queue becoming due between those operations would otherwise trigger a false contract violation. The
+    /// first entry (<paramref name="beginPlan"/>) tells the strategy where the plan starts.
     /// </summary>
     private (int Queue, int N)? NextEntry(bool[] planned, bool[] candidates, Func<string, bool> isDue, bool beginPlan)
     {
@@ -247,10 +255,10 @@ internal sealed class SlotAllocator
     }
 
     /// <summary>
-    /// Применяет снимок весов на границе плана, под lock: внутри плана все Next и OnTaken приходят в один экземпляр
-    /// стратегии. Новая стратегия создаётся, только если изменился вектор весов этого сервера (w[q], 0 — без веса): новый
-    /// снимок с тем же вектором сохраняет состояние. Новая WeightedDistribution начинает с нулевого pass у всех очередей,
-    /// поэтому отставание и опережение, накопленные при старых весах, забываются без залпа.
+    /// Applies the weight snapshot under the lock at the plan boundary so every Next and OnTaken within a plan reaches
+    /// the same strategy instance. Replaces the strategy only if this server's weight vector changes (w[q], 0 for no
+    /// weight). A new snapshot with the same vector preserves state. A fresh WeightedDistribution starts all queues at
+    /// zero pass, discarding their accumulated lead or lag under the old weights without a burst.
     /// </summary>
     private void ApplyWeights()
     {

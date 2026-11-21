@@ -3,7 +3,7 @@ using Npgsql;
 
 namespace PgBolt.Postgres.Schema;
 
-/// <summary>Создание суточных партиций jobs/job_events через CREATE TABLE (LIKE) + ATTACH (§4.4).</summary>
+/// <summary>Creates daily jobs and job_events partitions with CREATE TABLE (LIKE) and ATTACH (§4.4).</summary>
 public sealed class PartitionManager(NpgsqlDataSource dataSource, string schema, int jobsFillFactor, TimeSpan lockTimeout)
 {
     private readonly string _schema = SchemaName.Validate(schema);

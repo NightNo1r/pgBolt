@@ -1,12 +1,15 @@
 namespace PgBolt.Server.Runtime;
 
-/// <summary>Не чаще раза в <paramref name="period"/> по монотонным часам: записи лога, периодические проверки (лаг resolver'а).</summary>
+/// <summary>
+/// Limits log entries and periodic checks such as resolver lag to once per <paramref name="period"/> on the monotonic
+/// clock.
+/// </summary>
 internal sealed class LogThrottle(MonoClock clock, TimeSpan period)
 {
     private readonly Lock _lock = new();
     private long? _last;
 
-    /// <returns>true — вызовов ещё не было или с последнего прошёл период.</returns>
+    /// <returns>True on the first call or when the period has elapsed since the last accepted call.</returns>
     public bool TryEnter()
     {
         lock (_lock)

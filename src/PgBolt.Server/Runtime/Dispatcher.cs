@@ -5,13 +5,13 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Fetch-цикл виртуального сервера: обход плана SlotAllocator (порядок и доли общего пула — его стратегия),
-/// адаптивный polling, пробуждение по latched событию (слот освобождён, wakeup-сигнал, остановка, снятие паузы
-/// heartbeat, коммит исхода). Пока кластерный лимит очереди исчерпан (LimitReached последнего dequeue), её результат
-/// считается пустым, а wakeup-сигнал и освобождение слота поглощаются: место в лимите появляется только после коммита
-/// исхода, о нём сообщает leaseFreed. Dequeue ограничен собственным таймаутом HeartbeatInterval и остановкой
-/// не отменяется; задачи dequeue, вернувшегося позже таймаута (Npgsql не смог доставить отмену), не запускаются, а уходят release.
-/// Неожиданная ошибка итерации логируется и ставит выборку на паузу; цикл не падает.
+/// Fetch loop for a virtual server. It follows the SlotAllocator plan for queue order and shared-pool allocation, polls
+/// adaptively, and wakes on a latched signal for slot release, a wakeup notification, shutdown, the end of a heartbeat
+/// pause, or an outcome commit. While the last dequeue reports LimitReached, the queue is treated as empty and consumes
+/// wakeup and slot-release signals. Only an outcome commit frees capacity in the cluster limit; leaseFreed reports it.
+/// Dequeue has its own HeartbeatInterval timeout and continues during shutdown. If Npgsql cannot deliver cancellation and
+/// dequeue returns after the timeout, the dispatcher releases the jobs without starting them. Unexpected iteration errors
+/// are logged and pause fetching while the loop stays alive.
 /// </summary>
 internal sealed partial class Dispatcher
 {
@@ -56,10 +56,10 @@ internal sealed partial class Dispatcher
 
     public Task Completion { get; private set; } = Task.CompletedTask;
 
-    /// <summary>Источник U[0, 1) для jitter интервала polling (±10 %); тесты подменяют.</summary>
+    /// <summary>Uniform random source on [0, 1) for ±10% polling jitter. Tests can replace it.</summary>
     internal Func<double> NextRandom { get; set; } = Random.Shared.NextDouble;
 
-    /// <summary>Для тестов: сколько раз цикл встал на ожидание (таймер ожидания уже взведён).</summary>
+    /// <summary>For tests, counts waits that the loop has entered with their timer armed.</summary>
     internal int IdleWaits => Volatile.Read(ref _idleWaits);
 
     public void Start() => Completion = Task.Run(RunAsync);
@@ -77,7 +77,9 @@ internal sealed partial class Dispatcher
         _wake.Set();
     }
 
-    /// <summary>Исход задачи очереди закоммичен — её место в кластерном лимите видно следующему dequeue.</summary>
+    /// <summary>
+    /// A job outcome committed for this queue. The next dequeue can see the resulting capacity in its cluster limit.
+    /// </summary>
     public void OnLeaseFreed(string queue)
     {
         if (_byName.TryGetValue(queue, out var q))
@@ -87,7 +89,10 @@ internal sealed partial class Dispatcher
 
     public void Wake() => _wake.Set();
 
-    /// <summary>Лимит исчерпан, а у этого сервера уже нет работающих задач очереди. Место освободит коммит исхода.</summary>
+    /// <summary>
+    /// The cluster limit is exhausted and this server has no running jobs for the queue. An outcome commit will free
+    /// capacity.
+    /// </summary>
     internal bool WaitingForLease(string queue) =>
         _byName[queue].LimitReached && _slots.InUse(queue) == 0;
 
@@ -235,7 +240,10 @@ internal sealed partial class Dispatcher
         }
     }
 
-    /// <summary>Подписки IWakeupSignal на все очереди; сбой пользовательской реализации — очередь без сигналов.</summary>
+    /// <summary>
+    /// Subscribes to IWakeupSignal for all queues. If a user implementation fails, that queue runs without wakeup
+    /// signals.
+    /// </summary>
     private List<IDisposable> Subscribe()
     {
         var subscriptions = new List<IDisposable>(_queues.Length);
@@ -258,11 +266,11 @@ internal sealed partial class Dispatcher
     }
 
     /// <summary>
-    /// Register → Take → startExecution одной задачи. Сбой после Register откатывается до передачи исключения в обработчик
-    /// итерации: сначала снимается запись (не остаётся Running, heartbeat её не продлевает), затем
-    /// возвращается слот. Порядок важен: Unregister не бросает, а Release бросает при ошибке учёта слотов — такая ошибка
-    /// логируется и не мешает снятию записи и передаче исходного исключения.
-    /// startExecution по контракту либо запускает выполнение, либо бросает, не запустив его.
+    /// Registers one job, takes its slot and calls startExecution. On failure after Register, rollback removes the entry
+    /// first so it cannot remain Running or receive heartbeats, then returns the slot before forwarding the original
+    /// exception to the iteration handler. Unregister cannot throw. Release may throw on a slot-accounting error, which
+    /// is logged without preventing entry removal or masking the original exception. By contract, startExecution either
+    /// starts the execution or throws before starting it.
     /// </summary>
     private void StartOne(LeasedJob job, string queue, long validUntil)
     {
@@ -294,10 +302,9 @@ internal sealed partial class Dispatcher
     }
 
     /// <summary>
-    /// До ближайшего nextPoll среди очередей со свободным слотом; таких нет — до пробуждения. Ноль не ведёт к холостому
-    /// циклу при любой стратегии: стратегия не может закончить план, пока у готовой очереди есть свободный слот в пределах
-    /// бюджета плана (SlotAllocator бросает исключение). Слоты, освободившиеся посреди плана, раздаёт следующий план —
-    /// с нулевой задержкой он начинается сразу.
+    /// Waits until the nearest nextPoll among queues with a free slot, or until a wakeup if none have a slot. A zero
+    /// delay cannot spin: a strategy that ends a plan while a ready queue has a slot within the plan budget causes
+    /// SlotAllocator to throw. The next plan distributes slots freed mid-plan and starts immediately with a zero delay.
     /// </summary>
     private TimeSpan NextPollDelay()
     {
@@ -314,10 +321,11 @@ internal sealed partial class Dispatcher
     }
 
     /// <summary>
-    /// Флаги latched и применяются после обновления LimitReached по результату dequeue — сигнал, пришедший во время
-    /// dequeue, не теряется. У исчерпанного лимита signaled и slotFreed сбрасываются без действия: сигнал enqueue давал бы
-    /// dequeue под lock каждую итерацию, а слот освобождается до коммита исхода, и dequeue увидел бы строку ещё взятой.
-    /// Без LimitReached сбрасывается leaseFreed: место уже учтено dequeue по slotFreed.
+    /// Flags latch until the dequeue result updates LimitReached, preserving signals received during dequeue. At an
+    /// exhausted limit, signaled and slotFreed are cleared without acting. An enqueue signal would trigger a locked
+    /// dequeue on every iteration, and a slot is released before the outcome commits, while the row is still leased.
+    /// Without LimitReached, leaseFreed is cleared because the dequeue triggered by slotFreed already accounted for the
+    /// capacity.
     /// </summary>
     private void ApplyFlags()
     {

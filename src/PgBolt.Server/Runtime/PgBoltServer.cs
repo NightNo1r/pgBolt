@@ -7,7 +7,10 @@ using PgBolt.Postgres.Jobs;
 
 namespace PgBolt.Server.Runtime;
 
-/// <summary>Виртуальный сервер: слоты, диспетчер, runner, sink, lease keeper. Не hosted service.</summary>
+/// <summary>
+/// A virtual server with slots, dispatcher, runner, sink and lease keeper. Its lifecycle is managed outside the hosted
+/// service abstraction.
+/// </summary>
 internal sealed partial class PgBoltServer
 {
     private readonly IServerStore _store;
@@ -61,22 +64,27 @@ internal sealed partial class PgBoltServer
     public string Name { get; }
     public PgBoltServerOptions Options { get; }
 
-    /// <summary>Для тестов: выполнения, у которых записан момент отмены (основа предупреждения об отменённых, но не завершившихся выполнениях).</summary>
+    /// <summary>
+    /// For tests, executions with a recorded cancellation time. These drive warnings about canceled executions that have
+    /// not finished.
+    /// </summary>
     internal int CancelledExecutions => _running.Values.Count(t => Volatile.Read(ref t.CancelledAt) != 0);
 
     internal SlotAllocator Slots => _slots;
 
-    /// <summary>Для тестов: вызывается с задачей каждого запущенного выполнения — её исход и есть исход завершения.</summary>
+    /// <summary>For tests, receives the Task of each started execution so its completion outcome can be observed.</summary>
     internal Action<Task>? ExecutionStarted { get; set; }
 
-    /// <summary>Строка servers и предупреждение NoExecutor. Runtime не запускается (<see cref="Start"/>).</summary>
+    /// <summary>
+    /// Registers the servers row and issues the NoExecutor warning. <see cref="Start"/> starts the runtime separately.
+    /// </summary>
     public async Task RegisterAsync(CancellationToken ct)
     {
         await _store.RegisterServerAsync(_registration, ct);
         await WarnMissingExecutorsAsync(_registration.Queues, ct);
     }
 
-    /// <summary>LeaseKeeper, sink, диспетчер и watchdog — после регистрации всех серверов процесса.</summary>
+    /// <summary>Starts the LeaseKeeper, sink, dispatcher and watchdog after all servers in the process have registered.</summary>
     public void Start()
     {
         _metricsRegistration = _metrics.RegisterServer(Name, _slots, Options.Capacity, _registration.Queues, () => _settings.Current);
@@ -88,8 +96,10 @@ internal sealed partial class PgBoltServer
         Log.ServerStarted(_logger, Name, Id, string.Join(", ", Options.Queues.Select(q => q.Name)), Options.Capacity);
     }
 
-    /// <summary>Новые dequeue не начинаются, shutdown-токен отменён. Колбэки отмены идут в пуле потоков,
-    /// чтобы код задач не выполнялся синхронно внутри остановки и не задерживал остальные серверы.</summary>
+    /// <summary>
+    /// Prevents new dequeues and cancels the shutdown token. Cancellation callbacks run on the thread pool so job code
+    /// cannot run synchronously during shutdown and delay other servers.
+    /// </summary>
     public void BeginStop()
     {
         if (Interlocked.CompareExchange(ref _stopStartedAt, _clock.Now, 0) != 0)
@@ -98,7 +108,10 @@ internal sealed partial class PgBoltServer
         _shutdownCallbacks = _shutdown.CancelAsync();
     }
 
-    /// <summary>In-flight dequeue, затем выполнения до ShutdownTimeout от BeginStop; не успевшие — брошены.</summary>
+    /// <summary>
+    /// Waits for in-flight dequeue, then for executions until ShutdownTimeout from BeginStop. Abandons executions that
+    /// miss the deadline.
+    /// </summary>
     public async Task WaitExecutionsAsync(CancellationToken ct)
     {
         try
@@ -123,10 +136,10 @@ internal sealed partial class PgBoltServer
     }
 
     /// <summary>
-    /// Исходы отправлены, lease больше не держатся, строка servers удалена. При отменённом ct sink прерывает
-    /// отправку сразу, LeaseKeeper и watchdog всё равно останавливаются; пропускается только RemoveServerAsync.
-    /// Источники метрик сервера снимаются в любом случае, даже если остановка бросила: иначе остановленный сервер
-    /// публиковал бы слоты и кластерные gauges до конца процесса.
+    /// Flushes outcomes, releases leases and deletes the servers row. If ct is canceled, the sink interrupts sending
+    /// immediately. LeaseKeeper and the watchdog still stop; only RemoveServerAsync is skipped. Always unregisters metric
+    /// sources, even if shutdown throws, so a stopped server cannot continue publishing slots and cluster gauges for the
+    /// lifetime of the process.
     /// </summary>
     public async Task FlushAndStopAsync(CancellationToken ct)
     {
@@ -156,7 +169,10 @@ internal sealed partial class PgBoltServer
         }
     }
 
-    /// <summary>Сбойный Completion — последний рубеж (ошибки итераций Dispatcher ловит сам): лог, остановка продолжается.</summary>
+    /// <summary>
+    /// Handles a faulted Completion as a last resort. Dispatcher handles its own iteration errors. Logs the fault and
+    /// continues shutdown.
+    /// </summary>
     private async Task WaitDispatcherAsync(CancellationToken ct)
     {
         try
@@ -213,10 +229,11 @@ internal sealed partial class PgBoltServer
     }
 
     /// <summary>
-    /// Последний рубеж: не бросает никогда, поэтому ожидание выполнений и остановка процесса от сбоя выполнения не зависят.
-    /// Сбой выполнения или сдачи исхода сначала снимает запись (heartbeat больше не продлевает lease, он истечёт, и sweeper
-    /// засчитает попытку), и только потом пишется лог: бросающий логгер-провайдер не должен оставить запись Running.
-    /// Слот возвращается ровно один раз — и при успехе, и при сбое; на успешном пути — до сдачи исхода, чтобы диспетчер сразу видел свободный слот.
+    /// Final exception boundary so failed executions cannot break execution waits or process shutdown. On execution or
+    /// outcome submission failure, removes the entry before logging. This stops lease renewal and lets the sweeper count
+    /// the attempt after lease expiry. A throwing log provider cannot leave the entry Running. Returns the slot exactly
+    /// once on success or failure. On success it returns the slot before submitting the outcome so the dispatcher can use
+    /// it immediately.
     /// </summary>
     private async Task RunExecutionAsync(Execution execution, Tracked tracked)
     {
@@ -254,8 +271,8 @@ internal sealed partial class PgBoltServer
     }
 
     /// <summary>
-    /// Сбой выполнения или сдачи исхода: запись снимается до лога. Unregister вернёт false, если запись уже не Running
-    /// (её снял остановленный sink или потеря lease) — такое выполнение брошенным не считается.
+    /// On execution or outcome submission failure, removes the entry before logging. Unregister returns false if it is no
+    /// longer Running because the sink stopped or the lease was lost. Such executions do not count as abandoned.
     /// </summary>
     private void AbandonFailed(Execution execution, Exception error)
     {
@@ -290,7 +307,7 @@ internal sealed partial class PgBoltServer
         }
     }
 
-    /// <summary>Раз в HeartbeatInterval — предупреждение о выполнениях, отменённых, но не завершившихся.</summary>
+    /// <summary>Warns once per HeartbeatInterval about canceled executions that have not finished.</summary>
     private void WarnIgnoredCancellations()
     {
         foreach (var (execution, tracked) in _running)

@@ -1,12 +1,14 @@
 namespace PgBolt;
 
-/// <summary>Умолчания задачи из [Job] (или из job_types для динамического enqueue).</summary>
+/// <summary>Job defaults from [Job], or from job_types when enqueuing by name.</summary>
 public sealed record JobDescriptor(string Name, string Queue, int MaxAttempts, short Priority, int[]? RetryDelaysSeconds)
 {
-    /// <summary>Таймаут выполнения в секундах из [Job]; 0 — нет. Init-свойство, чтобы не ломать позиционный конструктор.</summary>
+    /// <summary>
+    /// Execution timeout in seconds from [Job]. Zero disables the timeout. The init-only property preserves the positional constructor.
+    /// </summary>
     public int TimeoutSeconds { get; init; }
 
-    /// <summary>Сравнение по значению, включая содержимое RetryDelaysSeconds и TimeoutSeconds.</summary>
+    /// <summary>Compares descriptors by value, including TimeoutSeconds and the contents of RetryDelaysSeconds.</summary>
     public bool SameAs(JobDescriptor other) =>
         Name == other.Name && Queue == other.Queue && MaxAttempts == other.MaxAttempts && Priority == other.Priority
         && TimeoutSeconds == other.TimeoutSeconds

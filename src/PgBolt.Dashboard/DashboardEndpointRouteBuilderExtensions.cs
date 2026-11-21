@@ -11,11 +11,13 @@ namespace Microsoft.AspNetCore.Builder;
 
 public static class DashboardEndpointRouteBuilderExtensions
 {
-    /// <summary>Endpoints dashboard PgBolt в одной группе; авторизацию просмотра задаёт хост (<c>.RequireAuthorization(...)</c>).</summary>
-    /// <remarks>
-    /// Хост за TLS-прокси применяет <c>ForwardedHeaders</c> (<c>X-Forwarded-Proto</c>, <c>X-Forwarded-Host</c>): иначе схема и
-    /// хост запроса не совпадут с <c>Origin</c>, и браузеры без <c>Sec-Fetch-Site</c> получат 403 на действиях (CSRF-проверка).
-    /// </remarks>
+    /// <summary>
+    /// Maps the PgBolt dashboard endpoints as a group. The host sets the viewing policy with
+    /// <c>.RequireAuthorization(...)</c>.
+    /// </summary>
+    /// <remarks>Behind a TLS proxy, configure <c>ForwardedHeaders</c> for <c>X-Forwarded-Proto</c> and
+    /// <c>X-Forwarded-Host</c>. Otherwise the request scheme or host may differ from <c>Origin</c>, and CSRF checks return
+    /// 403 for browser actions that omit <c>Sec-Fetch-Site</c>.</remarks>
     public static RouteGroupBuilder MapPgBoltDashboard(this IEndpointRouteBuilder endpoints, string prefix = "/pgbolt")
     {
         ArgumentNullException.ThrowIfNull(endpoints);

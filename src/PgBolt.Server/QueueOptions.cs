@@ -2,37 +2,36 @@ using PgBolt.Postgres.Client;
 
 namespace PgBolt.Server;
 
-/// <summary>Очередь виртуального сервера (§3.3). Создаётся только через <see cref="PgBoltServerOptions.Queue"/>.</summary>
+/// <summary>A virtual server's queue (§3.3). Created through <see cref="PgBoltServerOptions.Queue"/>.</summary>
 public sealed class QueueOptions
 {
     internal QueueOptions(string name) => Name = name;
 
     public string Name { get; }
 
-    /// <summary>Слоты, доступные только этой очереди.</summary>
+    /// <summary>Number of slots reserved exclusively for this queue.</summary>
     public int Reserved { get; set; }
 
-    /// <summary>Потолок одновременных задач очереди на этом сервере (reserved + общие); null — нет.</summary>
+    /// <summary>Maximum concurrent jobs for this queue on this server across reserved and shared slots. Null means unlimited.</summary>
     public int? MaxConcurrency { get; set; }
 
     /// <summary>
-    /// Значение по умолчанию кластерного лимита очереди: сколько задач очереди одновременно держат lease во всём кластере; null — нет.
-    /// Публикуется в хранилище при старте процесса, переопределение через IQueueSettingsManager имеет приоритет.
-    /// Если лимит появился после старта процесса (переопределение или значение другого процесса), этот процесс подхватит его
-    /// не позже чем через PgBoltProcessingOptions.QueueSettingsRefreshInterval; до тех пор его dequeue лимит не соблюдает.
+    /// Default cluster-wide limit on jobs that may hold a lease in this queue simultaneously. Null means unlimited. The process publishes this value
+    /// at startup. An IQueueSettingsManager override takes precedence. If another process introduces a limit after startup, this process picks it up
+    /// within PgBoltProcessingOptions.QueueSettingsRefreshInterval. Until then it may dequeue jobs without enforcing the limit.
     /// </summary>
     public int? ClusterMaxConcurrency { get; set; }
 
     /// <summary>
-    /// Значение по умолчанию веса очереди (1…1000) — настройка очереди на весь кластер: каждый сервер делит по весам свой общий
-    /// пул между очередями с весом; null — без веса. Переопределение через IQueueSettingsManager имеет приоритет.
+    /// Default cluster-wide queue weight (1 through 1000). Each server divides its shared slots among weighted queues in proportion to their
+    /// weights. Null means no weight. An IQueueSettingsManager override takes precedence.
     /// </summary>
     public int? Weight { get; set; }
 
-    /// <summary>Нижняя граница адаптивного polling.</summary>
+    /// <summary>Minimum adaptive polling interval.</summary>
     public TimeSpan MinPollInterval { get; set; } = TimeSpan.FromMilliseconds(50);
 
-    /// <summary>Верхняя граница адаптивного polling.</summary>
+    /// <summary>Maximum adaptive polling interval.</summary>
     public TimeSpan MaxPollInterval { get; set; } = TimeSpan.FromSeconds(10);
 
     internal void Validate(string serverName)

@@ -1,6 +1,6 @@
 namespace PgBolt;
 
-/// <summary>Состояние задачи для клиента: Scheduled/Enqueued/Processing выводятся из строки queue (§2).</summary>
+/// <summary>Job state visible to clients. Scheduled, Enqueued, and Processing are derived from the queue row (§2).</summary>
 public enum JobState
 {
     Scheduled,

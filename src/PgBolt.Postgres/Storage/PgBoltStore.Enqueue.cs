@@ -6,8 +6,8 @@ namespace PgBolt.Postgres.Storage;
 public sealed partial class PgBoltStore
 {
     /// <summary>
-    /// Общие части вариантов enqueue (§5.1): строки, уже записанные по id (повтор), и вход без них; строки queue без колонок
-    /// графа; итог по строкам src. Шаблоны собираются из них без изменения текста statement'ов.
+    /// Shared enqueue SQL (§5.1): rows already present by ID after a retry, remaining input, queue rows without graph columns, and results for src
+    /// rows. Reuses fragments without changing statement text.
     /// </summary>
     private const string EnqueueInputCtes = """
         existing AS (
@@ -56,8 +56,8 @@ public sealed partial class PgBoltStore
         """;
 
     /// <summary>
-    /// Часть 4 §8: вариант EnqueueTemplate для тика и Trigger — дополнительные массивы scheduled_at и recurring_id;
-    /// scheduled_at = COALESCE(i.scheduled_at, now()) (Trigger передаёт NULL — время БД, §5.4). Клиент им не пользуется.
+    /// EnqueueTemplate variant for ticks and Trigger with scheduled_at and recurring_id arrays (Part 4 §8). scheduled_at = COALESCE(i.scheduled_at,
+    /// now()). Trigger passes NULL for database time (§5.4). The regular client does not use this variant.
     /// </summary>
     private const string RecurringEnqueueTemplate = $$"""
         WITH src AS (
@@ -80,8 +80,8 @@ public sealed partial class PgBoltStore
     private string RecurringEnqueueSql => field ??= Render(RecurringEnqueueTemplate);
 
     /// <summary>
-    /// Часть 5 §6.1 п. 2: вариант EnqueueTemplate для графа — поэлементные parent_id, continuation (= await_condition), notify,
-    /// batch_id (в queue и jobs). Строка с continuation пишется Awaiting: ready = false, run_at = 'infinity' (инвариант §4).
+    /// Workflow EnqueueTemplate variant (Part 5 §6.1, step 2) with per-row parent_id, continuation (= await_condition), notify, and batch_id in
+    /// queue and jobs. A continuation starts Awaiting with ready = false and run_at = 'infinity' (§4).
     /// </summary>
     private const string WorkflowEnqueueTemplate = $$"""
         WITH src AS (
@@ -114,7 +114,10 @@ public sealed partial class PgBoltStore
 
     private string WorkflowEnqueueSql => field ??= Render(WorkflowEnqueueTemplate);
 
-    /// <summary>§8 части 4, §6.1 части 5: массивы графа — вариант с колонками workflow; RecurringIds — с колонками расписания; иначе прежний SQL клиента.</summary>
+    /// <summary>
+    /// Graph arrays select workflow columns, RecurringIds selects schedule columns, and other calls use the original client SQL (Part 4 §8, Part 5
+    /// §6.1).
+    /// </summary>
     internal string EnqueueSqlFor(EnqueueBatch batch) =>
         batch.ParentIds is not null ? WorkflowEnqueueSql : batch.RecurringIds is null ? EnqueueSql : RecurringEnqueueSql;
 
@@ -246,8 +249,8 @@ public sealed partial class PgBoltStore
     }
 
     /// <summary>
-    /// Часть 4 §5.2: statement enqueue для NpgsqlBatch тика — в его транзакции, без запроса разрешения конфликта и без
-    /// повторов. Строки результата — (id, created, existed); id свежие, поэтому !created — конфликт по unique_key.
+    /// Enqueue statement for the scheduler tick's NpgsqlBatch transaction, without retries or a conflict lookup (Part 4 §5.2). Returns (id, created,
+    /// existed). IDs are fresh, so !created means a unique_key conflict.
     /// </summary>
     internal NpgsqlBatchCommand CreateEnqueueCommand(EnqueueBatch batch)
     {

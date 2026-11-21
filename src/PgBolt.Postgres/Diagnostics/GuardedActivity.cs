@@ -2,12 +2,12 @@ using System.Diagnostics;
 
 namespace PgBolt.Postgres.Diagnostics;
 
-/// <summary>Остановка <see cref="Activity"/> под защитой: слушатель <see cref="ActivitySource"/> может бросить из <c>ActivityStopped</c>.</summary>
+/// <summary>Stops an <see cref="Activity"/> safely when an <see cref="ActivitySource"/> listener throws from <c>ActivityStopped</c>.</summary>
 internal static class GuardedActivity
 {
     /// <summary>
-    /// Останавливает span, затем возвращает <see cref="Activity.Current"/> к <paramref name="restore"/>, и только после этого
-    /// сообщает о сбое остановки: логгер и его слушатели должны видеть внешний span, а не оборвавшийся.
+    /// Stops the span and resets <see cref="Activity.Current"/> to <paramref name="restore"/> before reporting a stop failure, so the logger and its
+    /// listeners see the outer span.
     /// </summary>
     public static void Stop(Activity span, Activity? restore, PgBoltInstrumentation instrumentation)
     {

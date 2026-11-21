@@ -4,7 +4,7 @@ using System.Collections.Generic;
 
 namespace PgBolt.Generators
 {
-    /// <summary>Массив со структурным равенством — нужен для кэширования инкрементального генератора.</summary>
+    /// <summary>Array with structural equality for incremental generator caching.</summary>
     internal readonly struct EquatableArray<T> : IEquatable<EquatableArray<T>>, IEnumerable<T> where T : IEquatable<T>
     {
         private readonly T[]? _items;

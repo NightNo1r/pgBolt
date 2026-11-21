@@ -4,10 +4,10 @@ using Npgsql;
 
 namespace PgBolt.Dashboard.Endpoints;
 
-/// <summary>Исключения endpoint'ов dashboard → страница или фрагмент ошибки со статусом (§10).</summary>
+/// <summary>Maps dashboard endpoint exceptions to an error page or fragment with the appropriate status (§10).</summary>
 internal sealed partial class DashboardErrorFilter(ILogger<DashboardErrorFilter> logger) : IEndpointFilter
 {
-    private const string Unavailable = "база данных недоступна";
+    private const string Unavailable = "database unavailable";
 
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
@@ -29,7 +29,7 @@ internal sealed partial class DashboardErrorFilter(ILogger<DashboardErrorFilter>
     {
         DashboardNotFoundException => (404, e.Message),
         DashboardBadRequestException or BadHttpRequestException => (400, e.Message),
-        PostgresException { SqlState: "57014" } => (503, "запрос не уложился в QueryTimeout, сузьте фильтр"),
+        PostgresException { SqlState: "57014" } => (503, "Query exceeded QueryTimeout. Narrow the filter."),
         PostgresException { SqlState: var state } when state.StartsWith("08", StringComparison.Ordinal)
             || state.StartsWith("57P0", StringComparison.Ordinal) || state == "53300" => (503, Unavailable),
         PostgresException => (500, Internal(e)),
@@ -37,7 +37,7 @@ internal sealed partial class DashboardErrorFilter(ILogger<DashboardErrorFilter>
         _ => (500, Internal(e)),
     };
 
-    private static string Internal(Exception e) => $"внутренняя ошибка: {e.GetType().Name}";
+    private static string Internal(Exception e) => $"internal error: {e.GetType().Name}";
 
     private static partial class Log
     {

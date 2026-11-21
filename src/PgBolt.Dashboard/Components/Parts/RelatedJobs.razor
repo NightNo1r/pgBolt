@@ -5,16 +5,16 @@
 }
 @if (Page.Rows.Count == 0)
 {
-    <li class="muted">нет</li>
+    <li class="muted">None</li>
 }
 @if (Page.Next is { } next)
 {
-    <li hx-get="@QueryHelpers.AddQueryString(BaseUrl, "after", next)" hx-target="this" hx-swap="outerHTML"><button type="button">ещё</button></li>
+    <li hx-get="@QueryHelpers.AddQueryString(BaseUrl, "after", next)" hx-target="this" hx-swap="outerHTML"><button type="button">More</button></li>
 }
 
 @code {
     [Parameter] public Page<RelatedJobRow> Page { get; set; } = null!;
 
-    /// <summary>Url фрагмента без after.</summary>
+    /// <summary>Fragment URL without the after cursor.</summary>
     [Parameter] public string BaseUrl { get; set; } = "";
 }

@@ -3,8 +3,9 @@ using System.Collections.Concurrent;
 namespace PgBolt.Postgres.Client;
 
 /// <summary>
-/// In-process сигнал: подписчики по очереди в copy-on-write массиве (часть 3 §8.2). Signal не аллоцирует и не берёт
-/// блокировок; подписка/отписка — CAS по словарю. Сигнал без подписчиков теряется: latch обеспечивает подписчик.
+/// Signals local workers through per-queue copy-on-write subscriber arrays (Part 3 §8.2). Signal takes no locks and allocates no memory.
+/// Subscribing and unsubscribing use compare-and-swap on the dictionary. Subscribers provide their own latch. Signals without subscribers are
+/// lost.
 /// </summary>
 public sealed class InProcessWakeupSignal : IWakeupSignal
 {

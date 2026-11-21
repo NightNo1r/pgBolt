@@ -4,15 +4,15 @@
     <span class="pgbolt-actions">
         @if (State == JobState.Scheduled)
         {
-            <button type="button" hx-post="@Url("trigger")" hx-target="@Target" hx-swap="outerHTML">запустить</button>
+            <button type="button" hx-post="@Url("trigger")" hx-target="@Target" hx-swap="outerHTML">Trigger</button>
         }
         @if (State is JobState.Scheduled or JobState.Enqueued or JobState.Processing or JobState.Awaiting)
         {
-            <button type="button" class="danger" hx-post="@Url("cancel")" hx-target="@Target" hx-swap="outerHTML">отменить</button>
+            <button type="button" class="danger" hx-post="@Url("cancel")" hx-target="@Target" hx-swap="outerHTML">Cancel</button>
         }
         @if (State is JobState.Failed or JobState.Cancelled)
         {
-            <button type="button" hx-post="@Url("requeue")" hx-target="@Target" hx-swap="outerHTML">перезапустить</button>
+            <button type="button" hx-post="@Url("requeue")" hx-target="@Target" hx-swap="outerHTML">Requeue</button>
         }
     </span>
 }
@@ -21,10 +21,10 @@
     [Parameter] public Guid Id { get; set; }
     [Parameter] public JobState State { get; set; }
 
-    /// <summary>"row" — строка списка (&lt;tr&gt;), "card" — карточка (&lt;article&gt;).</summary>
+    /// <summary>"row" renders a list row (&lt;tr&gt;) and "card" a detail card (&lt;article&gt;).</summary>
     [Parameter] public string View { get; set; } = "row";
 
-    /// <summary>Вкладка строки: строка после действия рендерится с её колонками.</summary>
+    /// <summary>Identifies the tab so an updated row renders with the same columns.</summary>
     [Parameter] public JobState Kind { get; set; }
 
     [Parameter] public DashboardContext Context { get; set; } = null!;

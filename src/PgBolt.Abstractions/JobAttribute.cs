@@ -10,9 +10,9 @@ public sealed class JobAttribute(string name) : Attribute
     public int[]? RetryDelaysSeconds { get; init; }
 
     /// <summary>
-    /// Таймаут одного выполнения в секундах; 0 — нет таймаута (по умолчанию). Применяется исполняющим сервером
-    /// по своему registry, в job_types не публикуется. Отрицательное значение — ошибка генератора BOLT007; значение
-    /// больше 4294967 (предел таймеров .NET, 2³² − 2 мс ≈ 49,7 сут) — предупреждение BOLT008, сервер урезает его до предела.
+    /// Timeout for one execution, in seconds. The default, 0, disables the timeout. The executing server reads its local registry. The timeout is
+    /// omitted from job_types. Negative values cause generator error BOLT007. Values above 4294967 seconds produce warning BOLT008 and are capped by
+    /// the server at the .NET timer limit (2³² − 2 ms, about 49.7 days).
     /// </summary>
     public int TimeoutSeconds { get; init; }
 }

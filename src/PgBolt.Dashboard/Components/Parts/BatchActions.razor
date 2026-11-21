@@ -2,7 +2,7 @@
 @if (Context.CanAct && Batch.State is (BatchState.Active or BatchState.Awaiting) && !Batch.CancellationRequested)
 {
     <span class="pgbolt-actions">
-        <button type="button" class="danger" hx-post="actions/batches/@Batch.Id/cancel" hx-target="closest article" hx-swap="outerHTML">отменить</button>
+        <button type="button" class="danger" hx-post="actions/batches/@Batch.Id/cancel" hx-target="closest article" hx-swap="outerHTML">Cancel</button>
     </span>
 }
 

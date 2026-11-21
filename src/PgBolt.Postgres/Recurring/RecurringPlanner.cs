@@ -3,15 +3,16 @@ namespace PgBolt.Postgres.Recurring;
 internal readonly record struct PlanInput(CronSchedule Schedule, MisfirePolicy Misfire, TimeSpan CatchUpWindow, OverlapPolicy Overlap,
     DateTime? NextFireAt);
 
-/// <summary>Срабатывания, отброшенные misfire-политикой (Warning §7): CatchUp — [FromUtc, ToUtc), ToUtc — начало окна; Skip — [FromUtc, ToUtc], ToUtc — последнее отброшенное.</summary>
+/// <summary>
+/// Occurrences discarded by the misfire policy (warning in §7). CatchUp uses [FromUtc, ToUtc), where ToUtc starts the window. Skip uses
+/// [FromUtc, ToUtc], where ToUtc is the last discarded occurrence.
+/// </summary>
 internal readonly record struct MissedRange(DateTime FromUtc, DateTime ToUtc);
 
-/// <summary>Результат планирования строки: что ставить и новые next_fire_at / wake_at.</summary>
+/// <summary>Plan for one schedule row, including occurrences to enqueue and the new next_fire_at and wake_at.</summary>
 internal sealed record FirePlan(IReadOnlyList<DateTime> Fires, DateTime? NextFireAt, DateTime? WakeAt, MissedRange? Missed);
 
-/// <summary>
-/// Правила срабатывания (часть 4 §5.3). Чистая функция: все расчёты от db_now; due = срабатывания в [next_fire_at, db_now].
-/// </summary>
+/// <summary>Pure scheduling rules (Part 4 §5.3). All calculations use db_now. Due occurrences fall in [next_fire_at, db_now].</summary>
 internal static class RecurringPlanner
 {
     public const int MaxCatchUpFires = 100;
@@ -56,21 +57,23 @@ internal static class RecurringPlanner
         }
     }
 
-    /// <summary>CatchUp + Skip, конфликт по ключу: курсор стоит, перепроверка через 5 с; пропуск не логируется (§5.3).</summary>
+    /// <summary>
+    /// For a key conflict under CatchUp with overlap Skip, keeps the cursor in place and checks again in 5 seconds. No skip is logged (§5.3).
+    /// </summary>
     public static FirePlan OnConflict(PlanInput row, DateTime dbNow) =>
         new([], row.NextFireAt, dbNow + OverlapRecheckDelay, null);
 
     /// <summary>
-    /// Последнее срабатывание в [next, dbNow] (next ≤ dbNow — срабатывание курсора). Поиск опирается только на After
-    /// (GetPreviousOccurrence Cronos в CronSchedule не выставлен, его поведение на DST не проверено), поэтому бинарный поиск
-    /// по монотонному предикату after(t) ≤ dbNow: истинен до последнего due, ложен начиная с него. Срабатывания — на
-    /// целых секундах, поэтому при hi − lo ≤ 1 с в (lo, hi] не больше одного, и ответ — after(lo). ≤ ~42 вызова при любом cron.
+    /// Finds the last occurrence in [next, dbNow], where next ≤ dbNow is the cursor occurrence. Uses After because CronSchedule does not expose
+    /// Cronos GetPreviousOccurrence and its DST behavior is unverified. The monotonic predicate after(t) ≤ dbNow holds until the last due
+    /// occurrence, then becomes false. Occurrences fall on whole seconds. Once hi − lo ≤ 1 second, (lo, hi] contains at most one occurrence, and
+    /// after(lo) is the answer. Uses at most about 42 calls for any cron expression.
     /// </summary>
     public static DateTime LastDue(CronSchedule schedule, DateTime next, DateTime dbNow) => LastDue(schedule.After, next, dbNow);
 
     /// <summary>
-    /// <see cref="LastDue(CronSchedule, DateTime, DateTime)"/> с after(t), переданным делегатом: шов для тестов, считающих
-    /// вызовы after(t) (§10: ≤ ~42 при простое 100 лет, 1 в штатном случае).
+    /// Variant of <see cref="LastDue(CronSchedule, DateTime, DateTime)"/> accepting an after(t) delegate so tests can count calls (§10: at most
+    /// about 42 after a 100-year outage, one in the normal case).
     /// </summary>
     internal static DateTime LastDue(Func<DateTime, DateTime?> after, DateTime next, DateTime dbNow)
     {
