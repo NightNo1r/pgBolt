@@ -17,7 +17,7 @@ internal static class Program
         return await RunAsync(args, cts.Token);
     }
 
-    /// <summary>Код сценария; неверные аргументы, исключение стенда и отмена — 2.</summary>
+    /// <summary>Returns the scenario exit code, or 2 for invalid arguments, harness exceptions, or cancellation.</summary>
     public static async Task<int> RunAsync(string[] args, CancellationToken ct)
     {
         var parsed = OptionsParser.Parse(args);
@@ -42,12 +42,12 @@ internal static class Program
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            Console.Error.WriteLine("Прогон прерван.");
+            Console.Error.WriteLine("Run aborted.");
             return 2;
         }
         catch (Exception e)
         {
-            Console.Error.WriteLine($"Сбой стенда: {e}");
+            Console.Error.WriteLine($"Load harness failed: {e}");
             return 2;
         }
     }

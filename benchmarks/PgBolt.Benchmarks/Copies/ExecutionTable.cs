@@ -6,14 +6,14 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace PgBolt.Benchmarks.Copies;
 
-/// <summary>Таблица выполнений сервера по lease_id (§6.2): одна задача, взятая повторно, — две разные записи.</summary>
+/// <summary>Server executions indexed by lease_id (§6.2). Claiming a job again creates a separate entry.</summary>
 internal sealed partial class ExecutionTable
 {
     private readonly ConcurrentDictionary<Guid, Execution> _byLease = new();
 
     public int Count => _byLease.Count;
 
-    /// <exception cref="InvalidOperationException">Запись с таким lease_id уже есть.</exception>
+    /// <exception cref="InvalidOperationException">An entry with the same lease_id already exists.</exception>
     public void Add(Execution execution)
     {
         ArgumentNullException.ThrowIfNull(execution);
@@ -21,7 +21,7 @@ internal sealed partial class ExecutionTable
             throw new InvalidOperationException($"Lease {execution.Lease.LeaseId} is already registered.");
     }
 
-    /// <summary>Удаляет именно этот объект (не другую запись с тем же lease_id).</summary>
+    /// <summary>Removes this exact object, even if another entry has the same lease_id.</summary>
     public bool Remove(Execution execution)
     {
         ArgumentNullException.ThrowIfNull(execution);
@@ -31,7 +31,7 @@ internal sealed partial class ExecutionTable
     public bool TryGet(Guid leaseId, [MaybeNullWhen(false)] out Execution execution) =>
         _byLease.TryGetValue(leaseId, out execution);
 
-    /// <summary>Копия записей, кроме уже <see cref="ExecutionState.Removed"/>.</summary>
+    /// <summary>Copies entries except those already marked <see cref="ExecutionState.Removed"/>.</summary>
     public IReadOnlyList<Execution> Snapshot()
     {
         var result = new List<Execution>(_byLease.Count);

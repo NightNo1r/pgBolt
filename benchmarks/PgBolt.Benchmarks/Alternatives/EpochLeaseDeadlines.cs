@@ -3,21 +3,21 @@ using PgBolt.Benchmarks.Copies;
 namespace PgBolt.Benchmarks.Alternatives;
 
 /// <summary>
-/// Lock-free ArmAtMost с эпохой (seqlock). Перевзводы (Rearm/Start/Stop) по-прежнему сериализованы _timerLock — они редки
-/// и пересчитывают минимум по снимку; без lock'а стал горячий путь регистрации на потоке диспетчера.
+/// Lock-free ArmAtMost using a sequence counter. Infrequent Rearm, Start, and Stop operations still serialize under _timerLock and recalculate
+/// the snapshot minimum. Dispatcher registration runs without the lock.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Rearm: эпоха → нечётная (Interlocked.Increment, полный барьер), Snapshot, _armedFor, Change, эпоха → чётная.
-/// ArmAtMost после Add: полный барьер, чтение эпохи. Деккер: либо снимок Rearm видит новую запись, либо ArmAtMost видит
-/// его нечётную (или более позднюю) эпоху. Нечётная — Rearm идёт и мог не увидеть запись: ждём его конца. Чётная — все
-/// Rearm, не учтённые в ней, увидят запись, а учтённые завершены: _armedFor ≤ рубежа — делать нечего.
+/// Rearm increments the epoch to odd with a full barrier, takes a snapshot, updates _armedFor, calls Change, then increments the epoch to even.
+/// ArmAtMost executes a full barrier after Add and reads the epoch. By Dekker's argument, either Rearm sees the new entry or ArmAtMost sees its
+/// odd or a later epoch. An odd epoch means a rearm may have missed the entry, so wait for it to finish. At an even epoch, past rearms have
+/// finished and future ones will see the entry. If _armedFor is already at or before the deadline, nothing needs to change.
 /// </para>
 /// <para>
-/// Понижение: CAS _armedFor и Change. Rearm, начавшийся между чтением эпохи и нашим Change, мог выполнить свой Change
-/// раньше — тогда наш, более поздний рубеж, затёр его. Значит, после Change перечитываем эпоху (порядок обеспечивает
-/// lock внутри таймера: Change Rearm'а раньше нашего ⇒ его инкремент эпохи нам виден); изменилась — повторяем с текущим
-/// _armedFor. ArmAtMost вызывает только поток диспетчера (один писатель-понижатель).
+/// To move the deadline earlier, CAS _armedFor and call Change. A Rearm that started after the epoch read might have called Change first,
+/// allowing this Change to overwrite its earlier deadline. Read the epoch again after Change and retry with the current _armedFor if it changed.
+/// The timer's internal lock ensures that an earlier Rearm Change makes its epoch increment visible. Only the dispatcher calls ArmAtMost, so
+/// there is one writer lowering the deadline.
 /// </para>
 /// </remarks>
 internal sealed class EpochLeaseDeadlines : ILeaseDeadlines
@@ -136,8 +136,8 @@ internal sealed class EpochLeaseDeadlines : ILeaseDeadlines
 }
 
 /// <summary>
-/// НЕКОРРЕКТНЫЙ наивный lock-free ArmAtMost (CAS + Change без эпохи) — только для --verify, чтобы показать, что проверка
-/// ловит гонку: Rearm, снимок которого не видел запись, записывает более поздний рубеж после нашего CAS/Change.
+/// Intentionally incorrect lock-free ArmAtMost using CAS and Change without an epoch. Used only by --verify to show that the check detects a
+/// Rearm whose snapshot misses the entry and writes a later deadline after our CAS and Change.
 /// </summary>
 internal sealed class NaiveLeaseDeadlines : ILeaseDeadlines
 {

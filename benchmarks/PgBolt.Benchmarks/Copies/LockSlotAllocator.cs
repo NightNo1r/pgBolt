@@ -4,10 +4,10 @@ namespace PgBolt.Benchmarks.Copies;
 // Дословно: Available, Take, Release, InUse, AvailableCore, Get, QueueSlots. Опущено: Plan/NextEntry и
 // ISharedPoolDistribution (план выборки — не горячий путь Take/Release). QueueOptions → SlotQueue (имя, Reserved, MaxConcurrency).
 
-/// <summary>Описание очереди для аллокатора (вместо QueueOptions).</summary>
+/// <summary>Queue configuration for the allocator, standing in for QueueOptions.</summary>
 internal sealed record SlotQueue(string Name, int Reserved, int? MaxConcurrency);
 
-/// <summary>Общий контракт вариантов аллокатора.</summary>
+/// <summary>Shared contract for allocator variants.</summary>
 internal interface ISlotAllocator
 {
     int Available(string queue);
@@ -18,11 +18,11 @@ internal interface ISlotAllocator
 
     int InUse(string queue);
 
-    /// <summary>Для проверки: (ReservedInUse, SharedInUse) очереди и общий SharedInUse.</summary>
+    /// <summary>For verification, reports the queue's (ReservedInUse, SharedInUse) and total SharedInUse.</summary>
     (int ReservedInUse, int SharedInUse, int TotalShared) Counters(string queue);
 }
 
-/// <summary>Текущий вариант: все счётчики под одним lock.</summary>
+/// <summary>Current implementation. One lock protects all counters.</summary>
 internal sealed class LockSlotAllocator : ISlotAllocator
 {
     private readonly Lock _lock = new();

@@ -1,530 +1,620 @@
-# Производительность: нагрузочный стенд, SLO и результаты
+# Load testing, SLOs, and performance results
 
-Стенд — консольный проект [`benchmarks/PgBolt.LoadTest`](../benchmarks/PgBolt.LoadTest/README.md): методика, команды, флаги и
-формат отчёта описаны в его README. Стенд пишет полные отчёты локально. Ниже сохранены условия измерений и выводы.
+The load harness is the `benchmarks/PgBolt.LoadTest` console application. It saves full reports locally. This report records the test conditions and findings.
+For the methodology, commands, flags, and report format, see the [load harness README](../benchmarks/PgBolt.LoadTest/README.md).
 
-**Итог 7b‑2, 21 ноября 2026.** На штатном PostgreSQL финальная сборка выдержала 10 000 постановок/с в течение десяти минут в обоих режимах подключения. Длительная нагрузка и восстановление после удержания xmin оставляют открытыми SLO 8 и 9. [Серия измерений и исправления](#штатный-postgresql-в-профиле-b)
+**7b‑2 results, 21 November 2026.** On stock PostgreSQL, the final build sustained 10,000 enqueues/s for ten minutes in both connection modes.
+SLOs 8 and 9 remain open for sustained load and recovery after a transaction holds xmin. [Measurements and fixes](#stock-postgresql-under-profile-b)
 
-## Запуск
+## Running the tests
 
-Нужны Docker и .NET 10; без `--connection` стенд сам поднимает PostgreSQL 17 и PgBouncer 1.24. Один сценарий — одна команда:
+Install Docker and .NET 10. Without `--connection`, the harness starts PostgreSQL 17 and PgBouncer 1.24.
+Run one scenario per command.
 
 ```
-dotnet run -c Release --project benchmarks/PgBolt.LoadTest -- <sustained|ramp|partitions|vacuum> [флаги]
+dotnet run -c Release --project benchmarks/PgBolt.LoadTest -- <sustained|ramp|partitions|vacuum> [flags]
 ```
 
-Режимы, флаги, коды возврата и длительность полного набора — в [README стенда](../benchmarks/PgBolt.LoadTest/README.md).
+For modes, flags, exit codes, and the duration of the full suite, see the [load harness README](../benchmarks/PgBolt.LoadTest/README.md).
 
-## Профиль B и SLO
+## Profile B and SLOs
 
-Профиль нагрузки B: 10 000 enqueue/с, прогрев 1 мин, окно замера 10 мин; очереди `default` 80 % и `critical` 20 %, оба хоста
-обслуживают обе; 90 % задач немедленные, 10 % отложены на 1–30 с; 1 % падает на первой попытке и повторяется по политике по
-умолчанию; работа задачи 1 мс, args ~200 байт. Состав процесса: 2 хоста по 32 воркера (`Maximum Pool Size=20`) и продюсер в
-отдельном `IHost` (`Maximum Pool Size=8`) — как отдельный сервис-продюсер: in-process wakeup до хостов не доходит, диспетчеры
-узнают о новых задачах только polling'ом.
+Profile B targets 10,000 enqueues/s with a 1-minute warmup and a 10-minute measurement window. The `default` and `critical` queues receive
+80% and 20% of jobs, respectively. Both hosts serve both queues. Of all jobs, 90% are immediate and 10% have a delay of 1–30 s.
+1% fail on their first attempt and retry under the default policy. Each job performs 1 ms of work and has ~200 bytes of arguments.
+There are 2 hosts with 32 workers each (`Maximum Pool Size=20`) and a producer in a separate `IHost` (`Maximum Pool Size=8`).
+As with a separate producer service, in-process wakeup signals cannot reach the hosts. Their dispatchers discover new jobs by polling.
 
-| # | SLO | Порог |
+| # | SLO | Threshold |
 |---|---|---|
-| 1 | Пропускная способность | каждое окно 10 с: выполнено ≥ 95 % rate; окно недогруза enqueue — нарушение |
-| 2 | Задержка старта немедленных задач (enqueue → start) | p50 ≤ 50 мс, p99 ≤ 500 мс, p99.9 ≤ 2 с |
-| 3 | Опоздание отложенных задач (run_at → start) | p99 ≤ 1,5 с |
-| 4 | Backlog готовых не взятых задач | в каждом срезе ≤ rate × 1 с; среднее последней минуты ≤ среднее первой + rate × 1 с |
-| 5 | Корректность | все `jobs` Succeeded, `queue` пуста, выполнения и `attempt` по `Seq`, `outcome.dropped` = 0, `storage.errors` = 0 |
-| 6 | Соединения | `bouncer`: `maxwait` ≤ 100 мс в каждом срезе; `direct`: соединений ≤ 48 |
+| 1 | Throughput | Every 10 s window completes ≥ 95% of the target rate. A window with insufficient enqueue load fails. |
+| 2 | Immediate job start latency (enqueue → start) | p50 ≤ 50 ms, p99 ≤ 500 ms, p99.9 ≤ 2 s |
+| 3 | Delayed job lateness (run_at → start) | p99 ≤ 1.5 s |
+| 4 | Backlog of ready, unleased jobs | Each sample ≤ rate × 1 s. Last-minute mean ≤ first-minute mean + rate × 1 s. |
+| 5 | Correctness | All `jobs` Succeeded, `queue` empty, executions and `attempt` reconciled by `Seq`, `outcome.dropped` = 0, `storage.errors` = 0 |
+| 6 | Connections | `bouncer` requires `maxwait` ≤ 100 ms in each sample. `direct` requires ≤ 48 connections. |
 
-SLO оцениваются отдельно в режимах `direct` (прямое подключение) и `bouncer` (PgBouncer, `pool_mode=transaction`).
+The harness evaluates the SLOs separately in `direct` (direct connection) and `bouncer` (PgBouncer, `pool_mode=transaction`) modes.
 
-## Окружение
+## Environment
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---|
-| Хост | Apple M4 Pro, 12 ядер |
-| Docker Desktop | 6 CPU, 4,8 ГБ |
-| PostgreSQL | 17.11 (`postgres:17-alpine`): `shared_buffers=1GB`, `max_wal_size=4GB`, `max_connections=100`, `max_locks_per_transaction=64`, autovacuum по умолчанию (`naptime` 1 мин, 3 workers, `cost_delay` 2 мс) |
-| PgBouncer | 1.24.1: `default_pool_size=40`, `max_prepared_statements=200` |
-| `pg_stat_statements.track_planning` | off; в `partitions` — on |
-| reloptions `queue` | `autovacuum_vacuum_scale_factor=0, autovacuum_vacuum_threshold=5000, autovacuum_vacuum_cost_limit=2000` |
+| Host | Apple M4 Pro, 12 cores |
+| Docker Desktop | 6 CPUs, 4.8 GB |
+| PostgreSQL | 17.11 (`postgres:17-alpine`) with `shared_buffers=1GB`, `max_wal_size=4GB`, `max_connections=100`, `max_locks_per_transaction=64`, and default autovacuum settings (`naptime` 1 min, 3 workers, `cost_delay` 2 ms) |
+| PgBouncer | 1.24.1 with `default_pool_size=40` and `max_prepared_statements=200` |
+| `pg_stat_statements.track_planning` | Off except in `partitions`, where it is on |
+| `queue` reloptions | `autovacuum_vacuum_scale_factor=0, autovacuum_vacuum_threshold=5000, autovacuum_vacuum_cost_limit=2000` |
 | .NET | 10.0.9 |
-| Коммит | `57436ef` |
+| Commit | `57436ef` |
 
-Ноутбук с Docker Desktop: fsync виртуального диска и 6 CPU VM ограничивают PG раньше выделенного железа. Сравнения внутри
-одного прогона (режимы, P, индексы) от этого смысла не теряют; абсолютные цифры — нижняя оценка.
+On this laptop running Docker Desktop, virtual disk fsync and the 6-CPU VM limit PostgreSQL sooner than dedicated hardware would.
+Comparisons within the same run (modes, P, indexes) remain meaningful. Treat absolute figures as lower estimates.
 
-## Результаты
+## Results
 
 ### `sustained`
 
-В обоих режимах нарушен SLO 2. Код возврата — 1.
+Both modes failed SLO 2. Exit code 1.
 
 | SLO | direct | bouncer |
 |---|---|---|
-| 1 | PASS, мин. 98,0 % rate | PASS, мин. 96,4 % rate |
-| 2 | **FAIL**: p50 96,6 мс, p99 392,4 мс, p99.9 532,0 мс | **FAIL**: p50 93,4 мс, p99 409,6 мс, p99.9 1950,7 мс |
-| 3 | PASS, p99 1011,2 мс | PASS, p99 1038,3 мс |
-| 4 | PASS, макс. 4075; минуты 1066 → 1172 | PASS, макс. 7227; минуты 1084 → 1060 |
+| 1 | PASS, min. 98.0% of target | PASS, min. 96.4% of target |
+| 2 | **FAIL**, p50 96.6 ms, p99 392.4 ms, p99.9 532.0 ms | **FAIL**, p50 93.4 ms, p99 409.6 ms, p99.9 1950.7 ms |
+| 3 | PASS, p99 1011.2 ms | PASS, p99 1038.3 ms |
+| 4 | PASS, max. 4075, minute means 1066 → 1172 | PASS, max. 7227, minute means 1084 → 1060 |
 | 5 | PASS | PASS |
-| 6 | PASS, 17 соединений | PASS, `maxwait` 0 мс |
+| 6 | PASS, 17 connections | PASS, `maxwait` 0 ms |
 
-Enqueue: ~308 вызовов/с, средняя пачка 32,4, ошибок нет, недогруза нет. CPU стенда 9–11 % ядер. Dequeue: ~810 вызовов/с,
-mean exec 0,21 мс; ack 1,2 мс; enqueue 0,40 мс. Ожиданий `LockManager` практически нет: максимум 1 backend, среднее 0,00.
+Enqueue averaged ~308 calls/s with 32.4 jobs per batch, no errors, and no producer underload. The harness used 9–11% of CPU capacity.
+Dequeue averaged ~810 calls/s. Mean execution times were 0.21 ms for dequeue, 1.2 ms for ack, and 0.40 ms for enqueue.
+`LockManager` waits were rare, with at most 1 backend waiting and a mean of 0.00.
 
 ### `ramp`
 
-Оба прогона завершились с кодом 0.
+Both runs exited with code 0.
 
-| Режим | Максимальный устойчивый rate | Нарушено первым | Ступень остановки |
+| Mode | Highest sustainable rate | First SLO breached | Final step |
 |---|---|---|---|
-| direct | 12 000/с | SLO 2 (p99) | 14 000/с: окна 380 и 390 с — p99 5775 и 2621 мс; SLO 1 держится (≥ 95,4 %) |
-| bouncer | 10 000/с | SLO 2 (p99) | 12 000/с: окна 330 и 350 с — p99 824 и 603 мс; SLO 1 держится |
+| direct | 12,000/s | SLO 2 (p99) | At 14,000/s, the 380 and 390 s windows had p99 of 5775 and 2621 ms. SLO 1 held (≥ 95.4%). |
+| bouncer | 10,000/s | SLO 2 (p99) | At 12,000/s, the 330 and 350 s windows had p99 of 824 and 603 ms. SLO 1 held. |
 
-Обещание roadmap «5–20k jobs/sec на одном узле PG» на этом окружении подтверждается до 10–12 тыс./с. Упор ступеней —
-не пропускная способность (SLO 1 выполнен и на ступени остановки), а хвост задержки: см. «Решения», находка 3.
+These measurements support the roadmap's “5–20k jobs/sec on one PostgreSQL node” up to 10–12k/s on this environment.
+Tail latency limited the steps. Throughput met SLO 1 even at the stopping step. See finding 3 under Decisions.
 
 ### `partitions`
 
-Код возврата 1: `P = 15, current` нарушает SLO 2 во всех режимах по p50 (находка 1), в `direct-prepared`
-также по p99 — 526,3 мс при пороге 500 мс (находка 4). Ёмкость таблицы блокировок 7808.
+Exit code 1. At `P = 15, current`, p50 breached SLO 2 in all modes (finding 1). In `direct-prepared`, p99 also exceeded the
+500 ms threshold at 526.3 ms (finding 4). Lock table capacity was 7808.
 
-SLO 2 нарушен во всех 32 комбинациях: при P = 15 — по p50 (97,5–105 мс у `current`, находка 1), у `direct-prepared, current` и
-`bouncer-prepared, extra` — и по p99 (526,3 и 719,9 мс); при P ≥ 60 — и по p99 (815 мс … 60 с).
+All 32 combinations failed SLO 2. At P = 15, p50 was 97.5–105 ms with `current` (finding 1).
+Both `direct-prepared, current` and `bouncer-prepared, extra` also failed p99 (526.3 and 719.9 ms).
+At P ≥ 60, p99 also exceeded its threshold (815 ms to 60 s).
 
-SLO 1 по комбинациям:
+SLO 1 by combination
 
-| Режим | Индексы | P = 15 | P = 60 | P = 200 | P = 400 |
+| Mode | Indexes | P = 15 | P = 60 | P = 200 | P = 400 |
 |---|---|---|---|---|---|
-| direct | current | PASS | FAIL (91,6 %) | FAIL (40,6 %) | FAIL (12,0 %) |
-| bouncer | current | PASS | PASS | FAIL (40,6 %) | FAIL (18,1 %) |
-| direct-prepared | current | PASS | FAIL (88,6 %) | FAIL (42,2 %) | FAIL (18,4 %) |
-| bouncer-prepared | current | PASS | FAIL (93,5 %) | FAIL (40,8 %) | FAIL (8,5 %) |
-| все четыре | extra | PASS | FAIL | FAIL | FAIL |
+| direct | current | PASS | FAIL (91.6%) | FAIL (40.6%) | FAIL (12.0%) |
+| bouncer | current | PASS | PASS | FAIL (40.6%) | FAIL (18.1%) |
+| direct-prepared | current | PASS | FAIL (88.6%) | FAIL (42.2%) | FAIL (18.4%) |
+| bouncer-prepared | current | PASS | FAIL (93.5%) | FAIL (40.8%) | FAIL (8.5%) |
+| all four | extra | PASS | FAIL | FAIL | FAIL |
 
-В скобках — минимальное окно, % rate.
+Parentheses show the lowest window as a percentage of the target rate.
 
-Порог P — наименьшее P матрицы, с которого SLO нарушается:
+The P threshold is the smallest P in the matrix at which an SLO fails.
 
-| Режим | `current`, по отчёту (SLO 1 или 2) | `current`, по SLO 1 | `extra`, по SLO 1 |
+| Mode | `current`, report (SLO 1 or 2) | `current`, SLO 1 | `extra`, SLO 1 |
 |---|---|---|---|
 | direct | 15 | 60 | 60 |
 | bouncer | 15 | 200 | 60 |
 | direct-prepared | 15 | 60 | 60 |
 | bouncer-prepared | 15 | 60 | 60 |
 
-Порог по отчёту задаёт p50 SLO 2 при P = 15 (находка 1). Выводы делаются по `current` (находка 2); порог `extra` — только входные
-данные решения об opt-in индексах (абзац «Индексы `extra`» в находке 2).
+The report threshold comes from p50 failing SLO 2 at P = 15 (finding 1). The conclusions use `current` (finding 2).
+The `extra` threshold only informs the decision about opt-in indexes (see the `extra` indexes in finding 2).
 
-Dequeue по P (`direct`, `current`; custom plan):
+Dequeue by P (`direct`, `current`, custom plan)
 
-| P | Блокировок всего / вне fast-path | mean plan, мс | mean exec, мс | Вызовов/с | Выполнено/с (окна замера) |
+| P | Locks, total / outside fast path | mean plan, ms | mean exec, ms | Calls/s | Completed/s (measurement windows) |
 |---|---|---|---|---|---|
-| 15 | 100 / 74 | 0,505 | 0,208 | 813 | 9930–10256 |
-| 60 | 325 / 299 | 1,117 | 0,265 | 661 | 9162–11297 |
-| 200 | 1025 / 999 | 4,595 | 0,449 | 259 | 4063–4266 |
-| 400 | 2025 / 1999 | 11,359 | 1,014 | 114 | 1205–1902 |
+| 15 | 100 / 74 | 0.505 | 0.208 | 813 | 9930–10256 |
+| 60 | 325 / 299 | 1.117 | 0.265 | 661 | 9162–11297 |
+| 200 | 1025 / 999 | 4.595 | 0.449 | 259 | 4063–4266 |
+| 400 | 2025 / 1999 | 11.359 | 1.014 | 114 | 1205–1902 |
 
-Ack и enqueue от P не зависят (`direct`, `current`): 31 и 12 блокировок (5 и 0 вне fast-path), mean plan 0,15–0,55 мс. Ожидания `LockManager`:
-максимум 0–2 backend'а, среднее ≤ 0,05 во всех комбинациях; `storage.errors` = 0.
+Ack and enqueue were independent of P (`direct`, `current`). They took 31 and 12 locks (5 and 0 outside the fast path), with mean planning
+times of 0.15–0.55 ms. Across combinations, the maximum number of backends waiting on `LockManager` ranged from 0–2, the mean was ≤ 0.05,
+and `storage.errors` = 0.
 
 ### `vacuum`
 
-Прогрев 2 мин, фаза 1 — 20 мин нагрузки B (120–1320 с), фаза 2 — 5 мин нагрузки B при удержанном xmin (до 1620 с), фаза 3 —
-10 мин восстановления (до 2220 с); коммит `1cf7245`. Три варианта, каждый в обоих режимах; код возврата 1 у всех шести прогонов.
+Commit `1cf7245`. After a 2-minute warmup, phase 1 ran profile B for 20 minutes (120–1320 s). Phase 2 ran B for 5 minutes
+with xmin held (until 1620 s). Phase 3 allowed 10 minutes for recovery (until 2220 s).
+Each of three configurations ran in both modes. All six runs returned exit code 1.
 
-| Вариант | Параметры |
+| Configuration | Settings |
 |---|---|
-| текущие | reloptions `queue` из `V001`, autovacuum кластера по умолчанию |
-| `cost_delay=0` | текущие + `autovacuum_vacuum_cost_delay=0` для `queue` |
-| `naptime=10s` | текущие reloptions, кластер с `autovacuum_naptime=10s` |
+| current | `queue` reloptions from `V001`, default cluster autovacuum settings |
+| `cost_delay=0` | Current settings plus `autovacuum_vacuum_cost_delay=0` on `queue` |
+| `naptime=10s` | Current reloptions, cluster-wide `autovacuum_naptime=10s` |
 
-| Вариант, режим | SLO 6 | SLO 7: 60–120 с → последняя минута | SLO 8: рост backlog, срезов > rate | SLO 9 |
+| Configuration, mode | SLO 6 | SLO 7: 60–120 s → last minute | SLO 8: backlog growth, samples > rate | SLO 9 |
 |---|---|---|---|---|
-| текущие, direct | PASS, 18 соединений | PASS, 141,9 → 147,5 МБ | **FAIL**: 877 → 1425, 0 | **FAIL** |
-| текущие, bouncer | PASS, `maxwait` 0 мс | PASS, 147,1 → 247,6 МБ | **FAIL**: 1336 → 7012, 147 | **FAIL** |
-| `cost_delay=0`, direct | PASS, 17 соединений | PASS, 144,2 → 181,5 МБ | **FAIL**: 1311 → 1559, 0 | **FAIL** |
-| `cost_delay=0`, bouncer | **FAIL**, `maxwait` 455 мс | PASS, 149,7 → 251,4 МБ | **FAIL**: 1026 → 7377, 182 | **FAIL** |
-| `naptime=10s`, direct | PASS, 18 соединений | PASS, 38,7 → 44,3 МБ | **FAIL**: 1124 → 1377, 0 | **FAIL** |
-| `naptime=10s`, bouncer | PASS, `maxwait` 0 мс | PASS, 45,1 → 46,1 МБ | **FAIL**: 1221 → 1471, 0 | **FAIL** |
+| current, direct | PASS, 18 connections | PASS, 141.9 → 147.5 MB | **FAIL**, 877 → 1425, 0 | **FAIL** |
+| current, bouncer | PASS, `maxwait` 0 ms | PASS, 147.1 → 247.6 MB | **FAIL**, 1336 → 7012, 147 | **FAIL** |
+| `cost_delay=0`, direct | PASS, 17 connections | PASS, 144.2 → 181.5 MB | **FAIL**, 1311 → 1559, 0 | **FAIL** |
+| `cost_delay=0`, bouncer | **FAIL**, `maxwait` 455 ms | PASS, 149.7 → 251.4 MB | **FAIL**, 1026 → 7377, 182 | **FAIL** |
+| `naptime=10s`, direct | PASS, 18 connections | PASS, 38.7 → 44.3 MB | **FAIL**, 1124 → 1377, 0 | **FAIL** |
+| `naptime=10s`, bouncer | PASS, `maxwait` 0 ms | PASS, 45.1 → 46.1 MB | **FAIL**, 1221 → 1471, 0 | **FAIL** |
 
-SLO 8 во всех шести прогонах нарушают все 120 окон фазы 1, и причин две. Первая — общая для всех вариантов: в 48–110 окнах SLO 1,
-p99 SLO 2 и SLO 3 выполнены, а окно всё равно нарушено — по p50 (или p99.9) SLO 2 по окну; p50 по окнам отчёт не даёт, а p50
-профиля B — 96,6 и 93,4 мс в `sustained` (находка 1). Вторая — хвост p99: p99 SLO 2 выше 500 мс в 41–72
-окнах фазы 1 в пяти прогонах из шести (у текущих в `direct` — в 9), p99 отложенных выше 1,5 с — в 14–43 окнах (у текущих в
-`direct` — в 4). Связь хвоста с autovacuum видна только в `bouncer`: у `naptime=10s` — 41 окно с p99 выше 500 мс и 0 срезов с
-backlog выше rate против 66–72 окон и 147–182 срезов у текущих и `cost_delay=0`; в `direct` частые проходы хвост не уменьшают
-(63 окна у `naptime=10s` против 9 у текущих и 68 у `cost_delay=0`).
+All 120 windows in phase 1 failed SLO 8 in all six runs for two reasons. First, in 48–110 windows, SLO 1, SLO 2 p99, and SLO 3 passed,
+so the failure came from the window's SLO 2 p50 or p99.9. The report omits per-window p50. Profile B p50 was 96.6 and 93.4 ms in
+`sustained` (finding 1). Second, the p99 tail exceeded its threshold. In five of six runs, SLO 2 p99 exceeded 500 ms in 41–72 phase 1
+windows (9 for current settings in `direct`). Delayed-job p99 exceeded 1.5 s in 14–43 windows (4 for current settings in `direct`).
+Only `bouncer` showed an association between tail latency and autovacuum. With `naptime=10s`, 41 windows exceeded 500 ms at p99 and 0 samples
+had backlog above the rate, versus 66–72 windows and 147–182 samples for current settings and `cost_delay=0`.
+In `direct`, more frequent passes did not reduce the tail (63 windows with `naptime=10s`, compared with 9 for current settings and 68 for `cost_delay=0`).
 
-SLO 9 («не восстановилось до конца фазы 3» во всех прогонах) p50 не содержит: при удержанном xmin выполнено падает к концу фазы 2
-до ~1 тыс./с (среднее за фазу 1,8–1,9 тыс./с во всех вариантах — мёртвые строки не убираются при любых параметрах autovacuum), за
-5 мин копится по оценке ~2,4 млн готовых задач; фаза 3 выполняет 13,8–14,2 тыс./с. Backlog выше rate держится до 2106–2220 с —
-позже предела T (1920 с, начало фазы 3 + 5 мин); ни одно окно фазы 3 не выполняет p99 ≤ 500 мс. В трёх прогонах, где backlog
-успел опуститься ниже rate (текущие и `naptime=10s` в `direct`, `naptime=10s` в `bouncer`), p99 последнего окна — 1,15–1,29 с.
+SLO 9 excludes p50. Every run reported “did not recover by the end of phase 3.” With xmin held, throughput fell to ~1k/s by the end of phase 2,
+averaging 1.8–1.9k/s across the phase for every configuration. No autovacuum setting could remove the dead tuples. An estimated ~2.4 million
+ready jobs accumulated in 5 minutes. Phase 3 processed 13.8–14.2k/s, but backlog stayed above the rate until 2106–2220 s, past the T deadline
+(1920 s, phase 3 start + 5 min). No phase 3 window achieved p99 ≤ 500 ms. Backlog did fall below the rate in three runs (current and
+`naptime=10s` in `direct`, and `naptime=10s` in `bouncer`). Their final-window p99 was 1.15–1.29 s.
 
-SLO 6 у `cost_delay=0, bouncer` нарушен одним срезом (849 с, фаза 1: `maxwait` 455 мс, `cl_waiting` 4, `sv_active` 13); autovacuum
-в этом срезе не работал, в остальных срезах этого прогона и во всех срезах двух других `bouncer`-прогонов `maxwait` 0 (в `direct`
-PgBouncer нет) — с `cost_delay=0` не связан; вариант отклонён и так, отдельной находкой не заводится. Пометка «enqueue» у SLO 8–9:
-3–9 окон недогруза из 210.
+One sample failed SLO 6 with `cost_delay=0, bouncer` (849 s in phase 1, `maxwait` 455 ms, `cl_waiting` 4, `sv_active` 13).
+Autovacuum was idle in that sample. Every other sample in that run and both other `bouncer` runs had `maxwait` 0 (`direct` bypasses PgBouncer).
+The report found no link to `cost_delay=0` and recorded no separate finding since that configuration had already been rejected.
+The “enqueue” annotation for SLOs 8–9 indicates 3–9 underloaded windows out of 210.
 
-Метрики vacuum (справочно; размер — `pg_total_relation_size(queue)`, по `.csv`):
+Vacuum metrics from the `.csv` files. Size is `pg_total_relation_size(queue)`.
 
-| Показатель | текущие, direct | текущие, bouncer | `cost_delay=0`, direct | `cost_delay=0`, bouncer | `naptime=10s`, direct | `naptime=10s`, bouncer |
+| Metric | current, direct | current, bouncer | `cost_delay=0`, direct | `cost_delay=0`, bouncer | `naptime=10s`, direct | `naptime=10s`, bouncer |
 |---|---|---|---|---|---|---|
-| Размер `queue` в фазе 1: среднее / пик, МБ | 145,3 / 147,5 | 181,6 / 258,8 | 161,4 / 181,5 | 185,3 / 261,6 | 41,6 / 44,7 | 47,4 / 56,3 |
-| Пик размера в фазах 2 / 3, МБ | 570,5 / 835,8 | 583,5 / 893,1 | 573,0 / 868,2 | 585,4 / 872,8 | 555,7 / 774,2 | 555,0 / 754,9 |
-| Размер в конце фазы 3, МБ | 498,1 | 893,0 | 867,6 | 872,7 | 405,0 | 384,9 |
-| Пик `n_dead_tup` в фазе 1 / за прогон, млн | 1,28 / 2,49 | 2,41 / 3,15 | 1,28 / 2,42 | 2,36 / 3,12 | 0,23 / 1,59 | 0,42 / 1,58 |
-| p99 SLO 2 фазы 1, мс | 412,2 | 18 743,3 | 811,5 | 24 592,4 | 753,2 | 611,8 |
-| Проходов autovacuum по `queue` | 37 | 35 | 37 | 37 | 222 | 220 |
-| Выполнено/с, среднее в фазе 2 / 3 | 1931 / 14 184 | 1900 / 13 752 | 1928 / 13 819 | 1809 / 13 767 | 1935 / 14 182 | 1935 / 14 189 |
-| p99 SLO 2 последнего окна фазы 3, мс | 1150,0 | 60 031 (переполнение) | 60 031 | 60 031 | 1161,2 | 1294,3 |
-| Активных autovacuum workers, макс. | 2 | 2 | 2 | 2 | 2 | 2 |
+| Phase 1 `queue` size, mean / peak, MB | 145.3 / 147.5 | 181.6 / 258.8 | 161.4 / 181.5 | 185.3 / 261.6 | 41.6 / 44.7 | 47.4 / 56.3 |
+| Peak size in phases 2 / 3, MB | 570.5 / 835.8 | 583.5 / 893.1 | 573.0 / 868.2 | 585.4 / 872.8 | 555.7 / 774.2 | 555.0 / 754.9 |
+| Size at the end of phase 3, MB | 498.1 | 893.0 | 867.6 | 872.7 | 405.0 | 384.9 |
+| Peak `n_dead_tup` in phase 1 / full run, millions | 1.28 / 2.49 | 2.41 / 3.15 | 1.28 / 2.42 | 2.36 / 3.12 | 0.23 / 1.59 | 0.42 / 1.58 |
+| Phase 1 SLO 2 p99, ms | 412.2 | 18,743.3 | 811.5 | 24,592.4 | 753.2 | 611.8 |
+| Autovacuum passes on `queue` | 37 | 35 | 37 | 37 | 222 | 220 |
+| Completed/s, mean in phases 2 / 3 | 1931 / 14,184 | 1900 / 13,752 | 1928 / 13,819 | 1809 / 13,767 | 1935 / 14,182 | 1935 / 14,189 |
+| SLO 2 p99 in the last window of phase 3, ms | 1150.0 | 60,031 (overflow) | 60,031 | 60,031 | 1161.2 | 1294.3 |
+| Active autovacuum workers, max. | 2 | 2 | 2 | 2 | 2 | 2 |
 
-В фазе 1 всех прогонов активных autovacuum workers нет в 69–72 % срезов, один — в 27–30 %, два — менее чем в 1 %.
+Across all runs in phase 1, 69–72% of samples had no active autovacuum worker, 27–30% had one, and fewer than 1% had two.
 
-В отчётах `20261018-*` у `vacuum`, `ramp` и `partitions` строка «Повторные (лишние) выполнения» — «нет данных»: стенд считал их
-только в `sustained` (там лишних выполнений 0); подсчёт для сценариев без дренажа добавлен в стенд после этих прогонов.
+The `20261018-*` reports list “Repeated (excess) executions” as “no data” for `vacuum`, `ramp`, and `partitions`.
+At the time, the harness counted them only in `sustained` (0 excess executions). It gained support for counting them in scenarios without a drain after these runs.
 
-## Решения
+## Decisions
 
-Правило: находка заводится по показателю (SLO или колонка отчёта); локальная правка — параметры таблиц и индексов, текст одного
-SQL-statement'а без изменения протокола, значение по умолчанию опции, рекомендация в docs; крупная — изменение протокола горячего
-пути, нескольких statement'ов или новая опция поведения, она уходит в roadmap. При сомнении — крупная.
+Each finding corresponds to an SLO or a report column. Local fixes cover table and index parameters, a single SQL statement without protocol changes,
+an option default, or a documentation recommendation. Changes to a hot-path protocol, multiple statements, or a new behavioral option count as major
+and go on the roadmap. Borderline cases count as major.
 
-### 1. Задержка старта немедленных задач: p50 ≈ 95 мс — крупная
+### 1. Immediate jobs took ≈ 95 ms to start at p50 (major)
 
-**Показатель:** p50 SLO 2. **Цифры:** p50 96,6 мс (`direct`) и 93,4 мс (`bouncer`) при пороге 50 мс
-(sustained direct,
-sustained bouncer); 97,5–105 мс у `P = 15, current`
-во всех режимах `partitions`; p50 96,2 и 96,4 мс за весь `ramp`.
+**Metric.** SLO 2 p50. **Measurements.** In sustained direct and sustained bouncer, p50 was 96.6 ms (`direct`) and 93.4 ms (`bouncer`)
+against a 50 ms threshold. It reached 97.5–105 ms for `P = 15, current` in all `partitions` modes. Full-run `ramp` p50 was 96.2 and 96.4 ms.
 
-**Источник задержки.** Задачи ждут в `queue` готовыми, а не в БД или в стенде:
-- p99 по окнам ступени 2 000/с — 322–375 мс (`ramp` direct), на уровне 10 000/с (278–487 мс в `sustained`), p50 за весь `ramp`
-  96,2–96,4 мс: от потока задержка заметно не растёт, насыщения нет;
-- backlog готовых в среднем 1039 (`direct`) и 1038 (`bouncer`) за окно замера — по закону Литтла ≈ 0,1 с × rate, то есть средняя
-  задержка ~0,1 с уходит на ожидание в очереди;
-- в 14 из 56 (`direct`) и 15 из 57 (`bouncer`) десятисекундных срезов задач в lease нет вовсе (`leased` = 0 в `.csv`), при этом
-  готовы в среднем 1267 и 936 задач (до 2849): оба хоста простаивают при полной очереди;
-- стоимость в БД мала: dequeue mean exec 0,21 мс, enqueue p99 3–4 мс; CPU стенда 9 %; ожиданий `LockManager` практически нет (максимум 1 backend, среднее 0,00);
-- при `P = 60` dequeue дороже (plan 1,1 мс против 0,5 мс), а p50 ниже — 62,8–69,5 мс: задержку задаёт не цена запроса, а то,
-  когда диспетчер его отправляет.
+**Where jobs waited.** Ready jobs spent most of their time waiting in `queue`. Database execution and harness work were small.
 
-Механизм по коду диспетчера: продюсер — другой процесс, wakeup-сигнала о новых задачах у хостов нет, остаётся адаптивный polling.
-Пустая выборка удваивает интервал очереди (от `MinPollInterval` 50 мс до `MaxPollInterval` 10 с); освобождение слота назначает
-выборку немедленно, но интервал не сбрасывает, поэтому серия выборок после завершения задач, вернувших 0 строк, разгоняет его до
-сотен миллисекунд; сбрасывает интервал только непустая выборка или wakeup-сигнал. Затем оба хоста могут спать весь интервал, пока задачи
-копятся. Максимум задержки 827 мс (`direct`) согласуется с уровнем интервала 800 мс плюс jitter 10 %. В октябре механизм оставался гипотезой. Сравнение двух версий диспетчера приведено ниже.
+- At the 2,000/s step, window p99 was 322–375 ms (`ramp` direct), similar to 10,000/s (278–487 ms in `sustained`). Whole-run `ramp`
+  p50 was 96.2–96.4 ms. Latency barely changed with load, with no sign of saturation.
+- The ready backlog averaged 1039 (`direct`) and 1038 (`bouncer`) over the measurement window. By Little's law, this is ≈ 0.1 s × rate,
+  consistent with an average queue wait of ~0.1 s.
+- In 14 of 56 (`direct`) and 15 of 57 (`bouncer`) ten-second samples, there were no leased jobs (`leased` = 0 in the `.csv`).
+  The same samples averaged 1267 and 936 ready jobs (up to 2849). Both hosts were idle with work waiting.
+- Database costs were low. Mean dequeue execution took 0.21 ms and enqueue p99 was 3–4 ms. Harness CPU was 9%.
+  At most 1 backend waited on `LockManager`, with a mean of 0.00.
+- At `P = 60`, dequeue planning cost more (1.1 ms versus 0.5 ms) but p50 fell to 62.8–69.5 ms.
+  The timing of dispatch determined the delay.
 
-**Классификация: крупная.** Надёжная правка — в протоколе выборки воркера: не удваивать интервал по пустой выборке, вызванной
-освобождением слота, пока очередь активна, и/или межпроцессный wakeup (`LISTEN/NOTIFY`) от продюсера. Изменение значений по
-умолчанию формально локально, но не решает находку уверенно: меньший `MinPollInterval` не останавливает удвоение, а меньший
-`MaxPollInterval` (например, 100 мс вместо 10 с) ограничивает ожидание ценой стократного роста холостого polling каждой очереди
-каждого сервера — это компромисс поведения, а не настройка.
+The dispatcher code suggested a mechanism. With a producer in another process, hosts receive no wakeup signal for new jobs and rely on adaptive polling.
+An empty fetch doubles the queue interval from `MinPollInterval` (50 ms) up to `MaxPollInterval` (10 s).
+Freeing a slot schedules an immediate fetch but leaves the interval intact. A series of fetches after job completion that return 0 rows can raise it
+to hundreds of milliseconds. Only a nonempty fetch or a wakeup signal resets it. Both hosts can then sleep through the full interval while jobs accumulate.
+The 827 ms maximum delay (`direct`) fits an 800 ms interval plus 10% jitter. In October this mechanism was still a hypothesis. The dispatcher comparison below tested it.
 
-**Пункт roadmap:** 7b-2, «Задержка доставки немедленных задач, поставленных из другого процесса» ([roadmap](superpowers/specs/2026-09-26-pgbolt-roadmap.md#7b-2-производительность-крупные-находки-стенда)): там приведены критерии для этой находки.
+**Major finding.** A reliable fix changes the worker's fetch protocol. An active queue could retain its polling interval when an early fetch triggered
+by a freed slot returns empty, receive an interprocess wakeup (`LISTEN/NOTIFY`) from the producer, or use both.
+Changing defaults qualifies as local but does not reliably resolve the finding. Lowering `MinPollInterval` still allows doubling. Lowering
+`MaxPollInterval` (for example, from 10 s to 100 ms) limits wait time at the cost of a hundredfold increase in idle polls per queue per server.
 
-#### Проверка опроса активной очереди, 20 ноября 2026
+**Roadmap item 7b-2.** “Delivery latency for immediate jobs enqueued from another process” lists the criteria for this finding. [Roadmap](superpowers/specs/2026-09-26-pgbolt-roadmap.md#7b-2-производительность-крупные-находки-стенда)
 
-Исправление сохраняет срок планового опроса, если досрочная выборка после освобождения слота вернула пустой результат. Сравнили исходную и исправленную версии диспетчера на одном стенде. Обе Release-сборки подготовили до начала измерений. В каждой последовательно запустили `sustained` напрямую и через PgBouncer с 60 с прогрева и 600 с измерения при 10 000 задач/с. Метрики под нагрузкой относятся к одному прогону на комбинацию. Два последних столбца получены после дренажа, по одной контрольной задаче на комбинацию.
+<a name="проверка-опроса-активной-очереди-20-ноября-2026"></a>
 
-| Версия и подключение | p50, мс | p99, мс | p99.9, мс | Мин. поток, % | Все dequeue | Пустые dequeue | Пустые за минуту простоя | Первый старт после простоя, с |
+#### Active queue polling verification, 20 November 2026
+
+The fix preserves the scheduled poll deadline when an early fetch triggered by a freed slot returns empty. The original and fixed dispatchers ran on the same harness.
+Both Release builds were ready before measurement. On each build, `sustained` ran sequentially over direct connections and PgBouncer
+with 60 s of warmup and 600 s of measurement at 10,000 jobs/s. Load metrics come from one run per combination.
+The last two columns come from one probe job per combination after draining the queue.
+
+| Version and connection | p50, ms | p99, ms | p99.9, ms | Min. throughput, % | Total dequeues | Empty dequeues | Empty dequeues per idle minute | First start after idle, s |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| исходная, direct | 90,4 | 414,2 | 610,8 | 98,4 | 441 933 | 14 741 | 24 | 3,09 |
-| исходная, bouncer | 122,9 | 58 851,3 | ≥ 60 000 | 64,3 | 410 339 | 8 213 | 25 | 2,95 |
-| исправленная, direct | 37,4 | 216,1 | 773,6 | 99,9 | 466 982 | 39 795 | 27 | 7,98 |
-| исправленная, bouncer | 37,8 | 728,6 | 7 295,0 | 81,0 | 455 884 | 37 975 | 25 | 0,81 |
+| Original, direct | 90.4 | 414.2 | 610.8 | 98.4 | 441,933 | 14,741 | 24 | 3.09 |
+| Original, bouncer | 122.9 | 58,851.3 | ≥ 60,000 | 64.3 | 410,339 | 8,213 | 25 | 2.95 |
+| Fixed, direct | 37.4 | 216.1 | 773.6 | 99.9 | 466,982 | 39,795 | 27 | 7.98 |
+| Fixed, bouncer | 37.8 | 728.6 | 7,295.0 | 81.0 | 455,884 | 37,975 | 25 | 0.81 |
 
-**Результат.** Напрямую исправленная версия выполнила все SLO 1–6. Через PgBouncer медиана уложилась в 50 мс, но SLO 1, 2 и 4 нарушены. В 3 из 60 десятисекундных окон выполнение упало ниже 95 % заданного потока, минимум составил 81,0 %. Окон с недогрузом продюсера не было. p99 составил 728,6 мс при пороге 500 мс, p99.9 — 7,295 с при пороге 2 с. Число готовых задач достигло границы измерения 10 001 при допустимых 10 000. Обе исправленные конфигурации прошли сверку выполнений и проверку соединений. Приёмка первой находки 7b-2 остаётся открытой.
+**Result.** The fixed version met SLOs 1–6 in direct mode. Via PgBouncer, the median met the 50 ms threshold but SLOs 1, 2, and 4 failed.
+Execution fell below 95% of the target rate in 3 of 60 ten-second windows, reaching 81.0% at its lowest. The producer supplied the requested load
+in every window. Start p99 was 728.6 ms against 500 ms, and p99.9 was 7.295 s against 2 s. Ready jobs reached the measurement cap of 10,001,
+above the allowed 10,000. Both fixed configurations passed execution reconciliation and connection checks. Acceptance of the first 7b-2 finding remained open at this point.
 
-**Цена изменения.** Общее число dequeue за окно замера выросло на 5,7 % напрямую и на 11,1 % через PgBouncer. Пустых выборок стало в 2,70 и 4,62 раза больше. На исходной версии через PgBouncer продюсер недодал нагрузку в двух окнах, а гистограмма достигла потолка в 60 с. Величина улучшения хвоста в этом режиме требует повторных измерений.
+**Cost.** Total dequeue calls in the measurement window rose by 5.7% directly and 11.1% via PgBouncer. Empty fetch counts grew by factors of 2.70 and 4.62.
+In the original PgBouncer run, the producer undersupplied two windows and the latency histogram reached its 60 s ceiling. More measurements are needed
+to quantify the tail latency improvement in this mode.
 
-**Где возникало отставание.** В исправленном прогоне через PgBouncer три окна ниже порога начались на 460-й, 640-й и 650-й секундах от старта. В срезах около 466-й и 646-й секунд число готовых задач уже упиралось в границу измерения, в `queue` было около 1,6 млн мёртвых строк и работал autovacuum. Срезы показывают совпадение по времени. Причина просадок пока не установлена.
+**When throughput fell.** The three below-threshold windows in the fixed PgBouncer run started 460, 640, and 650 s into the test.
+At about 466 and 646 s, ready jobs had reached the measurement cap, `queue` had about 1.6 million dead tuples, and autovacuum was active.
+The samples establish timing. The cause of the dips remains unknown.
 
-В отдельной проверке на исправленной версии при `autovacuum_naptime=10s` через PgBouncer прошли все 120 десятисекундных окон двух прогонов. Минимум составил 9 810 и 9 954 запуска/с, в контрольном прогоне с 60 с — 9 471. В первом прогоне с 10 с ожидание соединения однажды достигло 374 мс при пороге 100 мс. В повторе и при прямом подключении прошли все SLO 1–6. Пик мёртвых версий в `queue` снизился с 1,28 млн до 0,22 млн. Размер очереди с индексами снизился со 147 до 38–41 МиБ. Настройка действует на весь экземпляр PostgreSQL.
+With the fixed version and `autovacuum_naptime=10s` via PgBouncer, all 120 ten-second throughput windows passed across two additional runs.
+The minimum was 9,810 and 9,954 starts/s versus 9,471 in the 60 s control. In the first 10 s run, connection wait once reached 374 ms against
+a 100 ms threshold. The repeat and the direct connection passed SLOs 1–6. Peak dead tuples in `queue` fell from 1.28 million to 0.22 million.
+Queue size including indexes fell from 147 to 38–41 MiB. This setting applies to the entire PostgreSQL instance.
 
-### 2. Порог P у `current` ≤ 60: dequeue планирует все партиции `jobs` — крупная
+### 2. The P threshold for `current` is ≤ 60 because dequeue plans all `jobs` partitions (major)
 
-**Показатель:** порог P (SLO 1 и 2 по комбинациям `partitions`) и `mean_plan_time` dequeue. **Цифры:** пороги P — в «Результатах», `partitions`: по итогам замера 15 (через p50 SLO 2), по SLO 1 —
-60 в трёх режимах из четырёх; оба значения ≤ 60.
+**Metrics.** The P threshold (SLOs 1 and 2 across `partitions` combinations) and dequeue `mean_plan_time`. In the `partitions` results, the overall
+threshold was 15 (SLO 2 p50). For SLO 1 alone it was 60 in three of four modes. Both values are ≤ 60.
 
-**Обоснование.** Dequeue (`JOIN jobs j ON j.id = l.job_id`) не имеет условия на ключ партиционирования: каждый вызов планирует
-все P партиций и блокирует их вместе с индексами — 5P + 25 отношений (100 → 2025), время планирования растёт с P линейно
-(0,5 → 11,4 мс), а исполнение остаётся в пределах 1 мс (0,21 → 1,0 мс). Диспетчер хоста вызывает dequeue последовательно, поэтому
-вызовов/с становится меньше (813 → 114) и пропускная способность упирается в ~4,2 тыс./с при P = 200 и ~1,9 тыс./с при P = 400.
-Конкуренции за таблицу блокировок нет (ожиданий `LockManager` ≤ 2, среднее ≤ 0,05): дорого само планирование и взятие
-блокировок в каждом вызове. Prepared statements не помогают: под нагрузкой перепланируется 57–100 % вызовов dequeue (`total_plan_time / calls` к
-`mean_plan_time`: 97–100 % при P = 60 и 400, 57–76 % при P = 200, 71–86 % при P = 15); тип `generic` в отчёте — проба стенда до
-нагрузки, хосты в основном на custom plan; пропускная способность та же (~4,3 тыс./с при P = 200). Ack и enqueue отсекают партиции при планировании и от P не зависят.
+**Evidence.** Dequeue (`JOIN jobs j ON j.id = l.job_id`) has no predicate on the partition key. Every call plans all P partitions and locks them
+and their indexes, for 5P + 25 relations (100 → 2025). Planning time scales linearly with P (0.5 → 11.4 ms), while execution remains within
+1 ms (0.21 → 1.0 ms). Each host's dispatcher calls dequeue serially, so calls/s fall (813 → 114) and throughput tops out at ~4.2k/s at
+P = 200 and ~1.9k/s at P = 400. Few backends waited on `LockManager` (≤ 2, mean ≤ 0.05). The cost lies in planning and acquiring locks on
+every call. Prepared statements did not help. Under load, PostgreSQL replanned 57–100% of dequeue calls (ratio of `total_plan_time / calls`
+to `mean_plan_time`: 97–100% at P = 60 and 400, 57–76% at P = 200, 71–86% at P = 15). The report's `generic` plan came from a harness
+probe before load. The hosts mostly used custom plans and achieved similar throughput (~4.3k/s at P = 200). Ack and enqueue prune partitions
+at plan time and are independent of P.
 
-При P = 60 средней пропускной способности хватает (661 вызов/с); SLO 1 нарушают короткие провалы, когда `n_dead_tup` `queue`
-доходит до 1,0–1,25 млн до прихода autovacuum в режимах direct, direct-prepared и bouncer-prepared — при P = 15 такой же рост SLO 1 не нарушал. Больше
-партиций — меньше запаса; выводы по autovacuum `queue` — по сценарию `vacuum`.
+At P = 60, average throughput was sufficient (661 calls/s). Brief dips breached SLO 1 when `queue`'s `n_dead_tup` reached 1.0–1.25 million
+before autovacuum arrived in direct, direct-prepared, and bouncer-prepared modes. At P = 15, similar growth did not breach SLO 1.
+More partitions leave less headroom. The `vacuum` scenario evaluates autovacuum on `queue`.
 
-**Классификация: крупная** (порог P ≤ 60 хотя бы в одном режиме). До исправления держать число партиций `jobs` по умолчанию
-(P = 15: `JobsRetention` 7 суток + сегодня + `PartitionDaysAhead` 7) и не увеличивать срок хранения и горизонт вперёд так, чтобы
-P приближалось к 60.
+**Major finding** (P threshold ≤ 60 in at least one mode). Until the fix, keep the default `jobs` partition count
+(P = 15, from 7 days of `JobsRetention` + today + 7 days of `PartitionDaysAhead`). Avoid increasing retention or the future horizon enough for P to approach 60.
 
-**Пункт roadmap:** 7b-2, «Отсечение партиций `jobs` в dequeue» ([roadmap](superpowers/specs/2026-09-26-pgbolt-roadmap.md#7b-2-производительность-крупные-находки-стенда)): там приведены критерии для этой находки.
+**Roadmap item 7b-2.** “Pruning `jobs` partitions during dequeue” lists the criteria for this finding. [Roadmap](superpowers/specs/2026-09-26-pgbolt-roadmap.md#7b-2-производительность-крупные-находки-стенда)
 
-**Индексы `extra`** (btree `(type, id)` и GIN `(args jsonb_path_ops)`; только входные данные решения об opt-in индексах, правок не
-вызывают): порог P по SLO 1 — 60 во всех четырёх режимах (у `current` в `bouncer` — 200). Цена при P = 15: dequeue 132 блокировки
-против 100, ack exec 1,47 мс против 1,21 мс (+22 %), enqueue exec 0,515 мс против 0,404 мс (+27 %); при росте P dequeue
-блокирует 7P + 27 отношений, mean plan 14,9 мс при P = 400. p99 SLO 2 у `bouncer-prepared, extra` при P = 15 — 719,9 мс при пороге
-500 мс: тоже входные
-данные решения об opt-in индексах, находкой не заводится.
+**Extra indexes.** The `extra` btree `(type, id)` and GIN `(args jsonb_path_ops)` indexes inform the opt-in index decision only.
+Their SLO 1 threshold was P = 60 in all four modes (versus 200 with `current` in `bouncer`). At P = 15, dequeue took 132 locks versus 100,
+ack execution took 1.47 ms versus 1.21 ms (+22%), and enqueue took 0.515 ms versus 0.404 ms (+27%). As P grows, dequeue locks 7P + 27
+relations. Mean planning time reached 14.9 ms at P = 400. For `bouncer-prepared, extra` at P = 15, SLO 2 p99 reached 719.9 ms against
+500 ms. This also informs the opt-in decision and prompted no separate finding or fix.
 
-#### Проверка отсечения на PostgreSQL 17.11, 20 ноября 2026
+#### Partition pruning verification on PostgreSQL 17.11, 20 November 2026
 
-Контрольная версия `ae68c53`. В локальном Docker выдавали 32 реальных UUIDv7 одних или двух суток на 15 и 400 партициях с индексами `current`. Для каждого пути использовали принудительный custom и generic plan. После первого выполнения откатывали транзакцию и повторяли тот же подготовленный запрос. По `pg_locks` считали дочерние таблицы `jobs` и их индексы до отката.
+Control build `ae68c53`. In local Docker, dequeue fetched 32 real UUIDv7 values spanning one or two days with 15 and 400 partitions and
+`current` indexes. Each path ran with forced custom and generic plans. After the first execution, the test rolled back the transaction and
+repeated the same prepared query. It counted child tables of `jobs` and their indexes in `pg_locks` before rollback.
 
-| Путь, пачка за двое суток | Открыто таблиц при P=15, custom / generic | При P=400, custom / generic | Отношений с индексами при P=400, повтор | Planning Time внешнего запроса при P=400, повтор, мс |
+| Path, two-day batch | Tables opened at P=15, custom / generic | At P=400, custom / generic | Relations including indexes at P=400, repeat | Outer query planning time at P=400, repeat, ms |
 |---|---|---|---|---|
-| Исходная выдача | 15 / 15 | 400 / 400 | 2000 / 400 | 8,307 / 0,059 |
-| Только захват в обычной очереди | 0 / 0 | 0 / 0 | 0 / 0 | 0,117 / 0,009 |
-| Чтение отдельным запросом по массиву ID | 2 / 15 | 2 / 400 | 10 / 400 | 0,120 / 0,075 |
-| Выдача через серверную функцию | 2 / 2 | 2 / 2 | 10 / 10 | 0,137 / 0,014 |
-| Лимитированная выдача через ту же функцию | 2 / 2 | 2 / 2 | 10 / 10 | 0,249 / 0,018 |
+| Original dequeue | 15 / 15 | 400 / 400 | 2000 / 400 | 8.307 / 0.059 |
+| Claim only, standard queue | 0 / 0 | 0 / 0 | 0 / 0 | 0.117 / 0.009 |
+| Separate read query with an ID array | 2 / 15 | 2 / 400 | 10 / 400 | 0.120 / 0.075 |
+| Dequeue using server-side function | 2 / 2 | 2 / 2 | 10 / 10 | 0.137 / 0.014 |
+| Limited dequeue using the same function | 2 / 2 | 2 / 2 | 10 / 10 | 0.249 / 0.018 |
 
-На однодневной пачке функция открыла одну партицию при обоих P. В миграции V003 функция получает UUID выданной пачки и планирует внутренний SELECT для этих значений. Пустая выдача пропускает чтение. Время в таблице относится к планированию внешнего прототипа. Полный p99 выдачи, работа вложенного SELECT и пропускная способность требуют парных нагрузочных прогонов.
+For a one-day batch, the function opened one partition at both P values. In migration V003, the function receives the leased batch's UUIDs
+and plans the inner SELECT for those values. An empty dequeue skips the read. The table reports planning time for the outer prototype query.
+End-to-end dequeue p99, the work of the inner SELECT, and throughput require paired load tests.
 
-В окончательном SQL функция объявлена `VOLATILE`. После конкурентной замены партиции внутренний SELECT берёт свежий снимок и видит перенесённые строки. Регрессионный тест воспроизводит замену до коммита при уже начатой выдаче. С `STABLE` все четыре комбинации ошибочно сообщали о пропавшей задаче. С `VOLATILE` они вернули задачу напрямую и через PgBouncer. Повторная проверка конечного SQL на 15 и 400 партициях дала ровно 1 и 2 дочерние таблицы для пачки соответствующих суток, включая первую подготовку и повтор в обоих режимах плана.
+The final SQL declares the function `VOLATILE`. After a concurrent partition replacement, the inner SELECT takes a fresh snapshot and sees the moved rows.
+A regression test starts dequeue while the replacement is still uncommitted. With `STABLE`, all four combinations incorrectly reported a missing job.
+With `VOLATILE`, they returned it directly and via PgBouncer. A recheck of the final SQL at 15 and 400 partitions opened exactly 1 and 2 child tables
+for batches spanning the corresponding number of days, on initial preparation and repeat in both plan modes.
 
-В локальной трассировке считали ответы PostgreSQL `ReadyForQuery` и `CommandComplete` на установленном соединении. Без подготовки обычная и лимитированная выдачи заняли один обмен, сервер исполнил соответственно одну и две команды. С явной подготовкой первый вызов занял два обмена, следующие два вызова — по одному. Числа совпали у контроля и кандидата напрямую и через PgBouncer.
+A local trace counted PostgreSQL `ReadyForQuery` and `CommandComplete` responses on an established connection. Without preparation, standard and
+limited dequeue each took one round trip. The server executed one and two commands respectively. With explicit preparation, the first call took
+two round trips and the next two calls took one each. Counts matched for control and candidate, directly and via PgBouncer.
 
-Два повтора по 200 выдач без конкуренции на кандидате дали в среднем 1,07–1,21 мкс серверного выполнения обычной команды захвата advisory lock и 2,26–2,80 мкс с двумя метками времени. Это калибровка диагностической команды. Ожидание при двух работающих хостах измеряется отдельной гистограммой.
+Two repeats of 200 uncontended dequeues on the candidate averaged 1.07–1.21 µs of server execution for the normal advisory lock acquisition command,
+and 2.26–2.80 µs with two timestamps. This calibrates the diagnostic command. A separate histogram measures wait time with two active hosts.
 
-Проверка отчёта на штатном PostgreSQL с 15 партициями, двумя хостами, PgBouncer и лимитом 32 охватила 20 секунд при 500 постановках/с. Стенд записал 2 117 выдач, из них 767 с задачами и 1 350 пустых. Число отправленных пакетов и замеров advisory lock составило 2 117, число вызовов внутреннего SELECT — 767. При выключенном учёте вложенных запросов стенд явно указал пропущенный `read_jobs` и вернул код 2.
+A report check on stock PostgreSQL used 15 partitions, two hosts, PgBouncer, and a limit of 32 for 20 seconds at 500 enqueues/s.
+The harness recorded 2,117 dequeues, of which 767 returned jobs and 1,350 were empty. It recorded 2,117 batch sends and advisory lock measurements
+and 767 inner SELECT calls. When nested query accounting was disabled, the harness explicitly reported the missing `read_jobs` and exited with code 2.
 
-Для парных прогонов подготовлены две сборки с одинаковой диагностикой. Контроль `1ba3cfc` основан на `ae68c53` и использует прежнее соединение с `jobs`. Кандидат `c3b4611` использует V003. В каждой рабочей копии запустите команду из корня в отдельный каталог результатов. [Матрица режимов и критерии](superpowers/plans/2026-11-20-pgbolt-stock-postgres-and-dequeue.md)
+Two builds with identical diagnostics were prepared for paired runs. Control `1ba3cfc`, based on `ae68c53`, uses the original join to `jobs`.
+Candidate `c3b4611` uses V003. Run the commands from the root of each working copy, with a separate results directory for each.
+[Mode matrix and criteria](superpowers/plans/2026-11-20-pgbolt-stock-postgres-and-dequeue.md)
 
 ```sh
 dotnet run -c Release --project benchmarks/PgBolt.LoadTest -- partitions --mode all --partitions 15,60,200,400 --indexes current --pg-profile stock
 dotnet run -c Release --project benchmarks/PgBolt.LoadTest -- partitions --mode bouncer --partitions 15,200 --indexes current --pg-profile stock --queue-profile limited
 ```
 
-### 3. Хвост задержки и остановка `ramp` совпадают с ростом мёртвых строк `queue` — вход сценария `vacuum`
+### 3. Tail latency and the final `ramp` step coincided with dead tuple growth in `queue` (input to `vacuum`)
 
-**Показатель:** p99.9 SLO 2 (`sustained bouncer`) и p99 SLO 2 ступеней `ramp`. **Цифры:**
-`sustained bouncer` — p99.9 1950,7 мс при пороге 2 с, max 3905 мс; провал в окнах
-540–560 с (p99 1913 и 3553 мс, backlog до 7227) совпадает с `n_dead_tup` `queue` 1,96 млн, пока единственный autovacuum worker
-обрабатывал партицию `jobs_20261018`; после vacuum `queue` (551 с) мёртвых строк 18 тыс., задержка в норме. Остановка `ramp`: `direct` на 14 000/с
-(окна 380–390 с) — `n_dead_tup` `queue` 1,6 млн до прихода autovacuum; `bouncer` на 12 000/с —
-окно 330 с при 1,4–1,5 млн мёртвых строк и autovacuum на партиции `jobs`, окно 350 с (p99 603 мс) при 0,3–0,5 млн — там хвост
-находки 1 на 12 000/с.
-Тот же рисунок — в провалах SLO 1 при P = 60 (находка 2).
+**Metrics.** SLO 2 p99.9 (`sustained bouncer`) and SLO 2 p99 across `ramp` steps. **Measurements.** In `sustained bouncer`, p99.9 was 1950.7 ms
+against a 2 s threshold, with a maximum of 3905 ms. The dip in the 540–560 s windows (p99 of 1913 and 3553 ms, backlog up to 7227) coincided with
+`queue`'s `n_dead_tup` reaching 1.96 million while the only autovacuum worker processed the `jobs_20261018` partition.
+After vacuum on `queue` (551 s), dead tuples fell to 18k and latency returned to normal. In the stopping step of `ramp` `direct` at 14,000/s
+(380–390 s windows), `queue`'s `n_dead_tup` reached 1.6 million before autovacuum arrived. In `bouncer` at 12,000/s, the 330 s window saw
+1.4–1.5 million dead tuples and autovacuum on a `jobs` partition. The 350 s window (p99 603 ms) had 0.3–0.5 million, consistent with the tail
+from finding 1 at 12,000/s. The same pattern appears in the SLO 1 dips at P = 60 (finding 2).
 
-**Классификация:** нарушения SLO профиля B здесь нет: p99.9 `sustained bouncer` в пределах порога, а остановка `ramp` — результат
-измерения, а не нарушение (у `ramp` порогов нет). Вклад мёртвых строк `queue` — вход для выбора reloptions `queue` и глобальных
-параметров autovacuum по сценарию `vacuum`. Справочно: за 11 мин `sustained` — 12 проходов autovacuum по `queue` при росте до
-1,3–2,0 млн мёртвых строк между ними (порог `queue` — 5000 мёртвых строк).
+**Classification.** Profile B met the relevant SLO. The `sustained bouncer` p99.9 stayed within the threshold. The stopping step is a measurement
+for `ramp`, and `ramp` has no acceptance threshold. The contribution of dead tuples in `queue` informs the choice of `queue` reloptions and global autovacuum
+settings in `vacuum`. Over 11 minutes of `sustained`, autovacuum made 12 passes on `queue`. Dead tuples rose to 1.3–2.0 million between
+passes (the `queue` threshold is 5000 dead tuples).
 
-### 4. p99 SLO 2 у `P = 15, current` в `direct-prepared`: 526,3 мс — крупная, в составе находки 1
+### 4. SLO 2 p99 reached 526.3 ms for `P = 15, current` in `direct-prepared` (major, part of finding 1)
 
-**Показатель:** p99 SLO 2, `partitions`, `direct-prepared`, P = 15, `current`. **Цифры:** p50 105,0 мс, p99 526,3 мс при пороге
-500 мс, p99.9 1016,3 мс; в тех же условиях `direct` —
-p99 398,1 мс, `bouncer-prepared` — 412,9 мс. SLO 1 выполнен (мин. 99,0 % rate).
+**Metric.** SLO 2 p99 in `partitions`, `direct-prepared`, P = 15, `current`. **Measurements.** p50 was 105.0 ms, p99 was 526.3 ms versus
+the 500 ms threshold, and p99.9 was 1016.3 ms. Under the same conditions, p99 was 398.1 ms in `direct` and 412.9 ms in `bouncer-prepared`.
+SLO 1 passed (minimum 99.0% of the target rate).
 
-**Обоснование по данным:** prepared здесь ни при чём — dequeue mean exec 0,211 мс против 0,208 мс в `direct`, ожиданий
-`LockManager` нет. Распределение — то же, что в находке 1: backlog готовых в среднем 1303, в 3 из 11 десятисекундных срезов задач
-в lease нет. p99 выше 500 мс — в пяти окнах из 12 (50, 80, 100, 110 и 140 с: 517–844 мс). В окнах 80, 100 и 110 с пик backlog по
-окнам 3957–5015 при `n_dead_tup` `queue` 0,41–1,24 млн без работающего autovacuum (между ними окно 90 с: 3638 при p99 435 мс), в
-окне 50 с — до 3231 при 0,99–1,19 млн — рисунок находки 3.
-Окно 140 с (669,7 мс) им не объясняется: backlog до 2058 при 0,40–0,60 млн мёртвых строк. Превышение порога на 5 % получено в
-одном прогоне, разброс неизвестен.
+**Evidence.** Prepared statements did not explain the result. Dequeue execution averaged 0.211 ms versus 0.208 ms in `direct`, with no
+`LockManager` waits. The distribution matches finding 1. The ready backlog averaged 1303, with no jobs leased in 3 of 11 ten-second samples.
+Five of 12 windows exceeded 500 ms at p99 (50, 80, 100, 110, and 140 s, at 517–844 ms). In the 80, 100, and 110 s windows, backlog
+peaked at 3957–5015, with `queue`'s `n_dead_tup` at 0.41–1.24 million and autovacuum idle. The intervening 90 s window reached 3638 at
+p99 of 435 ms. The 50 s window reached 3231 with 0.99–1.19 million dead tuples. This matches finding 3. That pattern does not explain the
+140 s window (669.7 ms), with backlog up to 2058 and 0.40–0.60 million dead tuples. The 5% threshold overshoot came from one run, so its variation is unknown.
 
-**Классификация: крупная, в составе находки 1; хвост — вход сценария `vacuum` (находка 3).** Отдельного пункта roadmap нет. Если
-после исправлений находок 1 и 3 p99 у `P = 15, current` в каком-либо режиме останется выше 500 мс, нарушение заводится заново.
+**Major, part of finding 1.** The tail informs the `vacuum` scenario (finding 3). There is no separate roadmap item.
+Reopen the finding if p99 for `P = 15, current` still exceeds 500 ms in any mode after fixing findings 1 and 3.
 
-### 5. Autovacuum `queue`: SLO 7–9 не выполняет ни один вариант — крупная
+### 5. No `queue` autovacuum configuration met all of SLOs 7–9 (major)
 
-**Показатель:** SLO 7–9 сценария `vacuum` и входы выбора параметров — пик размера `queue` и p99 SLO 2 фазы 1. **Цифры:** «Результаты»,
-`vacuum`. Входы выбора (строка «Входы выбора параметров autovacuum» отчётов):
+**Metrics.** SLOs 7–9 in `vacuum`, peak `queue` size, and SLO 2 p99 in phase 1. See the `vacuum` results above.
+The reports' “Autovacuum parameter selection inputs” row supplies the following values.
 
-| Вариант | Режим | SLO 7–9 | Пик размера `queue` в фазе 1, МБ | p99 SLO 2 фазы 1, мс |
+| Configuration | Mode | SLO 7–9 | Peak phase 1 `queue` size, MB | Phase 1 SLO 2 p99, ms |
 |---|---|---|---|---|
-| текущие | direct | нет | 147,5 | 412,2 |
-| текущие | bouncer | нет | 258,8 | 18 743,3 |
-| `cost_delay=0` | direct | нет | 181,5 | 811,5 |
-| `cost_delay=0` | bouncer | нет | 261,6 | 24 592,4 |
-| `naptime=10s` | direct | нет | 44,7 | 753,2 |
-| `naptime=10s` | bouncer | нет | 56,3 | 611,8 |
+| current | direct | no | 147.5 | 412.2 |
+| current | bouncer | no | 258.8 | 18,743.3 |
+| `cost_delay=0` | direct | no | 181.5 | 811.5 |
+| `cost_delay=0` | bouncer | no | 261.6 | 24,592.4 |
+| `naptime=10s` | direct | no | 44.7 | 753.2 |
+| `naptime=10s` | bouncer | no | 56.3 | 611.8 |
 
-**Табличный выбор** (`VacuumWinner.Choose`, текущие против `cost_delay=0`): SLO 7–9 в `bouncer` не выполняет ни один вариант —
-остаются текущие reloptions, размер и p99 по правилу не сравниваются. Справочно `cost_delay=0` и по ним не лучше: пик в `bouncer`
-261,6 против 258,8 МБ (равенство), p99 24 592,4 против 18 743,3 мс (хуже на 24 %). Табличный победитель — текущие reloptions,
-`V001__initial.sql` не меняется.
+**Per-table settings.** `VacuumWinner.Choose` compares the current settings with `cost_delay=0`. Neither met SLOs 7–9 in `bouncer`, so
+the rule retained the current reloptions without comparing size or p99. For reference, `cost_delay=0` did no better on either measure.
+Peak size in `bouncer` was 261.6 versus 258.8 MB (a tie under the rule), and p99 was 24,592.4 versus 18,743.3 ms (24% worse).
+The per-table choice was the current reloptions in `V001__initial.sql`.
 
-**Глобальный кандидат** (прогон выполнен, потому что `cost_delay=0` не выполняет SLO 7–9 ни в одном режиме;
-`VacuumWinner.ChooseGlobal`, текущие против `naptime=10s`): SLO 7–9 в `bouncer` не выполняет ни один вариант — остаётся табличный
-победитель. Рекомендация `autovacuum_naptime = 10s` не принимается. Свидетельство для перепроверки: при `naptime=10s` размер `queue`
-в фазе 1 по срезам SLO 7 — 38,7–46,1 МБ против 141,9–247,6 МБ у текущих, рост backlog фазы 1 в `bouncer` устранён (1336 → 7012
-у текущих, 1221 → 1471 у `naptime=10s`; срезов с backlog выше rate 147 → 0), пик `n_dead_tup` фазы 1 в `bouncer` 2,41 → 0,42 млн,
-p99 SLO 2 фазы 1 в `bouncer` 18 743,3 → 611,8 мс; после удержания xmin к концу фазы 3 p99 окна 1,2–1,3 с против переполнения
-(60 с) у текущих в `bouncer`, размер `queue` 385–405 МБ против 498–893 МБ. В `direct` p99 фазы 1 у `naptime=10s` хуже текущих
-(753,2 против 412,2 мс), но у `cost_delay=0` там же 811,5 мс — разброс однократных прогонов `direct` велик; при перепроверке
-сравнивать оба режима: если текущие выполнят SLO 7–9 в `direct`, такое расхождение по правилу выбора оставит текущие.
+**Global settings.** The global test ran because `cost_delay=0` failed to meet SLOs 7–9 in either mode.
+`VacuumWinner.ChooseGlobal` compares the current settings with `naptime=10s`. Neither met SLOs 7–9 in `bouncer`, so the per-table choice
+stood. The measurements did not justify recommending `autovacuum_naptime = 10s`. Several observations warranted a recheck. At `naptime=10s`,
+phase 1 `queue` size in SLO 7 samples was 38.7–46.1 MB versus 141.9–247.6 MB with current settings. The pronounced phase 1 backlog rise in
+`bouncer` disappeared (1336 → 7012 with current settings and 1221 → 1471 at `naptime=10s`, with above-rate samples falling from 147 → 0).
+Peak phase 1 `n_dead_tup` in `bouncer` fell from 2.41 → 0.42 million and phase 1 SLO 2 p99 in `bouncer` from 18,743.3 → 611.8 ms.
+After the xmin hold, end-of-phase-3 window p99 was 1.2–1.3 s versus histogram overflow (60 s) for current settings in `bouncer`.
+Final `queue` size was 385–405 MB versus 498–893 MB. In `direct`, phase 1 p99 with `naptime=10s` was worse than current settings
+(753.2 versus 412.2 ms), but `cost_delay=0` reached 811.5 ms, showing substantial variation across single `direct` runs.
+Recheck both modes. If current settings meet SLOs 7–9 in `direct`, the selection rule retains them given this discrepancy.
 
-**`autovacuum_max_workers`:** оставить по умолчанию (3). Активных autovacuum workers максимум 2 во всех шести прогонах, в фазе 1
-два одновременно — менее чем в 1 % срезов: предел не достигается. Одну таблицу одновременно обрабатывает один worker, поэтому
-дополнительные workers проход по `queue` не ускоряют.
+**`autovacuum_max_workers`.** Keep the default (3). Across six runs, there were at most 2 active autovacuum workers, with two active in fewer than
+1% of phase 1 samples. The limit was never reached. Only one worker processes a table at a time, so adding workers cannot speed up a pass over `queue`.
 
-**Классификация: крупная** — SLO 7–9 не выполняет ни табличный вариант, ни глобальный кандидат, находка уходит в roadmap. SLO 8
-нарушают и p50 (общий вклад, находка 1), и хвост: p99 SLO 2 выше 500 мс в 41–72 окнах фазы 1 в пяти прогонах из шести, в
-`bouncer` у текущих и `cost_delay=0` — 147 и 182 среза с backlog выше rate, у `naptime=10s` — 0. SLO 9 нарушает падение выполнения
-при удержанном xmin (параметрами autovacuum не лечится). Перепроверять имеет смысл после исправления находки 1, отдельно оценивая
-хвост p99 и backlog.
+**Major finding.** Neither the per-table configuration nor the global candidate met SLOs 7–9, so the finding went on the roadmap.
+Both p50 (a shared factor, finding 1) and tail latency contributed to SLO 8 failures. SLO 2 p99 exceeded 500 ms in 41–72 phase 1 windows
+in five of six runs. In `bouncer`, current settings and `cost_delay=0` had 147 and 182 samples with backlog above the rate, and
+`naptime=10s` had 0. The throughput drop while xmin was held breached SLO 9. Autovacuum settings cannot resolve it.
+Recheck after fixing finding 1, evaluating p99 tail latency and backlog separately.
 
-**Пункт roadmap:** 7b-2, «Autovacuum `queue` под нагрузкой B» ([roadmap](superpowers/specs/2026-09-26-pgbolt-roadmap.md#7b-2-производительность-крупные-находки-стенда)): там приведены критерии для этой находки.
+**Roadmap item 7b-2.** “Autovacuum on `queue` under profile B” lists the criteria for this finding. [Roadmap](superpowers/specs/2026-09-26-pgbolt-roadmap.md#7b-2-производительность-крупные-находки-стенда)
 
-### Локальные правки
+### Local fixes
 
-Локальных правок по результатам прогонов нет: находки 1, 2 и 5 классифицированы как крупные (пункты roadmap), находка 4 — в
-составе находки 1, находка 3 — вход сценария `vacuum` (её итог — находка 5); отдельных правок они не вызывают; reloptions `queue`
-не меняются — табличный победитель остаётся текущим (`V001__initial.sql` не менялся).
+The runs produced no local fixes. Findings 1, 2, and 5 were major roadmap items. Finding 4 belongs to finding 1. Finding 3 informed the
+`vacuum` scenario that produced finding 5. None called for a separate patch. The selection rule retained the existing `queue` reloptions
+in `V001__initial.sql`.
 
-Единственная правка продукта, найденная стендом, сделана до полных прогонов: `PgBoltDataSourceFactory` всегда добавляет к
-`ConnectionString` `No Reset On Close=true` (коммит `e2e53ba`). Без этого в режиме `bouncer-prepared` сброс сессии `DISCARD ALL` при
-возврате соединения в пул удалял на сервере подготовленные statement'ы, которые PgBouncer считал живыми, и хост падал на старте с
-ошибкой `prepared statement "…" does not exist`.
+The harness found one product issue before the full runs. `PgBoltDataSourceFactory` now always adds `No Reset On Close=true` to
+`ConnectionString` (commit `e2e53ba`). Previously in `bouncer-prepared`, returning a connection to the pool ran `DISCARD ALL` and removed
+prepared statements from the server while PgBouncer still tracked them. The host then failed on startup with `prepared statement "…" does not exist`.
 
-## Рекомендации
+## Recommendations
 
-Цифры — профиль B (10 000/с) на окружении выше; на другом железе и потоке проверяйте своими прогонами стенда.
+These figures apply to profile B (10,000/s) on the environment above. Run the harness for your own hardware and workload.
 
-**Срок хранения и число партиций.** Число присоединённых партиций `jobs` P = `JobsRetention` в сутках + сегодня +
-`PartitionDaysAhead`, по умолчанию 15; сутки, закреплённые живыми задачами, остаются в P до их ухода. Каждая партиция удорожает
-планирование dequeue (находка 2): при P = 60 SLO 1 нарушен в трёх режимах из четырёх, при P = 200 пропускная способность
-~4,2 тыс./с. Пока dequeue не отсекает партиции, держите P около значения по умолчанию и не увеличивайте `JobsRetention` и
-`PartitionDaysAhead` так, чтобы P приближалось к 60.
+**Retention and partition count.** The number of attached `jobs` partitions P is `JobsRetention` in days + today + `PartitionDaysAhead`,
+or 15 by default. Days pinned by live jobs remain in P until those jobs leave. Before the partition-pruning fix, each partition added to
+dequeue planning time (finding 2). At P = 60, three of four modes failed SLO 1. At P = 200, throughput was ~4.2k/s. On builds without
+dequeue partition pruning, keep P near the default and avoid raising `JobsRetention` and `PartitionDaysAhead` enough to approach 60.
 
-**`max_locks_per_transaction`.** Значение по умолчанию (64) достаточно: ёмкость таблицы блокировок 7808, и даже при P = 400
-(dequeue — 2025 блокировок, 1999 вне fast-path) `storage.errors` = 0, ожиданий `LockManager` — не больше 2 backend'ов, среднее
-≤ 0,05. При росте P раньше таблицы блокировок упирается время планирования dequeue.
+**`max_locks_per_transaction`.** The default of 64 was sufficient. Lock table capacity was 7808. Even at P = 400 (2025 dequeue locks,
+1999 outside the fast path), `storage.errors` = 0, with at most 2 backends waiting on `LockManager` and a mean ≤ 0.05.
+Dequeue planning time became the bottleneck before the lock table filled.
 
-**`autovacuum_naptime`.** Оставить значение по умолчанию (1 мин): `10s` по правилу выбора не принят — SLO 7–9 не выполнил ни один
-вариант (находка 5). Это самый сильный из проверенных рычагов, его перепроверка — пункт roadmap: в `bouncer` пик размера `queue`
-в фазе 1 56,3 МБ против 258,8 МБ, срезов с backlog выше rate 0 против 147; в `direct` p99 фазы 1 хуже (753,2 против 412,2 мс).
-Табличный `autovacuum_vacuum_cost_delay = 0` для `queue` не лучше текущих reloptions.
+**`autovacuum_naptime`.** Keep the 1-minute default. No configuration met SLOs 7–9, so the selection rule rejected `10s` (finding 5).
+Of the tested settings, this had the largest effect and warranted a roadmap recheck. In `bouncer`, peak phase 1 `queue` size was 56.3 MB
+versus 258.8 MB, and 0 versus 147 samples had backlog above the rate. In `direct`, phase 1 p99 was worse (753.2 versus 412.2 ms).
+Per-table `autovacuum_vacuum_cost_delay = 0` on `queue` provided no improvement over the current reloptions.
 
-**`autovacuum_max_workers`.** Значение по умолчанию (3): активных workers максимум 2, два одновременно — менее чем в 1 % срезов;
-одну таблицу обрабатывает один worker, лишние workers проход по `queue` не ускоряют.
+**`autovacuum_max_workers`.** Keep the default of 3. At most 2 workers were active, and fewer than 1% of samples had two.
+One worker handles each table, so extra workers cannot accelerate a pass over `queue`.
 
-**Долгие транзакции.** Транзакция, удерживающая xmin (отчёт, аналитика, отстающая реплика со `hot_standby_feedback`), останавливает
-очистку `queue`: за 5 мин удержания выполнение падает до ~1 тыс./с (среднее 1,8–1,9 тыс./с), `queue` вырастает до 555–585 МБ
-и продолжает расти в фазе восстановления (пик 755–893 МБ); в 3 из 6 прогонов к концу фазы 3 autovacuum вернул размер к
-385–498 МБ, в остальных он остался на пике. Алерты по `pgbolt.cluster.table.*` — в [observability.md](observability.md#статистика-таблиц).
+**Long transactions.** A transaction holding xmin (reporting, analytics, or a lagging replica with `hot_standby_feedback`) prevents cleanup of
+`queue`. During a 5-minute hold, throughput fell to ~1k/s (average 1.8–1.9k/s), and `queue` grew to 555–585 MB. It kept growing in recovery
+(peak 755–893 MB). In 3 of 6 runs, autovacuum reduced its size to 385–498 MB by the end of phase 3. The remaining runs ended at their peak.
+For alerts on `pgbolt.cluster.table.*`, see [Table statistics](observability.md#table-statistics).
 
-**PgBouncer.** `pool_mode=transaction` (statement mode не поддерживается). `default_pool_size=40` на два хоста по 32 воркера и
-продюсера — с запасом: в `sustained bouncer` серверных соединений активно в среднем 1,6, максимум 10, `cl_waiting` 0, `maxwait`
-0 мс. `max_prepared_statements > 0` нужен только с `UsePreparedStatements` (при 0 — ошибки `prepared statement "…" does not exist`);
-стенд использует 200.
+**PgBouncer.** Use `pool_mode=transaction`. Statement mode is unsupported. With two 32-worker hosts and a producer, `default_pool_size=40`
+left ample capacity. In `sustained bouncer`, active server connections averaged 1.6 and peaked at 10, with `cl_waiting` 0 and `maxwait` 0 ms.
+Only `UsePreparedStatements` needs `max_prepared_statements > 0` (at 0 it produces `prepared statement "…" does not exist`). The harness uses 200.
 
-**`UsePreparedStatements`.** Ради производительности не включать: при P = 15 dequeue mean exec 0,211 мс против 0,208 мс, p99
-SLO 2 не лучше (526,3 мс в `direct-prepared` и 412,9 мс в `bouncer-prepared` против 398,1 и 386,6 мс без prepare), под нагрузкой
-dequeue всё равно перепланируется в 71–86 % вызовов; при больших P пропускная способность та же.
+**`UsePreparedStatements`.** The results give no performance reason to enable it. At P = 15, mean dequeue execution was 0.211 ms versus 0.208 ms.
+SLO 2 p99 was 526.3 ms in `direct-prepared` and 412.9 ms in `bouncer-prepared` versus 398.1 and 386.6 ms without preparation. Under load,
+PostgreSQL still replanned 71–86% of dequeue calls. Throughput remained similar at large P.
 
-**Пулы Npgsql.** Хосту с 32 воркерами хватает `Maximum Pool Size=20`, продюсеру — 8: в `direct` на 10 000/с два хоста и продюсер
-занимают не больше 17–18 соединений (прогоны `sustained` и `vacuum`). При прямом подключении сумма `Maximum Pool Size` всех подов должна помещаться в
-`max_connections` за вычетом `superuser_reserved_connections` и соединений других клиентов.
+**Npgsql pools.** `Maximum Pool Size=20` was enough for a 32-worker host, and 8 for the producer. At 10,000/s in `direct`, the two hosts and
+producer used at most 17–18 connections (`sustained` and `vacuum`). With direct connections, the sum of `Maximum Pool Size` across all pods
+must fit within `max_connections` after subtracting `superuser_reserved_connections` and connections for other clients.
 
-## Штатный PostgreSQL в профиле B
+<a name="штатный-postgresql-в-профиле-b"></a>
 
-Локальный Docker Desktop 29.8.0, 6 CPU, 4,8 ГиБ памяти. PostgreSQL 17.11 использовал `shared_buffers=128MB`, `max_wal_size=1GB` и `autovacuum_naptime=1min`. Гарантии записи включены. Профиль B задаёт 10 000 постановок/с, два хоста по 32 воркера и 15 партиций. PgBouncer 1.24.1 работает в режиме транзакций с пулом 40. Прогоны идут последовательно. Отчёты, CSV, снимки PostgreSQL и хеши сборок лежат в локальном каталоге `benchmarks/PgBolt.LoadTest/results/stock-acceptance-20261120201934`.
+## Stock PostgreSQL under profile B
 
-### Десять минут нагрузки после минуты прогрева
+Local Docker Desktop 29.8.0 ran with 6 CPUs and 4.8 GiB of memory. PostgreSQL 17.11 used `shared_buffers=128MB`, `max_wal_size=1GB`,
+and `autovacuum_naptime=1min`, with write durability enabled. Profile B specifies 10,000 enqueues/s, two hosts with 32 workers each, and
+15 partitions. PgBouncer 1.24.1 used transaction pooling with a pool of 40. Runs were sequential. Reports, CSVs, PostgreSQL snapshots,
+and build hashes are in the local directory `benchmarks/PgBolt.LoadTest/results/stock-acceptance-20261120201934`.
 
-| Сборка | Режим | SLO 1–6 | Минимум стартов/с в окне 10 с | p50 / p99 / p99.9 старта, мс | Пик готовых задач | SLO 6 |
+<a name="десять-минут-нагрузки-после-минуты-прогрева"></a>
+
+### Ten minutes of load after a one-minute warmup
+
+| Build | Mode | SLO 1–6 | Minimum starts/s in a 10 s window | Start p50 / p99 / p99.9, ms | Peak ready jobs | SLO 6 |
 |---|---|---|---:|---|---:|---|
-| Контроль `1ba3cfc` | direct | выполнены | 10 003 | 36,6 / 183,6 / 477,4 | 3 753 | 17 соединений |
-| Контроль `1ba3cfc` | bouncer | выполнены | 9 988 | 36,4 / 169,6 / 415,7 | 2 742 | maxwait 0 мс |
-| V003 `7a2e4a0` | direct | выполнены | 9 987 | 35,0 / 146,9 / 344,3 | 2 678 | 18 соединений |
-| V003 и правка промоутера `2847b2f` | direct | выполнены | 9 992 | 34,8 / 137,7 / 298,2 | 2 012 | 18 соединений |
-| V003 `7a2e4a0` | bouncer | выполнены | 9 989 | 35,2 / 152,8 / 340,5 | 2 829 | maxwait 0 мс |
-| V003 и правка промоутера `2847b2f` | bouncer | выполнены | 9 992 | 34,9 / 141,8 / 302,1 | 2 331 | maxwait 0 мс |
-| Финальная `ead32c0` | direct | выполнены | 10 016 | 35,0 / 142,1 / 295,7 | 1 693 | 18 соединений |
-| Финальная `ead32c0` | bouncer | выполнены | 9 951 | 35,2 / 155,8 / 380,7 | 7 297 | maxwait 0 мс |
+| Control `1ba3cfc` | direct | passed | 10,003 | 36.6 / 183.6 / 477.4 | 3,753 | 17 connections |
+| Control `1ba3cfc` | bouncer | passed | 9,988 | 36.4 / 169.6 / 415.7 | 2,742 | maxwait 0 ms |
+| V003 `7a2e4a0` | direct | passed | 9,987 | 35.0 / 146.9 / 344.3 | 2,678 | 18 connections |
+| V003 and promoter fix `2847b2f` | direct | passed | 9,992 | 34.8 / 137.7 / 298.2 | 2,012 | 18 connections |
+| V003 `7a2e4a0` | bouncer | passed | 9,989 | 35.2 / 152.8 / 340.5 | 2,829 | maxwait 0 ms |
+| V003 and promoter fix `2847b2f` | bouncer | passed | 9,992 | 34.9 / 141.8 / 302.1 | 2,331 | maxwait 0 ms |
+| Final `ead32c0` | direct | passed | 10,016 | 35.0 / 142.1 / 295.7 | 1,693 | 18 connections |
+| Final `ead32c0` | bouncer | passed | 9,951 | 35.2 / 155.8 / 380.7 | 7,297 | maxwait 0 ms |
 
-Во всех восьми прогонах продюсер поставил в среднем 10 000 задач/с. Сверка после дренажа показала пустую очередь, ноль пропусков, лишних выполнений и неверных номеров попыток. Первый прогрев контроля через PgBouncer прервали из-за пересечения с тестами стенда. В таблицу вошёл полный повтор на свежих контейнерах.
+All eight runs averaged 10,000 enqueues/s. Reconciliation after draining found an empty queue, zero missing jobs, zero excess executions,
+and zero incorrect attempt numbers. The initial PgBouncer control warmup was interrupted because it overlapped harness tests.
+The table uses a full repeat on fresh containers.
 
-**Промоутер.** Версия `7a2e4a0` возвращала клиенту имя очереди для каждой переведённой задачи. В последних снимках статистики внутри окна замера это 462,7 строки на вызов напрямую и 465,1 через PgBouncer при двух очередях. В `2847b2f` SQL возвращает одну строку с точным числом задач и уникальными именами очередей. Хранилище читает следующую пачку, пока предыдущая полная. Сервер рассылает сигналы по результату одного вызова хранилища.
+**Promoter.** Build `7a2e4a0` returned one queue name to the client for every job promoted. In the last statistics samples within the
+measurement window, that meant 462.7 rows per call directly and 465.1 via PgBouncer for two queues. In `2847b2f`, the SQL returns one
+row with the exact job count and distinct queue names. Storage reads another batch whenever the previous one was full.
+The server sends wakeup signals based on the result of one storage call.
 
-За десять минут число запросов промоутера изменилось с 1 426 до 1 314 напрямую и с 1 420 до 1 278 через PgBouncer. Суммарное серверное время этого SQL изменилось с 4,63 до 4,26 с и с 4,53 до 4,45 с соответственно. В обоих режимах ответ содержит одну строку на пачку. Для каждой пары выполнен один полный прогон, поэтому различие p99 в таблице само по себе не устанавливает выигрыш в задержке старта.
+Over ten minutes, promoter queries went from 1,426 to 1,314 directly and from 1,420 to 1,278 via PgBouncer. Total server time for the
+query went from 4.63 to 4.26 s and from 4.53 to 4.45 s, respectively. In both modes, the response contains one row per batch.
+Each pair had one full run per build, so the p99 differences alone cannot establish a start latency improvement.
 
-### Партиции с обычными очередями
+<a name="партиции-с-обычными-очередями"></a>
 
-Слева в каждой ячейке контроль `1ba3cfc`, справа V003 `7a2e4a0`. На комбинацию приходится 30 с прогрева и 120 с замера. Поток включает первые и повторные старты. Задержка старта относится к немедленным задачам. p99 выдачи измерен на клиенте. Планирование на вызов рассчитано по суммарному времени планирования внешнего запроса и вложенного `read_jobs`, делённому на число вызовов выдачи.
+### Partitions with standard queues
 
-| Режим | P | Старты/с | p99 старта, мс | p99 выдачи, мс | Планирование на вызов, мс | Выполненные SLO |
+In each cell, control `1ba3cfc` appears on the left and V003 `7a2e4a0` on the right. Each combination had a 30 s warmup and 120 s
+measurement. Throughput includes initial starts and retries. Start latency covers immediate jobs. The client measured dequeue p99.
+Planning time per call is the combined planning time for the outer query and nested `read_jobs`, divided by the number of dequeue calls.
+
+| Mode | P | Starts/s | Start p99, ms | Dequeue p99, ms | Planning time per call, ms | SLOs met |
 |---|---:|---:|---:|---:|---:|---|
-| direct | 15 | 10095 / 10094 | 151,7 / 120,8 | 2,689 / 2,493 | 0,449 / 0,316 | 1, 2 / 1, 2 |
-| direct | 60 | 10091 / 10097 | 3723,3 / 123,8 | 4,299 / 2,529 | 1,038 / 0,263 | 1 / 1, 2 |
-| direct | 200 | 4389 / 10102 | 60031,0 / 123,3 | 9,719 / 2,483 | 4,179 / 0,327 | — / 1, 2 |
-| direct | 400 | 2017 / 10101 | 60031,0 / 121,0 | 56,959 / 2,327 | 9,809 / 0,249 | — / 1, 2 |
-| bouncer | 15 | 10090 / 10099 | 127,4 / 124,7 | 2,681 / 2,545 | 0,408 / 0,283 | 1, 2 / 1, 2 |
-| bouncer | 60 | 10100 / 10097 | 249,2 / 139,0 | 4,179 / 2,453 | 0,951 / 0,237 | 1, 2 / 1, 2 |
-| bouncer | 200 | 4484 / 10057 | 60031,0 / 142,3 | 9,607 / 2,617 | 4,095 / 0,277 | — / 1, 2 |
-| bouncer | 400 | 1956 / 10104 | 60031,0 / 463,6 | 59,711 / 2,955 | 10,220 / 0,253 | — / 1, 2 |
-| direct-prepared | 15 | 10099 / 10093 | 117,5 / 583,2 | 1,827 / 2,083 | 0,000 / 0,036 | 1, 2 / 1 |
-| direct-prepared | 60 | 10098 / 10095 | 121,0 / 428,8 | 2,261 / 2,034 | 0,002 / 0,036 | 1, 2 / 1, 2 |
-| direct-prepared | 200 | 4396 / 10095 | 60031,0 / 607,7 | 9,839 / 2,495 | 4,200 / 0,211 | — / 1 |
-| direct-prepared | 400 | 2316 / 10103 | 60031,0 / 146,2 | 18,175 / 1,937 | 8,433 / 0,038 | — / 2 |
-| bouncer-prepared | 15 | 10100 / 10008 | 481,0 / 3782,7 | 2,841 / 7,743 | 0,362 / 0,265 | 1, 2 / — |
-| bouncer-prepared | 60 | 10095 / 10106 | 922,1 / 104,3 | 4,219 / 2,087 | 0,418 / 0,059 | 1 / 1, 2 |
-| bouncer-prepared | 200 | 8764 / 10103 | 11632,6 / 110,6 | 7,675 / 2,283 | 0,472 / 0,247 | — / 1, 2 |
-| bouncer-prepared | 400 | 1986 / 10092 | 60031,0 / 112,7 | 18,815 / 2,125 | 10,464 / 0,037 | — / 1, 2 |
+| direct | 15 | 10095 / 10094 | 151.7 / 120.8 | 2.689 / 2.493 | 0.449 / 0.316 | 1, 2 / 1, 2 |
+| direct | 60 | 10091 / 10097 | 3723.3 / 123.8 | 4.299 / 2.529 | 1.038 / 0.263 | 1 / 1, 2 |
+| direct | 200 | 4389 / 10102 | 60031.0 / 123.3 | 9.719 / 2.483 | 4.179 / 0.327 | — / 1, 2 |
+| direct | 400 | 2017 / 10101 | 60031.0 / 121.0 | 56.959 / 2.327 | 9.809 / 0.249 | — / 1, 2 |
+| bouncer | 15 | 10090 / 10099 | 127.4 / 124.7 | 2.681 / 2.545 | 0.408 / 0.283 | 1, 2 / 1, 2 |
+| bouncer | 60 | 10100 / 10097 | 249.2 / 139.0 | 4.179 / 2.453 | 0.951 / 0.237 | 1, 2 / 1, 2 |
+| bouncer | 200 | 4484 / 10057 | 60031.0 / 142.3 | 9.607 / 2.617 | 4.095 / 0.277 | — / 1, 2 |
+| bouncer | 400 | 1956 / 10104 | 60031.0 / 463.6 | 59.711 / 2.955 | 10.220 / 0.253 | — / 1, 2 |
+| direct-prepared | 15 | 10099 / 10093 | 117.5 / 583.2 | 1.827 / 2.083 | 0.000 / 0.036 | 1, 2 / 1 |
+| direct-prepared | 60 | 10098 / 10095 | 121.0 / 428.8 | 2.261 / 2.034 | 0.002 / 0.036 | 1, 2 / 1, 2 |
+| direct-prepared | 200 | 4396 / 10095 | 60031.0 / 607.7 | 9.839 / 2.495 | 4.200 / 0.211 | — / 1 |
+| direct-prepared | 400 | 2316 / 10103 | 60031.0 / 146.2 | 18.175 / 1.937 | 8.433 / 0.038 | — / 2 |
+| bouncer-prepared | 15 | 10100 / 10008 | 481.0 / 3782.7 | 2.841 / 7.743 | 0.362 / 0.265 | 1, 2 / — |
+| bouncer-prepared | 60 | 10095 / 10106 | 922.1 / 104.3 | 4.219 / 2.087 | 0.418 / 0.059 | 1 / 1, 2 |
+| bouncer-prepared | 200 | 8764 / 10103 | 11632.6 / 110.6 | 7.675 / 2.283 | 0.472 / 0.247 | — / 1, 2 |
+| bouncer-prepared | 400 | 1986 / 10092 | 60031.0 / 112.7 | 18.815 / 2.125 | 10.464 / 0.037 | — / 1, 2 |
 
-Проба выдачи на фиксированном наборе задач у контроля взяла 100, 325, 1 025 и 2 025 блокировок отношений без подготовки, с подготовкой — 35, 125, 405 и 805. У V003 во всех четырёх размерах получилось 30 без подготовки и 14 с подготовкой. В каждой ячейке обеих матриц зарегистрирована одна отправка на вызов выдачи, ноль ошибок выдачи и хранилища. Порог загрузки CPU процесса стенда ни в одной комбинации не достигнут.
+For a fixed job set, the control's dequeue probe acquired 100, 325, 1,025, and 2,025 relation locks without preparation and 35, 125, 405, and 805
+with preparation. At all four partition counts, V003 took 30 locks without preparation and 14 with it. Every cell in both matrices recorded
+one send per dequeue call, zero dequeue errors, and zero storage errors. Harness process CPU stayed below its threshold in every combination.
 
-При P=200 и 400 все четыре режима V003 в среднем держали более 10 000 стартов/с. В исходной матрице V003 на P=15 `direct-prepared` вышел за p99, `bouncer-prepared` также нарушил SLO 1 с недогрузом продюсера. На P=400 в `direct-prepared` SLO 1 нарушен одним окном недогруза, минимум стартов во всех окнах — 96,5 % цели. Значение 60 031 мс — переполнение гистограммы задержки.
+At P=200 and 400, all four V003 modes averaged over 10,000 starts/s. In the original V003 matrix at P=15, `direct-prepared` exceeded the
+p99 threshold. `bouncer-prepared` also failed SLO 1 with producer underload. At P=400 in `direct-prepared`, one underloaded window breached
+SLO 1, and the lowest start rate across all windows was 96.5% of target. A latency of 60,031 ms denotes histogram overflow.
 
-На свежих контейнерах повторили обе пары P=15 с подготовкой. В `direct-prepared` p99 старта составил 128,1 / 136,4 мс, в `bouncer-prepared` — 130,4 / 112,4 мс. Все четыре повтора выполнили SLO 1 и 2. Предыдущие нарушения в матрице остаются в таблице. В первом `bouncer-prepared` с V003 минимальный поток составил 80,2 % цели, одно окно получило недогруз продюсера.
+Both P=15 pairs with preparation ran again on fresh containers. Start p99 was 128.1 / 136.4 ms in `direct-prepared` and 130.4 / 112.4 ms
+in `bouncer-prepared`. All four repeats met SLOs 1 and 2. The original matrix failures remain in the table. In the first
+`bouncer-prepared` run with V003, the minimum throughput was 80.2% of target, with one window of producer underload.
 
-Повтор `direct-prepared` на P=200 дал 4 518 / 10 096 стартов/с, на P=400 — 3 290 / 10 103. Обе комбинации V003 прошли SLO 1 и 2 с p99 старта 102,6 и 104,4 мс. У контроля обе комбинации снова нарушили оба SLO. Сохраняем V003 по выигрышу в выдаче на больших P. Первый проход и повторы показывают разброс отдельных окон с подготовленными запросами.
+The `direct-prepared` repeat delivered 4,518 / 10,096 starts/s at P=200 and 3,290 / 10,103 at P=400.
+Both V003 combinations met SLOs 1 and 2 with start p99 of 102.6 and 104.4 ms. The control again failed both SLOs in both combinations.
+The dequeue improvement at large P justifies retaining V003. The first pass and repeats show per-window variation with prepared statements.
 
-### Очередь с кластерным лимитом 32
+<a name="очередь-с-кластерным-лимитом-32"></a>
 
-Два хоста используют одну очередь через PgBouncer. Таблица показывает среднее число стартов/с, p99 выдачи с точки зрения клиента и серверный p99 захвата advisory lock. Сравнение `1ba3cfc` с `7a2e4a0` меняет чтение определений задач. Сравнение `2847b2f` с `3fb9350` меняет отправку подтверждений.
+### Queue with a cluster-wide limit of 32
 
-| Сборка | P=15, старты/с | P=200, старты/с | p99 выдачи при P=15 / 200, мс | p99 lock при P=15 / 200, мкс |
+Two hosts share one queue via PgBouncer. The table shows mean starts/s, client-side dequeue p99, and server-side advisory lock acquisition p99.
+The change from `1ba3cfc` to `7a2e4a0` affects how job definitions are read. The change from `2847b2f` to `3fb9350` affects ack delivery.
+
+| Build | P=15, starts/s | P=200, starts/s | Dequeue p99 at P=15 / 200, ms | Lock p99 at P=15 / 200, µs |
 |---|---:|---:|---:|---:|
-| Контроль `1ba3cfc` | 1 286 | 991 | 3,639 / 82,047 | 4 / 3 |
-| V003 `7a2e4a0` | 1 300 | 1 210 | 3,167 / 71,103 | 4 / 5 |
-| С правкой промоутера `2847b2f` | 1 302 | 1 214 | 3,163 / 68,607 | 5 / 5 |
-| С досрочным ACK `3fb9350` | 8 124 | 6 814 | 2,467 / 17,423 | 3 / 3 |
-| Повтор `2847b2f` | 1 302 | 1 212 | 3,187 / 69,503 | 4 / 4 |
-| Финальный ACK `ead32c0` | 8 006 | 6 812 | 2,741 / 16,991 | 3 / 3 |
+| Control `1ba3cfc` | 1,286 | 991 | 3.639 / 82.047 | 4 / 3 |
+| V003 `7a2e4a0` | 1,300 | 1,210 | 3.167 / 71.103 | 4 / 5 |
+| With promoter fix `2847b2f` | 1,302 | 1,214 | 3.163 / 68.607 | 5 / 5 |
+| With early ACK `3fb9350` | 8,124 | 6,814 | 2.467 / 17.423 | 3 / 3 |
+| Repeat `2847b2f` | 1,302 | 1,212 | 3.187 / 69.503 | 4 / 4 |
+| Final ACK `ead32c0` | 8,006 | 6,812 | 2.741 / 16.991 | 3 / 3 |
 
-Лимит учитывает задачу до коммита её исхода. При лимите 32 пачка подтверждений по умолчанию (100) не заполнялась, а её таймер ждал 20 мс. При P=15 сборка `2847b2f` за 120 с выполнила 4 835 запросов ACK. В `3fb9350` сервер отправляет пачку досрочно, когда кластерный лимит исчерпан и у этого хоста закончилась работа в очереди. За те же 120 с он выполнил 45 685 запросов ACK. Измеренная цена ускорения — больше коротких транзакций. При обеих величинах P на входе было около 10 000 задач/с, очередь продолжала расти.
+A job counts against the limit until its outcome commits. With a limit of 32, the default ack batch (100) never filled and waited for its 20 ms timer.
+At P=15, build `2847b2f` issued 4,835 ACK queries in 120 s. In `3fb9350`, the server sends the batch early when the cluster limit is exhausted
+and the local host has no more work in that queue. In the same 120 s it issued 45,685 ACK queries. The measured cost of higher throughput was
+more short transactions. At both P values, input was about 10,000 jobs/s and the queue kept growing.
 
-В `ead32c0` буфер также проверяется, если исчерпание лимита стало известно после постановки ACK в буфер или последняя локальная задача завершилась отменой. Тесты с остановленными часами подтверждают освобождение места до таймера и сохранение обычной пачки другой очереди. В повторной паре выигрыш составил 6,1 раза при P=15 и 5,6 раза при P=200. В обеих парах у всех сборок ноль ошибок хранилища и ноль лишних выполнений. SLO 1 и 2 лимитированной очереди остаются открытыми.
+In `ead32c0`, the server also checks the buffer when it learns the limit is exhausted after buffering an ACK, or the last local job finishes
+with cancellation. Tests with a stopped clock confirm capacity becomes available before the timer fires and another queue keeps its normal batch.
+In the repeat pair, throughput rose by factors of 6.1 at P=15 and 5.6 at P=200. Every build in both pairs recorded zero storage errors and
+zero excess executions. SLOs 1 and 2 remain open for the limited queue.
 
-### Очистка очереди и восстановление после длинной транзакции
+<a name="очистка-очереди-и-восстановление-после-длинной-транзакции"></a>
 
-Каждый прогон использовал свежую БД. После двух минут прогрева стенд давал 20 минут обычной нагрузки, удерживал снимок `REPEATABLE READ` пять минут и ещё десять минут продолжал постановки после освобождения снимка. В конце второй фазы стенд проверял соединение внутри той же транзакции. Профиль, индексы и гарантии записи во всех парах одинаковы. Для настройки менялся только `autovacuum_naptime`, с 1 минуты до 10 секунд.
+### Queue cleanup and recovery after a long transaction
 
-В графе SLO 6 для прямого подключения указано максимальное число соединений при пороге 48, для PgBouncer — максимальное ожидание соединения в мс при пороге 100 мс. Пик размера, p99 старта и число окон с нарушением SLO 1–3 относятся к первой фазе. «При xmin» — среднее число стартов/с во второй фазе. T — момент устойчивого восстановления после освобождения снимка, порог 300 с. Прочерк означает, что подходящего окна до конца замера не было.
+Each run used a fresh database. After two minutes of warmup, the harness applied normal load for 20 minutes, held a `REPEATABLE READ`
+snapshot for five minutes, and continued enqueuing for ten minutes after releasing the snapshot. At the end of the second phase, it verified
+the connection inside the same transaction. All pairs used the same workload profile, indexes, and write durability guarantees. Tuning changed
+only `autovacuum_naptime`, from 1 minute to 10 seconds.
 
-| Сборка | Режим | Настройка | SLO 6 | Пик queue, МиБ | p99, мс | Окон с нарушением из 120 | При xmin, стартов/с | T | Лишние выполнения |
+For SLO 6, direct runs show peak connections against a limit of 48. PgBouncer runs show peak connection wait in ms against a limit of 100 ms.
+Peak size, start p99, and the count of windows that failed SLOs 1–3 refer to the first phase. “With xmin held” is mean starts/s in the second phase.
+T measures time to sustained recovery after snapshot release, with a threshold of 300 s. A dash means no qualifying window appeared before measurement ended.
+
+| Build | Mode | Setting | SLO 6 | Peak queue size, MiB | p99, ms | Failed windows out of 120 | With xmin held, starts/s | T | Excess executions |
 |---|---|---|---:|---:|---:|---:|---:|---|---:|
-| `1ba3cfc` | direct | штатный | 18 | 141,8 | 417,8 | 22 | 2 022 | — | 0 |
-| `1ba3cfc` | direct | повтор | 18 | 147,0 | 739,8 | 60 | 2 023 | — | 3 |
-| `1ba3cfc` | direct | 10 с | 18 | 44,0 | 859,1 | 76 | 2 042 | — | 0 |
-| `7a2e4a0` | direct | штатный | 17 | 146,6 | 786,4 | 61 | 2 044 | 590 с | 8 |
-| `ead32c0` | direct | штатный | 20 | 146,0 | 827,9 | 61 | 2 037 | — | 2 |
-| `ead32c0` | direct | повтор | 19 | 150,1 | 763,4 | 74 | 2 046 | — | 0 |
-| `ead32c0` | direct | 10 с | 18 | 42,7 | 254,7 | 12 | 2 014 | — | 0 |
-| `1ba3cfc` | bouncer | штатный | 0,0 | 152,4 | 916,0 | 86 | 1 979 | — | 16 |
-| `1ba3cfc` | bouncer | повтор | 0,0 | 148,2 | 818,7 | 78 | 1 968 | — | 0 |
-| `7a2e4a0` | bouncer | штатный | 215,3 | 152,7 | 775,7 | 51 | 2 006 | — | 0 |
-| `ead32c0` | bouncer | штатный | 0,0 | 156,6 | 880,6 | 88 | 2 010 | — | 0 |
-| `ead32c0` | bouncer | повтор | 0,0 | 149,9 | 823,3 | 75 | 2 022 | — | 0 |
-| `ead32c0` | bouncer | 10 с | 0,0 | 44,6 | 716,3 | 63 | 2 036 | — | 0 |
+| `1ba3cfc` | direct | stock | 18 | 141.8 | 417.8 | 22 | 2,022 | — | 0 |
+| `1ba3cfc` | direct | repeat | 18 | 147.0 | 739.8 | 60 | 2,023 | — | 3 |
+| `1ba3cfc` | direct | 10 s | 18 | 44.0 | 859.1 | 76 | 2,042 | — | 0 |
+| `7a2e4a0` | direct | stock | 17 | 146.6 | 786.4 | 61 | 2,044 | 590 s | 8 |
+| `ead32c0` | direct | stock | 20 | 146.0 | 827.9 | 61 | 2,037 | — | 2 |
+| `ead32c0` | direct | repeat | 19 | 150.1 | 763.4 | 74 | 2,046 | — | 0 |
+| `ead32c0` | direct | 10 s | 18 | 42.7 | 254.7 | 12 | 2,014 | — | 0 |
+| `1ba3cfc` | bouncer | stock | 0.0 | 152.4 | 916.0 | 86 | 1,979 | — | 16 |
+| `1ba3cfc` | bouncer | repeat | 0.0 | 148.2 | 818.7 | 78 | 1,968 | — | 0 |
+| `7a2e4a0` | bouncer | stock | 215.3 | 152.7 | 775.7 | 51 | 2,006 | — | 0 |
+| `ead32c0` | bouncer | stock | 0.0 | 156.6 | 880.6 | 88 | 2,010 | — | 0 |
+| `ead32c0` | bouncer | repeat | 0.0 | 149.9 | 823.3 | 75 | 2,022 | — | 0 |
+| `ead32c0` | bouncer | 10 s | 0.0 | 44.6 | 716.3 | 63 | 2,036 | — | 0 |
 
-Во всех 13 завершённых прогонах SLO 7 выполнен, SLO 8 и 9 нарушены. SLO 6 выполнен в 12 прогонах. Единственное превышение ожидания соединения — 215,3 мс на промежуточной сборке V003. При T = 590 с оставшихся десяти секунд недостаточно для оценки роста backlog после восстановления. Ошибок хранилища во всех 13 прогонах было ноль. В первом штатном прогоне финальной сборки напрямую зарегистрировано два лишних выполнения, в пяти остальных завершённых прогонах этой сборки — ноль. Причина этих двух выполнений по собранным данным не установлена.
+All 13 completed runs passed SLO 7 and failed SLOs 8 and 9. SLO 6 passed in 12 runs. The only excessive connection wait was 215.3 ms on the
+intermediate V003 build. With T = 590 s, the remaining ten seconds were insufficient to evaluate post-recovery backlog growth.
+Storage errors were zero across all 13 runs. The first stock direct run of the final build recorded two excess executions, and the other five completed
+runs on that build recorded zero. The collected data did not establish the cause of the two executions.
 
-**Штатный профиль.** На финальной версии перед удержанием xmin обе попытки в каждом режиме в среднем дали 10 075–10 100 стартов/с. Из 120 окон порог p99 старта 500 мс нарушили 60 и 74 окна напрямую, 85 и 72 через PgBouncer. Пик мёртвых версий `queue` в этой фазе достигал 1,29–1,32 млн. Во всех четырёх прогонах встречался и недогруз продюсера, от трёх до шести окон. В первом прямом прогоне самый медленный интервал постановки дал 7 567 задач/с. В первом прогоне через PgBouncer пять посекундных срезов превысили порог 10 000 готовых задач при нулевом ожидании соединений. Стенд ограничивает счёт готовых задач значением 10 001.
+**Stock settings.** On the final build, each of the two runs per mode averaged 10,075–10,100 starts/s before the xmin hold.
+Of 120 windows, 60 and 74 exceeded the 500 ms start p99 threshold directly, and 85 and 72 via PgBouncer. Dead tuples in `queue` peaked at
+1.29–1.32 million in this phase. All four runs also had producer underload in three to six windows. In the first direct run, the slowest
+enqueue interval delivered 7,567 jobs/s. In the first PgBouncer run, five one-second samples exceeded the 10,000 ready-job limit with zero
+connection wait. The harness caps the ready-job count at 10,001.
 
-**Пять минут с открытым снимком.** На финальной штатной сборке в первом прямом прогоне среднее серверное время выдачи выросло с 0,25 до 25,84 мс на вызов. В среднем сканирование `queue_fetch` читало 103 записи индекса перед удержанием и около 525 тыс. в конце удержания. Через PgBouncer соответствующее время выдачи выросло с 0,25 до 26,52 мс. Расчёт использует разности накопительных счётчиков PostgreSQL между снимками за 90 с внутри последних двух минут каждой фазы. После освобождения снимка средняя скорость в третьей фазе достигла 13 940–14 128 стартов/с в четырёх штатных прогонах финальной сборки. До конца фазы сохранялись отдельные окна с превышением порога p99. Оценка роста backlog после T в этих четырёх отчётах получила «нет данных», поскольку T не наступил.
+**Five minutes with an open snapshot.** In the final build's first stock direct run, mean server-side dequeue time rose from 0.25 to 25.84 ms
+per call. A `queue_fetch` scan read an average of 103 index entries before the hold and about 525k near the end of the hold.
+Via PgBouncer, mean dequeue time rose from 0.25 to 26.52 ms. These figures use differences between cumulative PostgreSQL counters in snapshots
+taken 90 s apart within the last two minutes of each phase. After release, mean throughput in the third phase reached 13,940–14,128 starts/s in the final
+build's four stock runs. Some windows still exceeded the p99 threshold through the end of the phase. All four reports showed “no data”
+for backlog growth after T because none reached T.
 
-**Более частая очистка.** На `ead32c0` в обоих режимах при `10s` число проходов autovacuum по очереди за прогон выросло с 37 до 222. Перед длинной транзакцией пик мёртвых версий упал до 249 тыс. напрямую и 241 тыс. через PgBouncer. При удержании xmin оба режима по-прежнему дали около 2 000 стартов/с. Глобальная настройка сократила объём очереди и число проблемных окон до удержания, но оба режима нарушили SLO 8 и 9. Финальные штатные прогоны записали 64,8–67,5 ГБ WAL и 118–123 запрошенных checkpoint, настроенные — 62,5–65,0 ГБ и 114–118. Эти счётчики охватывают весь прогон и сами по себе не устанавливают причину конкретного медленного окна.
+**More frequent cleanup.** On `ead32c0`, `10s` raised autovacuum passes over the queue from 37 to 222 per run in both modes.
+Before the long transaction, peak dead tuples fell to 249k directly and 241k via PgBouncer. During the xmin hold, both modes still delivered
+about 2,000 starts/s. The global setting reduced queue size and the number of failing windows before the hold, but both modes failed SLOs 8 and 9.
+The final stock runs recorded 64.8–67.5 GB of WAL and 118–123 requested checkpoints. Tuned runs recorded 62.5–65.0 GB and 114–118.
+These counters cover the full run and cannot establish the cause of a particular slow window.
 
-**Выбор профиля.** Для десятиминутного `sustained` со стандартными очередями достаточно штатного PostgreSQL. Для полной приёмки профиля B, включая двадцатиминутную стабильность и восстановление, оба варианта оставляют открытыми SLO 8 и 9. Оснований менять глобальные параметры PostgreSQL по умолчанию нет. Два `sustained` на настроенном экземпляре для рекомендации не требовались после провала обоих `vacuum`. Сценарий `vacuum` завершается без дренажа. Счётчик в таблице показывает наблюдавшиеся лишние выполнения. Полную сверку потерь и попыток дал отдельный `sustained`.
+**Profile choice.** Stock PostgreSQL suffices for a ten-minute `sustained` run with standard queues. For full profile B acceptance, including
+twenty-minute stability and recovery, SLOs 8 and 9 remain open under both configurations. The results give no basis for changing global PostgreSQL
+defaults. After both tuned `vacuum` runs failed, the recommendation did not require two `sustained` runs on the tuned instance.
+The `vacuum` scenario ends without a drain. The table counts observed excess executions. A separate `sustained` run fully reconciled losses and attempt counts.
 
-Серию остановили 21 ноября по решению пользователя. Для контроля `1ba3cfc` с `10s` через PgBouncer успели собрать часть фазы восстановления, итоговые SLO отсутствуют. Повторные `vacuum` на промежуточной сборке `7a2e4a0` пропущены. Первичное превышение SLO 6 на этой сборке осталось без повторной проверки. Все шесть прогонов `vacuum` финальной версии завершены.
+The series stopped on 21 November at the user's request. The `1ba3cfc` control with `10s` via PgBouncer yielded partial recovery-phase data
+and no final SLO results. Repeat `vacuum` runs on intermediate build `7a2e4a0` were skipped, leaving its initial SLO 6 breach unverified by a repeat.
+All six `vacuum` runs on the final build completed.

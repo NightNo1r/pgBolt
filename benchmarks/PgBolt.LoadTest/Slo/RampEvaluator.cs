@@ -3,22 +3,22 @@ using PgBolt.LoadTest.Measure;
 namespace PgBolt.LoadTest.Slo;
 
 /// <summary>
-/// Ступень <c>ramp</c>: оцениваемые окна (с начала второй трети ступени) и сводка задержки немедленных
-/// за эти окна вместе.
+/// A <c>ramp</c> step with its evaluated windows, starting at the second third of the step, and immediate-job latency aggregated across those
+/// windows.
 /// </summary>
 internal sealed record RampStep(int Rate, IReadOnlyList<WindowStats> Evaluated, LatencySummary Immediate);
 
 /// <summary>
-/// <see cref="MaxSustainedRate"/> — поток последней ступени без нарушения (<c>null</c> — нарушена первая);
-/// <see cref="FirstViolation"/> — «SLO 1», «SLO 2», «enqueue» или «стенд»; <see cref="LimitedByStand"/> —
-/// рост остановлен упором в CPU стенда.
+/// <see cref="MaxSustainedRate"/> is the last step's rate without a violation (<c>null</c> if the first step failed).
+/// <see cref="FirstViolation"/> is “SLO 1”, “SLO 2”, “enqueue”, or “harness”. <see cref="LimitedByStand"/> indicates that harness CPU saturation
+/// stopped the ramp.
 /// </summary>
 internal sealed record RampResult(int? MaxSustainedRate, string? FirstViolation, bool LimitedByStand);
 
-/// <summary>Поиск максимального устойчивого потока: ступени по порядку до первой с нарушением.</summary>
+/// <summary>Finds the maximum sustainable rate by evaluating steps in order until the first violation.</summary>
 internal static class RampEvaluator
 {
-    private const string Stand = "стенд";
+    private const string Stand = "harness";
 
     public static RampResult Evaluate(IReadOnlyList<RampStep> steps)
     {

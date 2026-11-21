@@ -5,8 +5,8 @@ using PgBolt.Benchmarks.Infrastructure;
 namespace PgBolt.Benchmarks.Benchmarks;
 
 /// <summary>
-/// Set из N потоков при одном ожидающем в цикле (как цикл диспетчера: WaitAsync с таймаутом, Set из рабочих потоков).
-/// Всего 120 000 Set на вызов, поровну между потоками; результат — время на один Set (агрегированно по всем потокам).
+/// N threads call Set while one waiter loops, as in the dispatcher with timed WaitAsync and worker Set calls. Splits 120,000 Set calls equally
+/// among threads per invocation. Reports aggregate time per Set.
 /// </summary>
 [Config(typeof(BenchConfig))]
 public class AutoResetEventSetBenchmarks
@@ -75,8 +75,8 @@ public class AutoResetEventSetBenchmarks
 }
 
 /// <summary>
-/// Ping-pong: Set(ping) → await WaitAsync(pong) против эхо-цикла await WaitAsync(ping) → Set(pong). Время на один
-/// круг (два пробуждения через пул потоков, RunContinuationsAsynchronously). Перцентили по отдельным кругам — режим --latency.
+/// Ping-pong pairs Set(ping) and WaitAsync(pong) with an echo loop waiting on ping and setting pong. Measures one round trip, including two
+/// thread-pool wakeups with RunContinuationsAsynchronously. The --latency mode reports individual round-trip percentiles.
 /// </summary>
 [Config(typeof(BenchConfig))]
 public class AutoResetEventPingPongBenchmarks
@@ -145,8 +145,8 @@ public class AutoResetEventPingPongBenchmarks
 }
 
 /// <summary>
-/// Холостой WaitAsync без Set: таймаут 0 — синхронный путь (латча нет → false); 1 мс — ожидающий, таймер, TimeoutException
-/// внутри, снятие ожидающего. Стоимость и аллокации одного вызова.
+/// Measures time and allocations for an idle WaitAsync without Set. A zero timeout returns false synchronously without a latch. A 1 ms timeout
+/// creates a waiter and timer, handles TimeoutException internally, and removes the waiter.
 /// </summary>
 [Config(typeof(BenchConfig))]
 public class AutoResetEventIdleWaitBenchmarks

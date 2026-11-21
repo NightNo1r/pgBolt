@@ -4,13 +4,13 @@ using PgBolt.Benchmarks.Copies;
 namespace PgBolt.Benchmarks.Alternatives;
 
 /// <summary>
-/// Вариант (б) «дешёвый lock»: та же логика, что <see cref="LockCompletionSink"/>, но под lock только создание
-/// незапущенной задачи отправки и её регистрация в _sends (StopAsync видит её в снимке и дожидается); Start() и
-/// ContinueWith (снятие из _sends) — после выхода из lock.
+/// Variant (b), a shorter critical section. Uses the same logic as <see cref="LockCompletionSink"/>, but only creates the unstarted send task
+/// and registers it in _sends under the lock so StopAsync can see and await it. Start() and the ContinueWith that removes it from _sends run
+/// outside the lock.
 /// </summary>
 /// <remarks>
-/// Риск: задача, зарегистрированная под lock, запускается вызывающим потоком после lock. Если он не дойдёт до Start
-/// (исключение между ними — здесь его неоткуда взять), StopAsync будет ждать её вечно.
+/// The registering thread must reach Start after releasing the lock. An exception in between would leave StopAsync waiting forever, although
+/// nothing in that interval can throw here.
 /// </remarks>
 internal sealed class CheapLockCompletionSink : ICompletionSink
 {
@@ -147,7 +147,7 @@ internal sealed class CheapLockCompletionSink : ICompletionSink
         _ackTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
-    /// <summary>Под lock: незапущенная задача и её прокси (Unwrap) в _sends — StopAsync, снявший снимок, её дождётся.</summary>
+    /// <summary>Under the lock, puts the unstarted task's Unwrap proxy in _sends so a concurrent StopAsync snapshot will wait for it.</summary>
     private PendingSend CreateSendLocked(Func<Task> send)
     {
         var start = new Task<Task>(send);
@@ -158,7 +158,7 @@ internal sealed class CheapLockCompletionSink : ICompletionSink
 
     private readonly record struct PendingSend(Task<Task>? Outer, Task? Task)
     {
-        /// <summary>Вне lock: запуск и снятие из _sends по завершении.</summary>
+        /// <summary>Outside the lock, starts the task and removes it from _sends on completion.</summary>
         public void Start(ConcurrentDictionary<Task, byte> sends)
         {
             if (Outer is null)

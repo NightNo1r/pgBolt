@@ -7,10 +7,10 @@ using PgBolt.LoadTest.Slo;
 namespace PgBolt.LoadTest.Run;
 
 /// <summary>
-/// Общее состояние прогона одного режима: его пишут обработчик задачи (из DI хостов) и продюсер, читают окна,
-/// срез и сверка корректности.
+/// Shared state for a run in one mode. Job handlers resolved from host DI and the producer write it. Window collection, sampling, and
+/// correctness checks read it.
 /// </summary>
-/// <param name="capacity">Верхняя оценка числа задач прогона: размер внешнего массива счётчика выполнений.</param>
+/// <param name="capacity">Upper estimate of jobs in the run, used to size the execution counter's outer array.</param>
 internal sealed class RunContext(long capacity, QueueProfile queues = QueueProfile.Standard)
 {
     private long _executed;
@@ -19,16 +19,16 @@ internal sealed class RunContext(long capacity, QueueProfile queues = QueueProfi
     public QueueProfile Queues { get; } = queues;
     public ExecutionCounter Counter { get; } = new(capacity);
 
-    /// <summary>Выполнений всего, включая падения первой попытки.</summary>
+    /// <summary>Total executions, including failed first attempts.</summary>
     public long Executed => Interlocked.Read(ref _executed);
 
     public LatencyRecorder Immediate { get; } = new();
     public LatencyRecorder Delayed { get; } = new();
 
-    /// <summary><c>Seq</c> задач из вызовов <c>EnqueueManyAsync</c>, завершившихся исключением.</summary>
+    /// <summary><c>Seq</c> values from <c>EnqueueManyAsync</c> calls that threw.</summary>
     public ConcurrentBag<long> FailedCallSeqs { get; } = [];
 
-    /// <summary><c>Seq</c> задач, падающих на первой попытке.</summary>
+    /// <summary><c>Seq</c> values of jobs that fail on their first attempt.</summary>
     public ConcurrentBag<long> FailFirstSeqs { get; } = [];
 
     public void CountExecution(long seq)
@@ -38,9 +38,8 @@ internal sealed class RunContext(long capacity, QueueProfile queues = QueueProfi
     }
 
     /// <summary>
-    /// Лишние выполнения среди первых <paramref name="issued"/> <c>Seq</c> для прогона без дренажа: выполнений больше
-    /// ожидаемого — дубль и без дренажа, а нехватку не отличить от задачи, которая ещё не дошла. Вызывать после
-    /// остановки хостов.
+    /// Counts excess executions among the first <paramref name="issued"/> <c>Seq</c> values for a run without a drain. Excess executions are
+    /// duplicates even without draining. A missing execution may simply be pending. Call after stopping the hosts.
     /// </summary>
     public long DuplicatedExecutions(long issued) =>
         ExecutionReconciler.Reconcile(Counter, issued, FailFirstSeqs.ToHashSet(), FailedCallSeqs.ToHashSet()).Duplicated;

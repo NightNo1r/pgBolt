@@ -2,28 +2,27 @@ using System.Threading.Channels;
 
 namespace PgBolt.LoadTest.Load;
 
-/// <summary>Пачка, готовая к вызову <c>EnqueueManyAsync</c>; <c>LoadArgs</c> из неё собирает вызывающий.</summary>
-/// <param name="DelaySeconds">0 у немедленной пачки, 1..30 у отложенной.</param>
-/// <param name="EnqueuedAtMicros">Одна метка на пачку, взятая непосредственно перед отправкой.</param>
+/// <summary>Batch ready for <c>EnqueueManyAsync</c>. The caller builds <c>LoadArgs</c> from it.</summary>
+/// <param name="DelaySeconds">0 for an immediate batch, or 1–30 for a delayed batch.</param>
+/// <param name="EnqueuedAtMicros">One timestamp per batch, taken immediately before sending.</param>
 internal sealed record SendRequest(BatchKey Key, IReadOnlyList<JobDraft> Jobs, int DelaySeconds, long EnqueuedAtMicros)
 {
     public long RunAtMicros => EnqueuedAtMicros + DelaySeconds * 1_000_000L;
 }
 
-/// <param name="Generated">Выдано задач.</param>
-/// <param name="Dropped">Токенов отброшено сверх потолка.</param>
-/// <param name="MaxGeneratorWait">Самое долгое ожидание генератором места в канале пачек.</param>
+/// <param name="Generated">Jobs issued.</param>
+/// <param name="Dropped">Tokens discarded above the bucket capacity.</param>
+/// <param name="MaxGeneratorWait">Longest time the generator waited for space in a batch channel.</param>
 internal readonly record struct PipelineStats(long Generated, long Dropped, TimeSpan MaxGeneratorWait);
 
 /// <summary>
-/// Продюсер без БД: генератор по токенам выдаёт задачи профиля, собирает их в пачки и через ограниченный
-/// канал на ключ отдаёт отправителям. Если места для пачки ключа нет, генератор ждёт и не списывает токены:
-/// они копятся в бакете до потолка и после освобождения канала выдаются, а излишек бакет отбрасывает и считает.
-/// Поэтому в памяти не больше задач, чем вмещают каналы и пачки в сборке.
+/// Database-independent producer. The generator spends tokens to issue jobs from the profile, assembles batches, and feeds senders through a
+/// bounded channel per key. If a channel is full, the generator waits without spending tokens. Tokens accumulate up to capacity for later use.
+/// The bucket counts and discards excess tokens. Queued jobs in memory are bounded by channel capacity and batches under construction.
 /// </summary>
 /// <remarks>
-/// Исключение <c>send</c> (как и <c>nowMicros</c>, <c>pickDelaySeconds</c>) останавливает остальных: генератор
-/// перестаёт ждать место в канале, а <see cref="RunAsync"/> и <see cref="StopAsync"/> завершаются с этим исключением.
+/// An exception from <c>send</c>, <c>nowMicros</c>, or <c>pickDelaySeconds</c> stops the pipeline. The generator stops waiting for channel
+/// space. Both <see cref="RunAsync"/> and <see cref="StopAsync"/> report the exception.
 /// </remarks>
 internal sealed class ProducerPipeline(
     ProfileB profile,
@@ -51,16 +50,16 @@ internal sealed class ProducerPipeline(
     private long _maxWaitTicks;
     private long _windowMaxWaitTicks;
 
-    /// <summary>Накопительные значения с начала работы.</summary>
+    /// <summary>Cumulative values since startup.</summary>
     public PipelineStats Stats =>
         new(Interlocked.Read(ref _generated), bucket.Dropped, TimeSpan.FromTicks(Interlocked.Read(ref _maxWaitTicks)));
 
-    /// <summary>Меняет поток и потолок бакета вместе.</summary>
+    /// <summary>Updates the rate and bucket capacity together.</summary>
     public void SetRate(int rate) => bucket.SetRate(rate);
 
     /// <summary>
-    /// Значения с прошлого вызова: приращения <c>Generated</c> и <c>Dropped</c> и максимум ожидания;
-    /// значения окна сбрасываются. Рассчитан на один вызывающий поток.
+    /// Returns changes in <c>Generated</c> and <c>Dropped</c> and the maximum wait since the previous call, then resets the window. Intended for one
+    /// caller thread.
     /// </summary>
     public PipelineStats TakeWindow()
     {
@@ -72,10 +71,7 @@ internal sealed class ProducerPipeline(
             TimeSpan.FromTicks(Interlocked.Exchange(ref _windowMaxWaitTicks, 0)));
     }
 
-    /// <summary>
-    /// Цикл генератора; останавливается по <paramref name="ct"/> после начатого прохода. Если отправитель
-    /// упал, завершается с его исключением.
-    /// </summary>
+    /// <summary>Runs the generator until <paramref name="ct"/> is cancelled, finishing the current pass. Propagates sender failures.</summary>
     public async Task RunAsync(CancellationToken ct)
     {
         _senders = [.. Enumerable.Range(0, senders).Select(_ => SendLoopAsync())];
@@ -113,8 +109,8 @@ internal sealed class ProducerPipeline(
     }
 
     /// <summary>
-    /// Обнуляет поток, досылает неполные пачки и ждёт отправителей; если отправитель упал, завершается с его
-    /// исключением. Вызывать после завершения <see cref="RunAsync"/>.
+    /// Sets the rate to zero, flushes partial batches, and waits for senders. Propagates sender failures. Call after <see cref="RunAsync"/>
+    /// completes.
     /// </summary>
     public async Task StopAsync()
     {

@@ -6,9 +6,9 @@ using BenchmarkDotNet.Jobs;
 namespace PgBolt.Benchmarks.Infrastructure;
 
 /// <summary>
-/// Общий конфиг: один Job для всей сетки (2 процесса × (4 прогрева + 12 замеров по ~250 мс)) — запуск в двух процессах
-/// ловит разброс размещения потоков на P/E-ядрах между процессами. MemoryDiagnoser — аллокации на операцию (по всем
-/// потокам процесса), ThreadingDiagnoser — конкуренция за lock'и и work items пула на операцию.
+/// Shared configuration uses one job for the parameter grid: two processes, each with four warmups and twelve measurements of about 250 ms. Two
+/// processes capture variation in thread placement on performance and efficiency cores. MemoryDiagnoser reports allocations per operation across
+/// process threads. ThreadingDiagnoser reports lock contention and thread-pool work items per operation.
 /// </summary>
 public sealed class BenchConfig : ManualConfig
 {

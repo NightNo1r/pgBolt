@@ -5,37 +5,39 @@ using PgBolt.Benchmarks.Infrastructure;
 
 namespace PgBolt.Benchmarks.Benchmarks;
 
-/// <summary>Фоновый перевзвод таймера сроков.</summary>
+/// <summary>Background deadline timer rearming.</summary>
 public enum RearmMode
 {
-    /// <summary>Перевзводов нет.</summary>
+    /// <summary>No background rearming.</summary>
     None,
 
-    /// <summary>Rearm раз в ~1 мс (Thread.Sleep(1)).</summary>
+    /// <summary>Rearms about once per millisecond with Thread.Sleep(1).</summary>
     Periodic1ms,
 
     /// <summary>
-    /// Rearm каждые ~10 мкс (активное ожидание; при 100 записях Rearm длится единицы мкс — lock занят заметную долю
-    /// времени). Без паузы вовсе поток Rearm, перезахватывающий несправедливый lock, морит регистрацию голодом — это уже
-    /// не замер, а патология (см. README).
+    /// Rearms about every 10 µs using a spin wait. With 100 entries, Rearm takes several microseconds, so the lock is often held. Without a pause,
+    /// repeated acquisition of the unfair lock starves registration and measures a pathological case (see README).
     /// </summary>
     Periodic10us,
 }
 
-/// <summary>Порядок рубежей новых регистраций.</summary>
+/// <summary>Ordering of deadlines for new registrations.</summary>
 public enum DeadlineOrder
 {
-    /// <summary>Каждый новый рубеж позже взведённого (как в продукте: validUntil = fetchStartedAt + LeaseDuration растёт) — ArmAtMost ничего не меняет.</summary>
+    /// <summary>
+    /// Each new deadline is later than the armed one, matching increasing validUntil = fetchStartedAt + LeaseDuration in production. ArmAtMost
+    /// leaves the timer alone.
+    /// </summary>
     Increasing,
 
-    /// <summary>Каждый новый рубеж раньше всех — ArmAtMost понижает рубеж и вызывает Change каждый раз (худший случай).</summary>
+    /// <summary>Each new deadline is earlier than all others, forcing ArmAtMost to lower it and call Change every time (worst case).</summary>
     Decreasing,
 }
 
 /// <summary>
-/// LeaseKeeper.Register (new Execution + Add + ArmAtMost) и откат Unregister (Running → Removed + Remove) на потоке
-/// диспетчера (поток бенчмарка) при 100 фоновых записях и фоновом Rearm в отдельном потоке; таймер — заглушка.
-/// 10 000 пар Register/Unregister на вызов; результат — время на пару.
+/// Measures LeaseKeeper.Register (new Execution, Add, ArmAtMost) and rollback via Unregister (Running to Removed, then Remove) on the dispatcher
+/// benchmark thread. Uses 100 background entries, a separate Rearm thread, and a stub timer. Reports time per pair across 10,000
+/// Register/Unregister pairs per invocation.
 /// </summary>
 [Config(typeof(BenchConfig))]
 public class LeaseKeeperBenchmarks

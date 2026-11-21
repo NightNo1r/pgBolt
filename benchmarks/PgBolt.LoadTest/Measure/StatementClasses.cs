@@ -1,8 +1,8 @@
 namespace PgBolt.LoadTest.Measure;
 
 /// <summary>
-/// Класс statement'а <c>pg_stat_statements</c> по фрагменту текста SQL <c>PgBoltStore</c>. Фрагменты — только
-/// идентификаторы и ключевые слова: <c>pg_stat_statements</c> заменяет параметры и константы на <c>$n</c>.
+/// Classifies <c>pg_stat_statements</c> rows using SQL fragments from <c>PgBoltStore</c>. Fragments contain only identifiers and keywords
+/// because <c>pg_stat_statements</c> replaces parameters and constants with <c>$n</c>.
 /// </summary>
 internal static class StatementClasses
 {
@@ -16,7 +16,7 @@ internal static class StatementClasses
     public const string Enqueue = "enqueue";
     public const string Promoter = "promoter";
 
-    /// <summary>Классы, которые профиль нагрузки выполняет в любом окне замера.</summary>
+    /// <summary>Statement classes executed by the load profile in every measurement window.</summary>
     public static readonly IReadOnlyList<string> Required = [Dequeue, Ack, Outcome, Heartbeat, Enqueue, Promoter];
 
     private static readonly (string Class, string Fragment)[] Fragments =
@@ -32,7 +32,7 @@ internal static class StatementClasses
         (Promoter, "FROM p WHERE q.job_id = p.job_id"),
     ];
 
-    /// <summary>Класс запроса; <c>null</c> — запрос не PgBolt или подходит сразу к нескольким классам.</summary>
+    /// <summary>Returns the query class, or <c>null</c> when the query is outside PgBolt or matches multiple classes.</summary>
     public static string? Classify(string query)
     {
         var matches = Fragments.Where(f => query.Contains(f.Fragment, StringComparison.Ordinal)).Take(2).ToList();

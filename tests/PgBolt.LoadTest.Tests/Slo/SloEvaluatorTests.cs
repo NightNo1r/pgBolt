@@ -7,7 +7,7 @@ namespace PgBolt.LoadTest.Tests.Slo;
 
 public sealed class SloEvaluatorTests
 {
-    private const string StandMark = "ограничено стендом";
+    private const string StandMark = "harness-limited";
 
     // У SLO 4 и SLO 9 по два вердикта: первый — проверка по срезам или окнам, второй — сравнение минут.
     private static SloVerdict Part(IReadOnlyList<SloVerdict> verdicts, int number, int part) =>

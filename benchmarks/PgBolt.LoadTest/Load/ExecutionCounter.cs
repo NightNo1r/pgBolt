@@ -1,10 +1,9 @@
 namespace PgBolt.LoadTest.Load;
 
 /// <summary>
-/// Сколько раз выполнена каждая задача: зубчатый массив кусков по 2^20 счётчиков, индекс — <c>Seq</c>.
-/// Внешний массив ссылок фиксирован по верхней оценке числа задач, а кусок до выдачи первого <c>Seq</c>
-/// из него создаёт и публикует генератор: так инкремент в обработчике идёт по уже опубликованному куску,
-/// а рост ничего не копирует (копирование теряло бы инкременты по старому массиву).
+/// Counts executions per job using chunks of 2^20 counters indexed by <c>Seq</c>. The outer reference array is sized for the upper job-count
+/// estimate. The generator publishes a chunk before issuing its first <c>Seq</c>, so handlers increment existing counters. Growth never copies
+/// counters, which would lose concurrent increments on the old array.
 /// </summary>
 internal sealed class ExecutionCounter(long capacity)
 {
@@ -13,14 +12,14 @@ internal sealed class ExecutionCounter(long capacity)
 
     private readonly int[]?[] _chunks = new int[(capacity + ChunkMask) >> ChunkBits][];
 
-    /// <summary>Создаёт кусок для <paramref name="seq"/>, если его ещё нет. Вызывает только генератор.</summary>
+    /// <summary>Creates the chunk for <paramref name="seq"/> if needed. Only the generator calls this.</summary>
     public void EnsureChunk(long seq)
     {
         var chunk = (int)(seq >> ChunkBits);
         if (_chunks[chunk] is null) Volatile.Write(ref _chunks[chunk], new int[1 << ChunkBits]);
     }
 
-    /// <summary>Добавляет выполнение; возвращает новое значение. Кусок должен существовать.</summary>
+    /// <summary>Records one execution and returns the new count. The chunk must already exist.</summary>
     public int Increment(long seq) => Interlocked.Increment(ref Slot(seq));
 
     public int Get(long seq) => Volatile.Read(ref Slot(seq));

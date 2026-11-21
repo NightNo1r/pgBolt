@@ -8,9 +8,8 @@ using PgBolt.LoadTest.Measure;
 namespace PgBolt.LoadTest.Run;
 
 /// <summary>
-/// Продюсер нагрузки: свой хост PgBolt без сервера и <see cref="ProducerPipeline"/>, который отправляет пачки через
-/// <c>EnqueueManyAsync</c>. Ошибка вызова не останавливает генерацию: она считается, а <c>Seq</c> пачки уходят в
-/// <see cref="RunContext.FailedCallSeqs"/>.
+/// Load producer with its own serverless PgBolt host and a <see cref="ProducerPipeline"/> sending batches via <c>EnqueueManyAsync</c>. A failed
+/// call is counted without stopping generation. Its batch's <c>Seq</c> values go to <see cref="RunContext.FailedCallSeqs"/>.
 /// </summary>
 internal sealed class Producer : IAsyncDisposable
 {
@@ -41,11 +40,11 @@ internal sealed class Producer : IAsyncDisposable
             TimeProvider.System, ctx.Counter.EnsureChunk);
     }
 
-    /// <summary>Выдано задач с начала генерации.</summary>
+    /// <summary>Jobs issued since generation started.</summary>
     public long Issued => _pipeline.Stats.Generated;
 
-    /// <param name="connectionString">Строка режима: напрямую или через PgBouncer.</param>
-    /// <param name="rate">Начальный поток задач в секунду.</param>
+    /// <param name="connectionString">Connection string for the run mode, direct or through PgBouncer.</param>
+    /// <param name="rate">Initial target rate in jobs per second.</param>
     public static async Task<Producer> StartAsync(string connectionString, string schema, LoadMode mode, RunContext ctx,
         int rate, CancellationToken ct)
     {
@@ -67,10 +66,10 @@ internal sealed class Producer : IAsyncDisposable
         return producer;
     }
 
-    /// <summary>Меняет поток и потолок накопления токенов (секунда нового потока).</summary>
+    /// <summary>Changes the target rate and token capacity together. Capacity equals one second at the new rate.</summary>
     public void SetRate(int rate) => _pipeline.SetRate(rate);
 
-    /// <summary>Статистика с прошлого вызова; значения окна сбрасываются.</summary>
+    /// <summary>Returns statistics since the last call and resets the window.</summary>
     public ProducerWindow TakeWindow()
     {
         var pipeline = _pipeline.TakeWindow();
@@ -79,7 +78,7 @@ internal sealed class Producer : IAsyncDisposable
             pipeline.Dropped);
     }
 
-    /// <summary>Останавливает генерацию и досылает начатые пачки; падение отправителя — исключением.</summary>
+    /// <summary>Stops generation and flushes partial batches. Propagates sender failures.</summary>
     public Task StopAsync() => _stop ??= StopCoreAsync();
 
     private async Task StopCoreAsync()

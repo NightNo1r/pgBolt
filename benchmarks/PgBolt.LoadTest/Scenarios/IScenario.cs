@@ -4,12 +4,12 @@ using PgBolt.LoadTest.Report;
 
 namespace PgBolt.LoadTest.Scenarios;
 
-/// <summary>Сценарий стенда; код возврата — 0, 1 или 2. Сбой стенда — исключением.</summary>
+/// <summary>Harness scenario returning exit code 0, 1, or 2. Harness failures propagate as exceptions.</summary>
 internal interface IScenario
 {
     Task<int> RunAsync(LoadTestOptions options, CancellationToken ct);
 
-    /// <summary>Режимы по очереди в одном окружении без <c>track_planning</c>; код — наибольший по режимам.</summary>
+    /// <summary>Runs modes sequentially in one environment without <c>track_planning</c>. Returns the highest exit code across modes.</summary>
     static async Task<int> RunModesAsync(LoadTestOptions options, Func<LoadEnvironment, LoadMode, Task<int>> runMode,
         CancellationToken ct)
     {
@@ -20,7 +20,7 @@ internal interface IScenario
         return code;
     }
 
-    /// <summary>Пишет отчёт прогона и печатает его путь.</summary>
+    /// <summary>Writes a run report and prints its path.</summary>
     static async Task ReportAsync(string outDir, ReportModel model) =>
-        Console.WriteLine($"Отчёт: {await ReportWriter.WriteAsync(outDir, model)}");
+        Console.WriteLine($"Report: {await ReportWriter.WriteAsync(outDir, model)}");
 }

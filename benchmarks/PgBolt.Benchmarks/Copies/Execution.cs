@@ -4,7 +4,7 @@
 
 namespace PgBolt.Benchmarks.Copies;
 
-/// <summary>Копия PgBolt.Postgres.Storage.LeaseRef.</summary>
+/// <summary>Copy of PgBolt.Postgres.Storage.LeaseRef.</summary>
 internal readonly record struct LeaseRef(Guid JobId, Guid LeaseId);
 
 internal enum ExecutionState { Running, OutcomePending, OutcomeInFlight, Removed }
@@ -47,7 +47,7 @@ internal sealed class Execution
 
     public long OutcomeFirstAttemptAt { get; set; }
 
-    /// <summary>Только для бенчмарков: возврат переиспользуемой записи в Running между вызовами (в продукте нет).</summary>
+    /// <summary>Benchmark-only reset of a reused entry to Running between invocations.</summary>
     internal void ResetForReuse()
     {
         Volatile.Write(ref _state, (int)ExecutionState.Running);
@@ -94,7 +94,7 @@ internal sealed class Execution
     };
 }
 
-/// <summary>Копия src/PgBolt.Server/Runtime/JobOutcome.cs @ 52b4a8f, только нужные бенчмарку исходы.</summary>
+/// <summary>Copy of src/PgBolt.Server/Runtime/JobOutcome.cs at 52b4a8f, limited to outcomes used by the benchmark.</summary>
 internal abstract record JobOutcome
 {
     public sealed record Ack : JobOutcome;

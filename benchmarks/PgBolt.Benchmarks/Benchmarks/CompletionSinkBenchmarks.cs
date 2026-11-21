@@ -6,14 +6,13 @@ using PgBolt.Benchmarks.Infrastructure;
 namespace PgBolt.Benchmarks.Benchmarks;
 
 /// <summary>
-/// Пропускная способность CompletionSink.Complete(ack) из N рабочих потоков; AckBatchSize = 100 и AckFlushInterval = 20 мс
-/// (умолчания PgBoltServerOptions), настоящий таймер TimeProvider.System, отправка пакета — заглушка (Task.Run + переходы
-/// состояний). 120 000 Complete на вызов поровну между потоками; результат — время на один Complete (агрегированно).
+/// Measures CompletionSink.Complete(ack) throughput from N workers with the PgBoltServerOptions defaults (AckBatchSize = 100, AckFlushInterval =
+/// 20 ms). Uses a real TimeProvider.System timer and a stub send (Task.Run plus state transitions). Splits 120,000 calls equally across workers
+/// and reports aggregate time per Complete.
 /// </summary>
 /// <remarks>
-/// Записи переиспользуются: 4 поколения по 120 000, каждый поток перед своими Complete возвращает свою долю поколения в
-/// Running (≈1 нс на запись, одинаково для всех вариантов). Отправки предыдущего использования поколения к этому моменту
-/// давно завершены (три вызова назад).
+/// Reuses four generations of 120,000 entries. Before its calls, each thread resets its share to Running (about 1 ns per entry, identical across
+/// variants). The previous sends for the generation finished three invocations earlier.
 /// </remarks>
 [Config(typeof(BenchConfig))]
 public class CompletionSinkBenchmarks
@@ -77,7 +76,8 @@ public class CompletionSinkBenchmarks
     [Benchmark(OperationsPerInvoke = TotalOps)]
     public void Complete_LockFree() => Run(_runLockFree);
 
-    /// <summary>Lock-free с дренажом только на инкременте, давшем ровно AckBatchSize (без шторма CAS на флаге дренажёра).</summary>
+    /// <summary>Lock-free drain triggered only by the increment that reaches exactly AckBatchSize, avoiding contention on the drainer
+    /// flag.</summary>
     [Benchmark(OperationsPerInvoke = TotalOps)]
     public void Complete_LockFreeExactTrigger() => Run(_runLockFreeExact);
 

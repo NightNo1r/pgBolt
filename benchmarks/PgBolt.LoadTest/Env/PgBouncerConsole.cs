@@ -4,9 +4,8 @@ using DotNet.Testcontainers.Containers;
 namespace PgBolt.LoadTest.Env;
 
 /// <summary>
-/// Админ-консоль своего PgBouncer. Она принимает только simple query protocol, а Npgsql шлёт команды через
-/// extended protocol и при открытии загружает типы, поэтому команды идут через <c>psql</c> в контейнере
-/// PostgreSQL: он в той же сети, а <c>psql</c> есть в образе.
+/// Admin console for the local PgBouncer. It accepts only the simple query protocol. Npgsql uses the extended protocol and loads types on
+/// connection, so commands run through <c>psql</c> in the PostgreSQL container. It shares the network and its image includes <c>psql</c>.
 /// </summary>
 internal sealed class PgBouncerConsole(IContainer postgres, string host, int port, string user, string password)
 {
@@ -16,12 +15,12 @@ internal sealed class PgBouncerConsole(IContainer postgres, string host, int por
     public async Task<int?> MaxPreparedStatementsAsync(CancellationToken ct) =>
         PgBouncerOutputParser.ParseMaxPreparedStatements(await PsqlAsync("SHOW CONFIG", ct));
 
-    /// <summary>Строка вида <c>PgBouncer 1.24.1</c>.</summary>
+    /// <summary>A version string such as <c>PgBouncer 1.24.1</c>.</summary>
     public async Task<string> VersionAsync(CancellationToken ct) => (await PsqlAsync("SHOW VERSION", ct)).Trim();
 
     /// <summary>
-    /// Зависший PgBouncer не должен блокировать срез и копить процессы в контейнере: psql завершает
-    /// <c>timeout</c> внутри контейнера, отмена вызова — страховка, если не завершился сам exec.
+    /// Runs psql under <c>timeout</c> inside the container so a stalled PgBouncer cannot block sampling or leave processes behind. Cancelling the
+    /// call also bounds a stalled container exec.
     /// </summary>
     private const int PsqlTimeoutSeconds = 10;
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(PsqlTimeoutSeconds + 5);

@@ -4,11 +4,11 @@ using PgBolt.LoadTest.Slo;
 
 namespace PgBolt.LoadTest.Run;
 
-/// <summary>Проверка корректности после остановки продюсера и дренажа.</summary>
+/// <summary>Checks correctness after the producer stops and work drains.</summary>
 internal static class CorrectnessCheck
 {
-    /// <param name="issued">Выдано задач продюсером после его остановки.</param>
-    /// <returns><see cref="CorrectnessData.DrainedInTime"/> = <c>true</c>: итог дренажа выставляет сценарий.</returns>
+    /// <param name="issued">Number of jobs issued by the time the producer stopped.</param>
+    /// <returns><see cref="CorrectnessData.DrainedInTime"/> is <c>true</c> here. The scenario supplies the final drain result.</returns>
     public static async Task<CorrectnessData> RunAsync(string connectionString, string schema, RunContext ctx,
         long issued, MeterCounters counters, CancellationToken ct)
     {

@@ -29,7 +29,7 @@ public sealed class StandCancelTests(PostgresFixture pg) : IDisposable
         Assert.Equal(2, code);
         var text = await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(_out, "*.md")),
             TestContext.Current.CancellationToken);
-        Assert.Contains("прерван", text);
+        Assert.Contains("aborted", text);
         var schema = Regex.Match(text, "load_[0-9a-f]{12}").Value;
         Assert.NotEqual("", schema);
         Assert.Equal(0L, await LoadEnvironmentTests.ScalarAsync<long>(pg.DirectConnectionString,

@@ -2,18 +2,17 @@ namespace PgBolt.LoadTest.Measure;
 
 internal enum TickDecision
 {
-    /// <summary>Предыдущий срез ещё идёт: тик пропускается.</summary>
+    /// <summary>Skips the tick while the previous sample is still running.</summary>
     Skip,
     Sample,
-    /// <summary>Срез вместе с 10-секундным счётом отложенных задач и задач в lease.</summary>
+    /// <summary>Sample that includes the 10-second count of delayed and leased jobs.</summary>
     SampleWithCounts,
 }
 
 /// <summary>
-/// Расписание среза без ввода-вывода. Тики не накапливаются: тик во время идущего среза пропускается,
-/// следующий срез — на первом тике после завершения. Попытка, в которой не выполнился ни один запрос,
-/// неудачна; <paramref name="maxConsecutiveFailures"/> неудач подряд означают потерю соединения стенда.
-/// Не потокобезопасно: вызывающий сериализует вызовы.
+/// Sampling schedule without I/O. Ticks never accumulate. A tick during collection is skipped, and the next sample starts on the first tick
+/// after completion. An attempt fails if every query fails. After <paramref name="maxConsecutiveFailures"/> consecutive failures, the harness
+/// considers the connection lost. The caller serializes access.
 /// </summary>
 internal sealed class SamplerSchedule(TimeSpan period, int maxConsecutiveFailures = 30)
 {

@@ -3,9 +3,8 @@ using Npgsql;
 namespace PgBolt.LoadTest.Env;
 
 /// <summary>
-/// Служебные соединения стенда (срез, проба блокировок, удержание xmin, подготовка схемы) помечаются общим
-/// префиксом <c>application_name</c>: срез не считает их backend'ами PgBolt. Хосты и продюсер называются
-/// <c>pgbolt-load-*</c> и с префиксом не пересекаются.
+/// Harness connections for sampling, probing locks, holding xmin, and preparing the schema share an <c>application_name</c> prefix. Sampling
+/// excludes them from PgBolt backend counts. Host and producer connections use <c>pgbolt-load-*</c>, a distinct prefix.
 /// </summary>
 internal static class StandConnection
 {
@@ -14,7 +13,7 @@ internal static class StandConnection
     public static NpgsqlConnectionStringBuilder For(string connectionString, string purpose) =>
         new(connectionString) { ApplicationName = ApplicationNamePrefix + purpose };
 
-    /// <summary>Открытое служебное соединение; при сбое открытия оно освобождается.</summary>
+    /// <summary>Opens a harness connection, disposing it if opening fails.</summary>
     public static async Task<NpgsqlConnection> OpenAsync(string connectionString, string purpose, CancellationToken ct)
     {
         var conn = new NpgsqlConnection(For(connectionString, purpose).ConnectionString);

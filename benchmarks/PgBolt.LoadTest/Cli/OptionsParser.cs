@@ -2,10 +2,10 @@ using System.Globalization;
 
 namespace PgBolt.LoadTest.Cli;
 
-/// <summary>Результат разбора: либо параметры, либо текст ошибки.</summary>
+/// <summary>Parse result containing options or an error message.</summary>
 internal sealed record ParseResult(LoadTestOptions? Options, string? Error);
 
-/// <summary>Разбор командной строки вида <c>&lt;сценарий&gt; [--флаг значение]...</c>.</summary>
+/// <summary>Parses <c>&lt;scenario&gt; [--flag value]...</c> command lines.</summary>
 internal static class OptionsParser
 {
     private static readonly TimeSpan MinRampStepDuration = TimeSpan.FromSeconds(30);
@@ -32,7 +32,7 @@ internal static class OptionsParser
     private static readonly Scenario[] WithRate = [Scenario.Sustained, Scenario.Partitions, Scenario.Vacuum];
     private const string PgProfileFlag = "--pg-profile";
 
-    /// <summary>Флаг → сценарии, в которых он допустим.</summary>
+    /// <summary>Maps each flag to the scenarios that accept it.</summary>
     private static readonly Dictionary<string, Scenario[]> Flags = new()
     {
         ["--mode"] = AllScenarios,
@@ -72,21 +72,21 @@ internal static class OptionsParser
     private static LoadTestOptions Build(IReadOnlyList<string> args)
     {
         if (args.Count == 0 || !Scenarios.TryGetValue(args[0], out var scenario))
-            throw new FormatException($"Первым аргументом нужен сценарий: {string.Join('|', Scenarios.Keys)}.");
+            throw new FormatException($"Specify a scenario as the first argument: {string.Join('|', Scenarios.Keys)}.");
 
         var values = ReadFlags(args, scenario);
         var defaults = new LoadTestOptions { Scenario = scenario, Modes = [] };
         var connection = values.GetValueOrDefault("--connection");
         var bouncer = values.GetValueOrDefault("--bouncer-connection");
         if (bouncer is not null && connection is null)
-            throw new FormatException("--bouncer-connection допустим только вместе с --connection.");
+            throw new FormatException("--bouncer-connection requires --connection.");
         if (connection is not null && values.ContainsKey("--pg-setting"))
-            throw new FormatException("--pg-setting нельзя вместе с --connection: параметры задаются только своему контейнеру.");
+            throw new FormatException("--pg-setting cannot be used with --connection. Settings apply only to containers started by the harness.");
 
         // У внешнего сервера свой профиль, его фактические параметры читаются после подключения.
         if (connection is not null && values.ContainsKey(PgProfileFlag))
         {
-            throw new FormatException($"{PgProfileFlag} нельзя вместе с --connection.");
+            throw new FormatException($"{PgProfileFlag} cannot be used with --connection.");
         }
 
         var warmup = scenario switch
@@ -106,13 +106,13 @@ internal static class OptionsParser
             {
                 null or "standard" => QueueProfile.Standard,
                 "limited" => QueueProfile.Limited,
-                var raw => throw new FormatException($"--queue-profile: ожидается standard|limited, получено {raw}."),
+                var raw => throw new FormatException($"--queue-profile: expected standard|limited, got {raw}."),
             },
             PgProfile = values.GetValueOrDefault(PgProfileFlag) switch
             {
                 null or "bench" => PostgresProfile.Bench,
                 "stock" => PostgresProfile.Stock,
-                var raw => throw new FormatException($"{PgProfileFlag}: ожидается stock|bench, получено {raw}."),
+                var raw => throw new FormatException($"{PgProfileFlag}: expected stock|bench, got {raw}."),
             },
             Out = values.GetValueOrDefault("--out") ?? defaults.Out,
             Rate = Number(values, "--rate", defaults.Rate),
@@ -135,7 +135,7 @@ internal static class OptionsParser
             PgSettings = Pairs(values, "--pg-setting"),
         };
         if (options.RampStart > options.RampMax)
-            throw new FormatException($"--ramp-start ({options.RampStart}) больше --ramp-max ({options.RampMax}).");
+            throw new FormatException($"--ramp-start ({options.RampStart}) exceeds --ramp-max ({options.RampMax}).");
         return options;
     }
 
@@ -146,11 +146,11 @@ internal static class OptionsParser
         {
             var flag = args[i];
             if (!Flags.TryGetValue(flag, out var allowed))
-                throw new FormatException($"Неизвестный флаг {flag}.");
+                throw new FormatException($"Unknown flag {flag}.");
             if (!allowed.Contains(scenario))
-                throw new FormatException($"Флаг {flag} не применим к сценарию {args[0]}.");
+                throw new FormatException($"Flag {flag} does not apply to scenario {args[0]}.");
             if (i + 1 >= args.Count)
-                throw new FormatException($"У флага {flag} нет значения.");
+                throw new FormatException($"Missing value for {flag}.");
             values[flag] = args[i + 1];
         }
 
@@ -174,11 +174,11 @@ internal static class OptionsParser
         }
 
         if (!Modes.TryGetValue(raw, out var modes))
-            throw new FormatException($"Неизвестный режим {raw}: {string.Join('|', Modes.Keys)}.");
+            throw new FormatException($"Unknown mode {raw}. Expected {string.Join('|', Modes.Keys)}.");
         if (!partitions && modes.Any(m => m is LoadMode.DirectPrepared or LoadMode.BouncerPrepared))
-            throw new FormatException($"Режим {raw} допустим только в сценарии partitions.");
+            throw new FormatException($"Mode {raw} is available only for the partitions scenario.");
         if (connection is not null && bouncer is null && modes.Any(m => m is LoadMode.Bouncer or LoadMode.BouncerPrepared))
-            throw new FormatException($"Режим {raw} с --connection требует --bouncer-connection.");
+            throw new FormatException($"Mode {raw} with --connection requires --bouncer-connection.");
         return modes;
     }
 
@@ -191,9 +191,9 @@ internal static class OptionsParser
 
         var span = ParseDuration(flag, raw);
         if (multipleOf10 && span.TotalSeconds % 10 != 0)
-            throw new FormatException($"{flag}: длительность должна быть кратна 10 с, получено {raw}.");
+            throw new FormatException($"{flag}: duration must be a multiple of 10 s, got {raw}.");
         if (min is { } m && span < m)
-            throw new FormatException($"{flag}: длительность не короче {m.TotalSeconds:0} с, получено {raw}.");
+            throw new FormatException($"{flag}: duration must be at least {m.TotalSeconds:0} s, got {raw}.");
         return span;
     }
 
@@ -203,7 +203,7 @@ internal static class OptionsParser
         // Единица проверяется первой: у пустой строки нечего отрезать.
         if (unit is not ('s' or 'm' or 'h') ||
             !int.TryParse(raw[..^1], NumberStyles.None, CultureInfo.InvariantCulture, out var n) || n <= 0)
-            throw new FormatException($"{flag}: ожидается длительность вида 30s, 2m, 1h, получено {raw}.");
+            throw new FormatException($"{flag}: expected a duration such as 30s, 2m or 1h, got {raw}.");
 
         return unit switch
         {
@@ -219,13 +219,13 @@ internal static class OptionsParser
     private static int Number(string flag, string raw) =>
         int.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var n) && n > 0
             ? n
-            : throw new FormatException($"{flag}: ожидается положительное целое, получено {raw}.");
+            : throw new FormatException($"{flag}: expected a positive integer, got {raw}.");
 
     private static IndexSet ParseIndexSet(string raw) => raw switch
     {
         "current" => IndexSet.Current,
         "extra" => IndexSet.Extra,
-        _ => throw new FormatException($"--indexes: ожидается current|extra, получено {raw}."),
+        _ => throw new FormatException($"--indexes: expected current|extra, got {raw}."),
     };
 
     private static Dictionary<string, string> Pairs(Dictionary<string, string> values, string flag)
@@ -238,7 +238,7 @@ internal static class OptionsParser
         {
             var eq = pair.IndexOf('=');
             if (eq <= 0)
-                throw new FormatException($"{flag}: ожидается список k=v, получено {pair}.");
+                throw new FormatException($"{flag}: expected a list of k=v pairs, got {pair}.");
             result[pair[..eq]] = pair[(eq + 1)..];
         }
 

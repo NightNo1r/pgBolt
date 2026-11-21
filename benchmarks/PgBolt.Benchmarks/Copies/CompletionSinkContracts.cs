@@ -1,6 +1,6 @@
 namespace PgBolt.Benchmarks.Copies;
 
-/// <summary>Общий контракт вариантов CompletionSink (ack-путь), чтобы бенчмарк и проверка работали с любым.</summary>
+/// <summary>Shared acknowledgment contract for CompletionSink variants used by the benchmarks and verifier.</summary>
 internal interface ICompletionSink
 {
     void Start();
@@ -11,8 +11,8 @@ internal interface ICompletionSink
 }
 
 /// <summary>
-/// Заглушка отправки (вместо SendAckBatchAsync/SendSingleAsync и IServerStore): переходы OutcomePending → OutcomeInFlight →
-/// Removed и удаление из таблицы, как при успешном ack, без БД. Считает отправленные записи для проверки.
+/// Stub for SendAckBatchAsync, SendSingleAsync, and IServerStore. Transitions OutcomePending to OutcomeInFlight to Removed and removes the entry
+/// as a successful ack would, without a database. Counts sends for verification.
 /// </summary>
 internal sealed class AckSendStub(ExecutionTable table)
 {
@@ -23,7 +23,7 @@ internal sealed class AckSendStub(ExecutionTable table)
 
     public long Batches => Interlocked.Read(ref _batches);
 
-    /// <summary>Вызывается для каждой отправленной записи (проверка: ровно один раз, до конца StopAsync).</summary>
+    /// <summary>Called for every sent entry. Verification requires exactly one call per entry before StopAsync completes.</summary>
     public Action<Execution>? OnSent { get; set; }
 
     public Task SendAckBatchAsync(List<Execution> batch)

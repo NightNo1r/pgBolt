@@ -71,7 +71,7 @@ public sealed class RampEvaluatorTests
         // Одно окно из четырёх (25 %) — упор больше чем в 10 % окон ступени.
         var result = RampEvaluator.Evaluate([Step(2_000), Step(4_000, (i, w) => i == 0 ? w with { CpuFraction = 0.9 } : w)]);
 
-        Assert.Equal(new RampResult(2_000, "стенд", true), result);
+        Assert.Equal(new RampResult(2_000, "harness", true), result);
     }
 
     [Fact]

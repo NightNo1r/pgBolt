@@ -4,27 +4,26 @@ using PgBolt.Benchmarks.Copies;
 namespace PgBolt.Benchmarks.Alternatives;
 
 /// <summary>
-/// Вариант (в) lock-free ack-путь: ConcurrentQueue + счётчик + единственный дренажёр (флаг через CAS) + остановка по Деккеру.
-/// Прототип поддерживает только ack (остальные исходы в продукте уходят поштучно — здесь NotSupportedException).
+/// Variant (c), lock-free acknowledgments using ConcurrentQueue, a counter, a single drainer elected by CAS, and a Dekker-style stop protocol.
+/// The prototype supports only acknowledgments. Other production outcomes are sent individually and throw NotSupportedException here.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Пакет: Complete публикует запись (Enqueue, затем Interlocked.Increment счётчика). Достигнут AckBatchSize — пытается
-/// стать дренажёром (CAS 0→1 на _draining); не вышло — держатель после освобождения (Interlocked.Exchange — полный
-/// барьер) перечитает счётчик и заберёт полный пакет (Деккер: либо CAS увидит 0, либо держатель увидит инкремент).
+/// Complete publishes via Enqueue followed by Interlocked.Increment. At AckBatchSize it tries to claim _draining by CAS from 0 to 1. If that
+/// fails, the holder releases with Interlocked.Exchange (a full barrier), rereads the count, and drains a full batch. Either the CAS sees 0 or
+/// the holder sees the increment.
 /// </para>
 /// <para>
-/// Окно: таймер вручную не снимается. Флаг _timerArmed: Complete после публикации взводит таймер, если флаг 0 (CAS 0→1);
-/// срабатывание сначала сбрасывает флаг (Exchange), затем забирает всё. Деккер: запись, опубликованная после сброса,
-/// либо видна этому дренажу, либо её Complete видит флаг 0 и взводит таймер — хвост не остаётся без таймера. Не удалось
-/// стать дренажёром — таймер взводится снова. Отличие от продукта: окно отсчитывается от первого элемента после
-/// последнего срабатывания таймера, а не после последнего сброса, — хвост может уйти раньше, но не позже окна.
+/// The timer is never manually disarmed. After publishing, Complete arms it by changing _timerArmed from 0 to 1 with CAS. When the timer fires,
+/// it clears the flag with Exchange and drains all entries. A later entry is either visible to this drain or its Complete sees 0 and arms the
+/// timer. If the drainer is busy, the timer is armed again. Unlike production, the window starts at the first entry after the last timer firing,
+/// so the tail may flush earlier but never later than the window.
 /// </para>
 /// <para>
-/// Остановка: как в продукте, пока есть отправки — сброс и ожидание; затем _stopped = 1 (Interlocked.Exchange), захват
-/// флага дренажёра навсегда, финальный дренаж и ожидание всех отправок. Complete после публикации перечитывает _stopped
-/// (полный барьер инкремента): видит 1 — пытается вернуть запись (OutcomePending → Removed); не вышло — её уже забрал
-/// финальный дренаж, исход будет отправлен (true). Не видит 1 — финальный дренаж гарантированно видит запись.
+/// As in production, stop flushes and waits while sends remain, sets _stopped to 1 with Interlocked.Exchange, acquires the drainer flag
+/// permanently, drains once more, and waits for all sends. After publishing, Complete rereads _stopped after the increment's full barrier. On 1
+/// it tries to reclaim its entry (OutcomePending to Removed). If reclaiming fails, the final drain already owns it and Complete returns true. If
+/// it sees 0, the final drain is guaranteed to see the entry.
 /// </para>
 /// </remarks>
 internal sealed class LockFreeCompletionSink : ICompletionSink
@@ -45,10 +44,9 @@ internal sealed class LockFreeCompletionSink : ICompletionSink
     private int _timerArmed;
 
     /// <param name="exactTrigger">
-    /// false — дренаж пробует каждый Complete, увидевший count ≥ AckBatchSize (пока дренажёр занят, это шторм неудачных
-    /// CAS на одной кэш-линии); true — только тот, чей инкремент дал ровно AckBatchSize. Достаточно: счётчик растёт
-    /// только инкрементами по одному и всегда проходит через это значение, а состояния count ≥ AckBatchSize, возникшие
-    /// при занятом флаге, перепроверяет держатель после освобождения.
+    /// If false, every Complete that sees count ≥ AckBatchSize tries to drain, generating failed CAS operations on one cache line while the drainer
+    /// is busy. If true, only the call incrementing the count to exactly AckBatchSize tries. The count rises one at a time and must pass that value.
+    /// The flag holder rechecks for a full batch after releasing the flag.
     /// </param>
     public LockFreeCompletionSink(ExecutionTable table, AckSendStub sender, int ackBatchSize, TimeSpan ackFlushInterval, MonoClock clock,
         bool exactTrigger = false)
@@ -153,7 +151,7 @@ internal sealed class LockFreeCompletionSink : ICompletionSink
             Volatile.Read(ref _ackTimer)?.Change(_ackFlushInterval, Timeout.InfiniteTimeSpan);
     }
 
-    /// <returns>false — флаг дренажёра занят с первой попытки (его держатель перепроверит счётчик).</returns>
+    /// <returns>False if the drainer flag was busy on the first attempt. Its holder will recheck the count.</returns>
     private bool Drain(bool all)
     {
         var acquired = false;
@@ -177,7 +175,7 @@ internal sealed class LockFreeCompletionSink : ICompletionSink
         }
     }
 
-    /// <summary>Остановка: ждёт текущего держателя и берёт флаг (как Drain(all) с ожиданием).</summary>
+    /// <summary>During shutdown, waits for the current drainer and acquires its flag, like a blocking Drain(all).</summary>
     private void FlushAll()
     {
         var spin = new SpinWait();
@@ -203,7 +201,7 @@ internal sealed class LockFreeCompletionSink : ICompletionSink
             spin.SpinOnce();
     }
 
-    /// <summary>Только держатель флага. all = false — только полный пакет (по счётчику).</summary>
+    /// <summary>Only the flag holder can drain. With all = false, drains only full batches according to the count.</summary>
     private List<Execution>? TakeBatch(bool all)
     {
         if (!all && Volatile.Read(ref _count) < _ackBatchSize)

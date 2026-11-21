@@ -2,7 +2,8 @@ using PgBolt.LoadTest.Load;
 
 namespace PgBolt.LoadTest.Run;
 
-/// <summary>Задача нагрузки: учёт выполнения, задержка старта первой попытки, падение первой попытки, работа.</summary>
+/// <summary>Load job that counts executions, records first-attempt start latency, optionally fails the first attempt, and performs
+/// work.</summary>
 internal sealed class LoadJob(RunContext ctx) : IJob<LoadArgs>
 {
     public static readonly JobDescriptor Descriptor = new("load.job", "default", MaxAttempts: 10, Priority: 0, null);
@@ -22,7 +23,7 @@ internal sealed class LoadJob(RunContext ctx) : IJob<LoadArgs>
             else ctx.Delayed.Record(now - args.RunAtMicros);
 
             if (args.FailFirstAttempt)
-                throw new InvalidOperationException($"Задача {args.Seq} падает на первой попытке.");
+                throw new InvalidOperationException($"Job {args.Seq} fails on its first attempt.");
         }
 
         await Task.Delay(args.WorkMillis, cancellationToken);

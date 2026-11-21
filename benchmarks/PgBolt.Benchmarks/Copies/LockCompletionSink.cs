@@ -7,7 +7,7 @@ namespace PgBolt.Benchmarks.Copies;
 // Заменено: SendAckBatchAsync/SendSingleAsync → AckSendStub (без БД и backoff); логирование опущено (холодные ветки);
 // PgBoltServerOptions → (ackBatchSize, ackFlushInterval); EnqueueRegistered не нужен бенчмарку.
 
-/// <summary>Вариант (а): текущий — всё под одним lock, включая Task.Run и ContinueWith в StartSend.</summary>
+/// <summary>Variant (a), the current implementation. One lock covers all operations, including Task.Run and ContinueWith in StartSend.</summary>
 internal sealed class LockCompletionSink : ICompletionSink
 {
     private readonly ExecutionTable _table;

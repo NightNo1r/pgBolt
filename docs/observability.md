@@ -1,312 +1,306 @@
-# Observability: трассировка, метрики, логи
+# Observability with traces, metrics, and logs
 
-PgBolt отдаёт стандартные сигналы для стека OpenTelemetry → Prometheus / Tempo / Loki:
+PgBolt emits standard telemetry for an OpenTelemetry stack with Prometheus, Tempo, and Loki.
 
-- **трассировка**: producer-span при постановке задачи и consumer-span её выполнения в одном трейсе;
-- **метрики**: метрики пода (аддитивные) и кластерные (`pgbolt.cluster.*`), готовые к `histogram_quantile`;
-- **логи**: события жизненного цикла задачи, scope задачи и стабильные `EventId` для алертов.
+- **Traces** connect the producer span that enqueues a job and the consumer span that executes it in a single trace.
+- **Metrics** cover individual pods and the cluster (`pgbolt.cluster.*`). Pod metrics are additive, and the histograms support `histogram_quantile`.
+- **Logs** include job lifecycle events, a per-job logging scope, and stable `EventId` values for alerts.
 
-Ядро использует только BCL (`System.Diagnostics.ActivitySource` и `System.Diagnostics.Metrics.Meter`) и не зависит от OpenTelemetry SDK;
-без подписчиков телеметрия почти ничего не стоит (см. [Стоимость](#стоимость)).
+The core uses only the BCL (`System.Diagnostics.ActivitySource` and `System.Diagnostics.Metrics.Meter`) and has no dependency on the OpenTelemetry SDK.
+Telemetry adds little overhead without subscribers. See [Overhead](#overhead).
 
-- [Подключение](#подключение)
-- [Трассировка](#трассировка)
-- [Метрики](#метрики)
-- [Кластерные метрики и агрегация](#кластерные-метрики-и-агрегация)
-- [Кардинальность](#кардинальность)
-- [Логи](#логи)
-- [Примеры PromQL](#примеры-promql)
-- [Стоимость](#стоимость)
+- [Setup](#setup)
+- [Tracing](#tracing)
+- [Metrics](#metrics)
+- [Cluster metrics and aggregation](#cluster-metrics-and-aggregation)
+- [Cardinality](#cardinality)
+- [Logs](#logs)
+- [PromQL examples](#promql-examples)
+- [Overhead](#overhead)
 
-## Подключение
+## Setup
 
-### Пакет `PgBolt.OpenTelemetry`
+### The `PgBolt.OpenTelemetry` package
 
-Пакет зависит от `PgBolt.Abstractions` и OpenTelemetry SDK 1.15.3 (пакет `OpenTelemetry`). Версия поднята с 1.12.0 из-за уязвимости
-GHSA-g94r-2vxg-569j в `OpenTelemetry.Api` 1.12.0. На `PgBolt.Postgres` и `PgBolt.Server` пакет не ссылается.
+The package depends on `PgBolt.Abstractions` and OpenTelemetry SDK 1.15.3 (the `OpenTelemetry` package).
+The upgrade from 1.12.0 addresses GHSA-g94r-2vxg-569j in `OpenTelemetry.Api` 1.12.0.
+The package has no references to `PgBolt.Postgres` or `PgBolt.Server`.
 
 ```csharp
-builder.Services.AddOpenTelemetry()                               // пакет OpenTelemetry.Extensions.Hosting
-    .ConfigureResource(r => r.AddService("orders-worker"))        // даёт service.instance.id, см. ниже
+builder.Services.AddOpenTelemetry()                               // OpenTelemetry.Extensions.Hosting package
+    .ConfigureResource(r => r.AddService("orders-worker"))        // sets service.instance.id, see below
     .WithTracing(t => t.AddPgBoltInstrumentation().AddOtlpExporter())
     .WithMetrics(m => m.AddPgBoltInstrumentation().AddOtlpExporter());
 ```
 
-- `TracerProviderBuilder.AddPgBoltInstrumentation()` подписывает провайдер на источник `PgBolt`;
-- `MeterProviderBuilder.AddPgBoltInstrumentation()` подписывает на `Meter` `PgBolt` и задаёт View'ами границы бакетов гистограмм
-  (для SDK, не учитывающих advice instrument'а).
+- `TracerProviderBuilder.AddPgBoltInstrumentation()` subscribes the provider to the `PgBolt` activity source.
+- `MeterProviderBuilder.AddPgBoltInstrumentation()` subscribes to the `PgBolt` `Meter` and sets histogram bucket boundaries
+  through views for SDKs that ignore the instrument's advice.
 
-### Без пакета
+### Setup without the package
 
-Имена источника и `Meter` — константы `PgBoltDiagnostics` из `PgBolt.Abstractions`:
+`PgBoltDiagnostics` in `PgBolt.Abstractions` exposes the source and `Meter` names as constants.
 
 ```csharp
 tracing.AddSource(PgBoltDiagnostics.ActivitySourceName);   // "PgBolt"
 metrics.AddMeter(PgBoltDiagnostics.MeterName);             // "PgBolt"
 ```
 
-Имена instruments (`PgBoltDiagnostics.Instruments`) — тоже публичные константы. Границы бакетов (`PgBoltDiagnostics.HistogramBuckets.Job`,
-`.Maintenance`) — не константы, а публичные статические свойства только для чтения (`IReadOnlyList<double>`).
+Instrument names (`PgBoltDiagnostics.Instruments`) are also public constants. The bucket boundaries
+(`PgBoltDiagnostics.HistogramBuckets.Job` and `.Maintenance`) are public, read-only static properties of type `IReadOnlyList<double>`.
 
-### Meter и `IMeterFactory`
+### Meter and `IMeterFactory`
 
-`Meter` создаётся один на DI-контейнер. Если в контейнере есть `IMeterFactory`, `Meter` берётся у него (`Host.CreateApplicationBuilder` и
-`Host.CreateDefaultBuilder` регистрируют фабрику сами, иначе вызовите `services.AddMetrics()`); без фабрики PgBolt создаёт собственный
-`Meter` и освобождает его вместе с контейнером. Статического `Meter` нет, поэтому несколько хостов в одном процессе не смешивают измерения.
+Each DI container gets one `Meter`. PgBolt obtains the `Meter` from `IMeterFactory` when available.
+`Host.CreateApplicationBuilder` and `Host.CreateDefaultBuilder` register the factory automatically. Otherwise, call `services.AddMetrics()` to register it.
+Without a factory, PgBolt creates its own `Meter` and disposes it with the container. Hosts in the same process keep their measurements separate because there is no static `Meter`.
 
-### Идентификатор пода: `service.instance.id`
+### Identifying pods with `service.instance.id`
 
-Метрики пода аддитивны, а кластерные одинаковы на всех подах — отличить поды друг от друга можно только атрибутом ресурса
-`service.instance.id`. OTel .NET SDK ставит его через `ResourceBuilder.AddService(...)` (по умолчанию `autoGenerateServiceInstanceId: true`)
-или через переменную окружения `OTEL_RESOURCE_ATTRIBUTES`; в `ResourceBuilder.CreateDefault()` его нет. Без него Prometheus-совместимые
-бэкенды склеят измерения разных подов в один ряд.
+Pod metrics are additive, and cluster metrics have the same values across pods. The `service.instance.id` resource attribute distinguishes pods.
+The OTel .NET SDK sets it through `ResourceBuilder.AddService(...)` (the default is `autoGenerateServiceInstanceId: true`) or the
+`OTEL_RESOURCE_ATTRIBUTES` environment variable. `ResourceBuilder.CreateDefault()` omits it. Without it, Prometheus-compatible backends
+merge measurements from different pods into a single series.
 
-## Трассировка
+## Tracing
 
 ### Spans
 
-| Span | Kind | Когда создаётся |
+| Span | Kind | When PgBolt creates it |
 |---|---|---|
-| `enqueue {job.type}` | Producer | вызов `IJobClient.EnqueueAsync` / `EnqueueManyAsync` (все перегрузки, в том числе динамическая по имени и транзакционные) |
+| `enqueue {job.type}` | Producer | A call to `IJobClient.EnqueueAsync` / `EnqueueManyAsync` (all overloads, including dynamic enqueue by name and transactional enqueue) |
 | `workflow submit` | Producer | `Workflow()….SubmitAsync()` |
 | `recurring trigger` | Producer | `IRecurringJobManager.TriggerAsync` |
-| `{job.type}` | Consumer | одна попытка выполнения задачи в `JobRunner` |
+| `{job.type}` | Consumer | One job execution attempt in `JobRunner` |
 
-Producer-span создаётся на один вызов клиентского API, а не на задачу. Ошибка вызова даёт статус `Error`, `error.type` (полное имя типа
-исключения) и событие исключения. Транзакционный enqueue, откаченный вызывающим кодом, оставляет span без задачи.
+PgBolt creates one producer span per client API call, which may enqueue multiple jobs. A failed call sets the status to `Error`, sets
+`error.type` to the fully qualified exception type, and records an exception event. A transactional enqueue still leaves a span if the caller rolls back the job.
 
-Каждая попытка выполнения — отдельный consumer-span под тем же родителем. Задача, не запущенная из-за остановки сервера
-(`Release` до старта), span'а не получает.
+Each execution attempt gets a separate consumer span under the same parent. Jobs released before execution during server shutdown
+(`Release` before start) have no span.
 
-### Связь выполнения с постановкой
+### Connecting execution to enqueue
 
-Колонка `jobs.trace_parent` хранит `traceparent` (только W3C; `tracestate` и baggage не передаются):
+The `jobs.trace_parent` column stores the W3C `traceparent`. PgBolt does not propagate `tracestate` or baggage.
 
-- если у вызова есть producer-span, пишется его id; consumer-span выполнения становится его **ребёнком** (удалённым), а не `ActivityLink`:
-  весь путь HTTP → enqueue → выполнение → вызовы из кода задачи (HttpClient, Npgsql) лежит в одном трейсе. Цена — трейсы с ретраями
-  через час и отложенными задачами длинные по времени, их хуже показывает Tempo и рвёт хвостовое сэмплирование;
-- без producer-span'а (нет слушателя, сэмплер отказал, родитель не W3C) пишется id `Activity.Current`, если он W3C, иначе `NULL`;
-- `IRecurringJobManager.TriggerAsync` пишет `trace_parent` по тому же правилу (раньше писал `NULL`);
-- задачи, поставленные тиком планировщика, получают `trace_parent = NULL`: тик — фоновая работа без контекста, consumer-span такой задачи
-  — корень нового трейса;
-- продолжения workflow получают `trace_parent` span'а `workflow submit` (одинаковый у всех узлов);
-- `IJobClient.RequeueAsync` `trace_parent` **не меняет**: повторное выполнение, как и ретрай, — ребёнок исходного producer-span'а в
-  исходном трейсе.
+- When a call has a producer span, PgBolt stores its ID. The consumer span uses the producer as its **remote parent**. This parent-child relationship, instead of an
+  `ActivityLink`, keeps the entire path in one trace, from HTTP through enqueue and execution to calls made by the job (HttpClient, Npgsql).
+  Retries an hour later and delayed jobs can produce long-running traces that Tempo displays poorly and tail sampling can split.
+- Without a producer span (no listener, sampler declined, or a non-W3C parent), PgBolt stores the ID of `Activity.Current` if it uses W3C format, otherwise `NULL`.
+- `IRecurringJobManager.TriggerAsync` writes `trace_parent` using the same rule. It previously wrote `NULL`.
+- A scheduler tick runs in the background without a context. Jobs it enqueues get `trace_parent = NULL`, so each consumer span starts a new trace.
+- Workflow continuations receive the `trace_parent` of the `workflow submit` span, shared by all nodes.
+- `IJobClient.RequeueAsync` **preserves** `trace_parent`. Like a retry, the next execution is a child of the original producer span in the original trace.
 
-Пустой или не разбирающийся `trace_parent` даёт корневой consumer-span без ошибки и без записи в лог. Перед стартом consumer-span'а runtime
-сбрасывает `Activity.Current`: задача без `trace_parent` не становится ребёнком чужой долгоживущей `Activity`, под которой запущен хост.
-Внутри задачи `Activity.Current` — её consumer-span.
+An empty or unparseable `trace_parent` produces a root consumer span without an error or log entry. Before starting the consumer span,
+the runtime clears `Activity.Current` so a job without a `trace_parent` cannot inherit an unrelated long-lived `Activity` that started the host.
+Inside the job, `Activity.Current` is its consumer span.
 
-### Атрибуты span'ов
+### Span attributes
 
-| Атрибут | Producer | Consumer | Значение |
+| Attribute | Producer | Consumer | Value |
 |---|---|---|---|
-| `messaging.system` | да | да | `pgbolt` |
-| `messaging.operation.type` | да | да | `send` / `process` |
-| `messaging.destination.name` | да | да | очередь (для workflow с несколькими очередями у producer-span'а не ставится) |
-| `messaging.message.id` | — | да | id задачи |
-| `messaging.batch.message_count` | при задач > 1 | — | число задач вызова |
-| `pgbolt.job.type` | enqueue | да | тип задачи |
-| `pgbolt.job.attempt` | — | да | номер попытки |
-| `pgbolt.job.max_attempts` | — | да | максимум попыток |
-| `pgbolt.server.name` | — | да | имя виртуального сервера |
-| `pgbolt.batch.id` | — | при наличии | id batch'а, в который входит задача |
-| `pgbolt.job.parent_job_id` | — | для продолжения задачи | id родительской задачи |
-| `pgbolt.job.parent_batch_id` | — | для продолжения batch'а | id родительского batch'а |
-| `pgbolt.recurring.id` | trigger | при наличии | id recurring-задачи |
-| `pgbolt.job.outcome` | — | после выполнения | `succeeded` / `retry` / `failed` / `cancelled` / `released` |
-| `error.type` | при ошибке | при `retry` / `failed` | см. ниже |
+| `messaging.system` | yes | yes | `pgbolt` |
+| `messaging.operation.type` | yes | yes | `send` / `process` |
+| `messaging.destination.name` | yes | yes | Queue name (the producer span omits it for workflows spanning multiple queues) |
+| `messaging.message.id` | — | yes | Job ID |
+| `messaging.batch.message_count` | when job count > 1 | — | Number of jobs in the call |
+| `pgbolt.job.type` | enqueue | yes | Job type |
+| `pgbolt.job.attempt` | — | yes | Attempt number |
+| `pgbolt.job.max_attempts` | — | yes | Maximum attempts |
+| `pgbolt.server.name` | — | yes | Virtual server name |
+| `pgbolt.batch.id` | — | when present | ID of the batch containing the job |
+| `pgbolt.job.parent_job_id` | — | job continuation | Parent job ID |
+| `pgbolt.job.parent_batch_id` | — | batch continuation | Parent batch ID |
+| `pgbolt.recurring.id` | trigger | when present | Recurring job ID |
+| `pgbolt.job.outcome` | — | after execution | `succeeded` / `retry` / `failed` / `cancelled` / `released` |
+| `error.type` | on error | on `retry` / `failed` | See below |
 
-Для исходов `retry` и `failed` consumer-span получает статус `Error` и событие исключения. `error.type` — `timeout` / `heartbeat_lost` /
-`lease_lost`, если попытка прервана по соответствующей причине, иначе полное имя типа исключения; для задачи без зарегистрированного
-исполнителя — `PgBolt.Server.JobExecutorNotFoundException`.
+For `retry` and `failed`, the consumer span receives `Error` status and an exception event. If the corresponding condition interrupted
+the attempt, `error.type` is `timeout`, `heartbeat_lost`, or `lease_lost`. Otherwise, PgBolt records the fully qualified exception type.
+For a job without a registered executor, the type is `PgBolt.Server.JobExecutorNotFoundException`.
 
-## Метрики
+## Metrics
 
-Метрики пода аддитивны: **`sum` по подам** даёт значение кластера. Кластерные (`pgbolt.cluster.*`) публикуют одно и то же значение с
-каждого пода: **`max`** по подам.
+Pod metrics are additive. Use **`sum` across pods** for the cluster total. Every pod reports the same cluster values (`pgbolt.cluster.*`).
+Use **`max` across pods** for these metrics.
 
-Имя в Prometheus — после преобразования OTel → Prometheus (точки в подчёркивания, единица `s` — суффикс `_seconds`, счётчики — `_total`);
-точный вид зависит от экспортёра и настроек перевода имён.
+The names below use the OTel-to-Prometheus translation. Dots become underscores, the unit `s` adds the suffix `_seconds`, and counters take `_total`.
+Exact names depend on the exporter and its translation settings.
 
-### Метрики пода (агрегация `sum`)
+### Pod metrics (aggregate with `sum`)
 
-| Метрика | Тип, единица | Теги | Что считает |
+| Metric | Type, unit | Tags | What it measures |
 |---|---|---|---|
-| `pgbolt.job.enqueued` | Counter, `{job}` | `pgbolt.queue`, `pgbolt.job.type`, `pgbolt.enqueue.result` = `created` / `duplicate` | задачи, поставленные клиентом: enqueue, workflow submit, recurring `TriggerAsync` |
-| `pgbolt.recurring.fired` | Counter, `{job}` | — | задачи, поставленные тиком планировщика |
-| `pgbolt.job.duration` | Histogram, `s` | `pgbolt.queue`, `pgbolt.job.type`, `pgbolt.job.outcome` | длительность попытки выполнения |
-| `pgbolt.job.wait_time` | Histogram, `s` | `pgbolt.queue`, `pgbolt.job.type` | время от `run_at` до lease |
-| `pgbolt.job.outcome.dropped` | Counter, `{job}` | `pgbolt.queue`, `pgbolt.drop.reason` = `lease_lost` / `abandoned` / `stopped` / `send_timeout` | исходы, которые не были применены |
-| `pgbolt.worker.active` | ObservableUpDownCounter, `{worker}` | `pgbolt.server.name`, `pgbolt.queue` | занятые слоты очереди |
-| `pgbolt.worker.capacity` | ObservableUpDownCounter, `{worker}` | `pgbolt.server.name` | ёмкость виртуального сервера: `Workers` и сумма `Reserved` |
-| `pgbolt.storage.errors` | Counter, `{error}` | `pgbolt.storage.operation` | перехваченные ошибки обращения к БД |
-| `pgbolt.maintenance.runs` | Counter, `{run}` | `pgbolt.maintenance.task`, `pgbolt.maintenance.result` = `ok` / `error` / `deferred` | запуски задач обслуживания |
-| `pgbolt.maintenance.duration` | Histogram, `s` | `pgbolt.maintenance.task` | длительность запуска задачи обслуживания |
-| `pgbolt.retention.deferred` | Counter, `{partition}` | `pgbolt.retention.reason` | партиции, которые retention не смог обработать за этот проход |
+| `pgbolt.job.enqueued` | Counter, `{job}` | `pgbolt.queue`, `pgbolt.job.type`, `pgbolt.enqueue.result` = `created` / `duplicate` | Client-enqueued jobs from enqueue, workflow submission, or recurring `TriggerAsync` |
+| `pgbolt.recurring.fired` | Counter, `{job}` | — | Jobs enqueued by a scheduler tick |
+| `pgbolt.job.duration` | Histogram, `s` | `pgbolt.queue`, `pgbolt.job.type`, `pgbolt.job.outcome` | Duration of one execution attempt |
+| `pgbolt.job.wait_time` | Histogram, `s` | `pgbolt.queue`, `pgbolt.job.type` | Time from `run_at` to lease acquisition |
+| `pgbolt.job.outcome.dropped` | Counter, `{job}` | `pgbolt.queue`, `pgbolt.drop.reason` = `lease_lost` / `abandoned` / `stopped` / `send_timeout` | Outcomes the runtime could not apply |
+| `pgbolt.worker.active` | ObservableUpDownCounter, `{worker}` | `pgbolt.server.name`, `pgbolt.queue` | Occupied queue slots |
+| `pgbolt.worker.capacity` | ObservableUpDownCounter, `{worker}` | `pgbolt.server.name` | Virtual server capacity, including `Workers` and the sum of `Reserved` slots |
+| `pgbolt.storage.errors` | Counter, `{error}` | `pgbolt.storage.operation` | Caught database access errors |
+| `pgbolt.maintenance.runs` | Counter, `{run}` | `pgbolt.maintenance.task`, `pgbolt.maintenance.result` = `ok` / `error` / `deferred` | Maintenance task runs |
+| `pgbolt.maintenance.duration` | Histogram, `s` | `pgbolt.maintenance.task` | Duration of a maintenance task run |
+| `pgbolt.retention.deferred` | Counter, `{partition}` | `pgbolt.retention.reason` | Partitions retention could not process in this pass |
 
-Prometheus-имена: `pgbolt_job_enqueued_total`, `pgbolt_recurring_fired_total`, `pgbolt_job_duration_seconds_{bucket,sum,count}`,
+Prometheus names are `pgbolt_job_enqueued_total`, `pgbolt_recurring_fired_total`, `pgbolt_job_duration_seconds_{bucket,sum,count}`,
 `pgbolt_job_wait_time_seconds_*`, `pgbolt_job_outcome_dropped_total`, `pgbolt_worker_active`, `pgbolt_worker_capacity`,
-`pgbolt_storage_errors_total`, `pgbolt_maintenance_runs_total`, `pgbolt_maintenance_duration_seconds_*`, `pgbolt_retention_deferred_total`.
-Теги становятся метками с подчёркиваниями: `pgbolt_queue`, `pgbolt_job_outcome` и так далее.
+`pgbolt_storage_errors_total`, `pgbolt_maintenance_runs_total`, `pgbolt_maintenance_duration_seconds_*`, and `pgbolt_retention_deferred_total`.
+Tags become labels with underscores, such as `pgbolt_queue` and `pgbolt_job_outcome`.
 
-**`pgbolt.job.enqueued`.** Значение — число строк. На один вызов приходится по одной записи на тройку (очередь, тип, результат): узлы
-workflow могут лежать в разных очередях. Workflow submit считает все узлы как `created` (конфликт ключа бросает исключение, вызов не
-учитывается). Транзакционный enqueue учитывается при возврате из вызова, **даже если вызывающий затем откатит транзакцию**. Задачи тика
-планировщика сюда не входят — их считает `pgbolt.recurring.fired`.
+**`pgbolt.job.enqueued`.** Counts rows. Each call records one measurement per combination of queue, job type, and result, since workflow nodes
+can use different queues. Workflow submission counts all nodes as `created`. A key conflict throws an exception and excludes the call from the count.
+Transactional enqueue counts when the call returns, **even if the caller subsequently rolls back the transaction**. Jobs from scheduler ticks
+have their own counter, `pgbolt.recurring.fired`.
 
-**`pgbolt.job.wait_time`.** Считается от `run_at` до lease: для немедленных задач `run_at` — момент enqueue, для отложенных и повторов —
-плановое время (включая лаг promoter'а), для продолжений workflow и trigger — момент перевода в готовые, `Requeue` ставит `run_at = now()`.
-Release и sweeper `run_at` не меняют, поэтому **`wait_time` повторного lease после release или sweeper'а включает время прошлой попытки**.
-Задачи, взятые, но отданные без запуска (остановка сервера, потеря heartbeat во время dequeue, dequeue после своего таймаута), в метрику
-не попадают: их ожидание войдёт в следующий lease. Время считается на стороне PostgreSQL — расхождение часов подов не влияет.
+**`pgbolt.job.wait_time`.** Measures time from `run_at` until PgBolt acquires the lease. For immediate jobs, `run_at` is the enqueue time.
+For delayed jobs and retries, it is the scheduled time, so the wait includes promoter lag. For workflow continuations and triggers, it is the time
+the job becomes ready. `Requeue` sets `run_at = now()`. Neither release nor the sweeper changes `run_at`, so **`wait_time` for a new lease after
+release or sweeping includes the previous attempt**. Jobs leased and returned without starting (server shutdown, heartbeat loss during dequeue,
+or dequeue returning after its timeout) contribute their wait to the next lease. PostgreSQL calculates the time, so pod clock skew has no effect.
 
-**`pgbolt.job.duration`.** Пишется и без слушателя источника трассировки; `pgbolt.job.outcome` — `succeeded` / `retry` / `failed` /
-`cancelled` / `released`.
+**`pgbolt.job.duration`.** PgBolt records duration even without a tracing listener. The `pgbolt.job.outcome` values are `succeeded`, `retry`,
+`failed`, `cancelled`, and `released`.
 
-**`pgbolt.job.outcome.dropped`.** Исход, который runtime не смог применить:
+**`pgbolt.job.outcome.dropped`.** Counts outcomes the runtime could not apply.
 
-| `pgbolt.drop.reason` | Причина |
+| `pgbolt.drop.reason` | Cause |
 |---|---|
-| `lease_lost` | lease потерян во время выполнения или с исходом в очереди отправки; хранилище ответило, что lease потерян; ack подтвердил не все lease пакета |
-| `abandoned` | выполнение не остановилось за `ShutdownTimeout`; исключение `JobRunner.RunAsync` или `CompletionSink.Complete`; сбой запуска выполнения после регистрации |
-| `stopped` | исход сдан после остановки отправки или отправка прервана отменённой остановкой |
-| `send_timeout` | бюджет `LeaseDuration` на отправку исхода исчерпан |
+| `lease_lost` | The lease expired or was lost during execution or while the outcome awaited delivery, storage reported a lost lease, or an ack confirmed only some leases in the batch. |
+| `abandoned` | Execution exceeded `ShutdownTimeout` during shutdown, `JobRunner.RunAsync` or `CompletionSink.Complete` threw, or execution failed to start after registration. |
+| `stopped` | The runtime submitted the outcome after delivery stopped, or cancellation of shutdown interrupted delivery. |
+| `send_timeout` | The `LeaseDuration` budget for sending the outcome expired. |
 
-Каждая запись выполнения учитывается не более одного раза. Не учитывается ответ «lease потерян» после неудачной попытки отправки: исход,
-вероятно, уже применён.
+The runtime counts each execution record at most once. A “lease lost” reply after a failed delivery attempt is excluded because storage probably already applied the outcome.
 
-**`pgbolt.storage.errors`.** По одному увеличению на каждое перехваченное исключение:
+**`pgbolt.storage.errors`.** Increments once per caught exception.
 
-| `pgbolt.storage.operation` | Место |
+| `pgbolt.storage.operation` | Operation |
 |---|---|
-| `dequeue` | диспетчер: ошибка выборки задач |
-| `ack` | пакетный ack исходов |
-| `outcome` | отправка retry / fail / confirm-cancel / release |
-| `heartbeat` | ошибка или таймаут heartbeat, ошибка повторной регистрации сервера |
-| `settings` | обновление настроек очередей |
-| `stats_flush` | сброс статистики исходов |
-| `stats_read` | чтение снимка `queue_stats` |
-| `table_stats_read` | чтение статистики таблиц `queue` и `completions` |
-| `promoter`, `sweeper`, `resolver`, `scheduler`, `recurring-sync`, `housekeeping`, `stats` | исключение итерации цикла обслуживания (имя цикла) |
+| `dequeue` | Dispatcher fetching jobs |
+| `ack` | Acknowledging a batch of outcomes |
+| `outcome` | Sending retry / fail / confirm-cancel / release |
+| `heartbeat` | Sending a heartbeat (error or timeout) or re-registering a server |
+| `settings` | Refreshing queue settings |
+| `stats_flush` | Flushing outcome statistics |
+| `stats_read` | Reading the `queue_stats` snapshot |
+| `table_stats_read` | Reading statistics for the `queue` and `completions` tables |
+| `promoter`, `sweeper`, `resolver`, `scheduler`, `recurring-sync`, `housekeeping`, `stats` | An iteration of the named maintenance loop |
 
-Ошибки внутри задач обслуживания считаются в `pgbolt.maintenance.runs` с `result = error`, не здесь. `result = deferred` — задача
-вернула ошибку без исключения (например, `lock_timeout` при создании партиций). `pgbolt.maintenance.runs` и
-`pgbolt.maintenance.duration` считают только запуски, которые под реально захватил.
+Errors inside maintenance tasks count toward `pgbolt.maintenance.runs` with `result = error`. A task that reports failure without throwing
+(for example, `lock_timeout` during partition creation) records `result = deferred`. Both `pgbolt.maintenance.runs` and
+`pgbolt.maintenance.duration` include only runs that the pod actually claimed.
 
-**Бакеты гистограмм** фиксированы и одинаковы на всех подах — поэтому `histogram_quantile` по `sum by (le)` корректен:
+**Histogram bucket boundaries** are fixed and identical across pods, so `histogram_quantile` over `sum by (le)` is valid.
 
-- `pgbolt.job.duration`, `pgbolt.job.wait_time`, секунды: 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600;
-- `pgbolt.maintenance.duration`, секунды: 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60, 300.
+- `pgbolt.job.duration`, `pgbolt.job.wait_time`, in seconds, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600.
+- `pgbolt.maintenance.duration`, in seconds, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60, 300.
 
-## Кластерные метрики и агрегация
+## Cluster metrics and aggregation
 
-| Метрика | Тип, единица | Теги | Что публикует |
+| Metric | Type, unit | Tags | Value |
 |---|---|---|---|
-| `pgbolt.cluster.queue.jobs` | ObservableGauge, `{job}` | `pgbolt.queue`, `pgbolt.job.state` = `scheduled` / `enqueued` / `processing` / `awaiting` | число задач очереди по состояниям |
-| `pgbolt.cluster.queue.oldest_ready_age` | ObservableGauge, `s` | `pgbolt.queue` | возраст самой старой готовой, но не взятой задачи |
-| `pgbolt.cluster.queue.limit` | ObservableGauge, `{worker}` | `pgbolt.queue` | эффективный кластерный лимит конкурентности очереди (пауза — 0); очереди без лимита не публикуются |
-| `pgbolt.cluster.table.dead_tuples` | ObservableGauge, `{tuple}` | `pgbolt.table` = `queue` / `completions` | число мёртвых строк таблицы (`pg_stat_user_tables.n_dead_tup`) |
-| `pgbolt.cluster.table.size` | ObservableGauge, `By` | `pgbolt.table` | полный размер таблицы с индексами и TOAST (`pg_total_relation_size`) |
+| `pgbolt.cluster.queue.jobs` | ObservableGauge, `{job}` | `pgbolt.queue`, `pgbolt.job.state` = `scheduled` / `enqueued` / `processing` / `awaiting` | Job count by queue and state |
+| `pgbolt.cluster.queue.oldest_ready_age` | ObservableGauge, `s` | `pgbolt.queue` | Age of the oldest ready job still awaiting a lease |
+| `pgbolt.cluster.queue.limit` | ObservableGauge, `{worker}` | `pgbolt.queue` | Effective cluster-wide queue concurrency limit (0 when paused). Queues without a limit omit this metric. |
+| `pgbolt.cluster.table.dead_tuples` | ObservableGauge, `{tuple}` | `pgbolt.table` = `queue` / `completions` | Estimated number of dead tuples in the table (`pg_stat_user_tables.n_dead_tup`) |
+| `pgbolt.cluster.table.size` | ObservableGauge, `By` | `pgbolt.table` | Total table size including indexes and TOAST (`pg_total_relation_size`) |
 
-Prometheus-имена: `pgbolt_cluster_queue_jobs`, `pgbolt_cluster_queue_oldest_ready_age_seconds`, `pgbolt_cluster_queue_limit`,
-`pgbolt_cluster_table_dead_tuples` (единица `{tuple}` суффикса не даёт), `pgbolt_cluster_table_size_bytes`; тег таблицы — метка `pgbolt_table`.
+Prometheus names are `pgbolt_cluster_queue_jobs`, `pgbolt_cluster_queue_oldest_ready_age_seconds`, `pgbolt_cluster_queue_limit`,
+`pgbolt_cluster_table_dead_tuples` (the unit `{tuple}` adds no suffix), and `pgbolt_cluster_table_size_bytes`. The table tag becomes the `pgbolt_table` label.
 
-Префикс `pgbolt.cluster.` означает «не суммировать по подам»: значение каждого ряда одно и то же у всех подов, которые его публикуют,
-поэтому агрегируйте **`max`** (суммирование даёт N-кратное значение). Публикуют только поды с зарегистрированными серверами
-(`AddPgBoltServer`); под, который только ставит задачи, и под после остановки своих серверов кластерных метрик не публикует.
+Every pod that publishes a series under `pgbolt.cluster.` reports the same cluster value. Aggregate with **`max`**. Summing would multiply
+the value by the number of reporting pods. Only pods with registered servers (`AddPgBoltServer`) publish these metrics.
+Producer-only pods and pods whose servers have stopped omit them.
 
-### Откуда берутся значения и допуск расхождения
+### Data sources and expected variation
 
-`jobs` и `oldest_ready_age` берутся из снимка `queue_stats`. Задача `stats` делает снимок на поде с `RunMaintenance = true`; цикл `stats`
-**каждого** пода с серверами раз в `StatsSnapshotInterval` читает таблицу `queue_stats` вместе с моментом последнего успешного снимка.
-Поэтому:
+`jobs` and `oldest_ready_age` come from a `queue_stats` snapshot. The `stats` task takes the snapshot on a pod with `RunMaintenance = true`.
+Once per `StatsSnapshotInterval`, the `stats` loop on **every** pod with servers reads the `queue_stats` table and the time of the last successful snapshot.
 
-- значения разных подов расходятся не больше чем на один проход цикла `stats` (до 1,2 × `StatsSnapshotInterval` от коммита снимка);
-  `max` в этом окне берёт большее из двух соседних снимков;
-- смена пода, делающего снимок, не даёт дублей и пропусков: публикует каждый под независимо;
-- `limit` берётся из кэша настроек очередей и отстаёт не больше чем на одно обновление `QueueSettingsRefreshInterval` (до 1,1 ×
-  интервала, jitter ±10 %).
+- Pods can differ by at most one `stats` iteration (up to 1.2 × `StatsSnapshotInterval` after the snapshot commits).
+  During that window, `max` takes the higher value from the two adjacent snapshots.
+- If another pod takes over snapshot creation, there are no duplicates or gaps because each pod publishes independently.
+- `limit` comes from the queue settings cache and can lag by one `QueueSettingsRefreshInterval` refresh (up to 1.1 × the interval with ±10% jitter).
 
-### Свежесть снимка
+### Snapshot freshness
 
-Свежесть определяет момент последнего успешного снимка на стороне PostgreSQL (строка задачи `stats` в `maintenance_tasks`, уточнённая
-`measured_at` строк снимка) плюс время с момента получения:
+To determine snapshot age, PgBolt uses the time of the last successful snapshot on PostgreSQL (the `stats` row in `maintenance_tasks`,
+refined by the snapshot rows' `measured_at` values) and adds the time elapsed since the read.
 
-- **снимок свежий** (не старше 4 × `StatsSnapshotInterval`): `pgbolt.cluster.queue.jobs` публикуется для каждой известной очереди со всеми
-  четырьмя состояниями, и очереди без строк получают **нули** — в простое (когда `queue_stats` пуст) ряд есть и равен нулю;
-  `oldest_ready_age` публикуется только для очередей с готовыми задачами;
-- **снимок устарел** (старше 4 × `StatsSnapshotInterval`, момент снимка неизвестен или ни один под с `RunMaintenance = true` его не
-  обновляет): `jobs` и `oldest_ready_age` возвращают **пустой набор** — ряд пропадает, а не застывает. `absent()` поэтому означает
-  «снимок устарел или его нет», а не «очередь пуста».
+- **Fresh snapshot** (at most 4 × `StatsSnapshotInterval` old). PgBolt publishes `pgbolt.cluster.queue.jobs` for every known queue and all four states.
+  Queues with no rows report **zeros**, so the series remains at zero when idle and `queue_stats` is empty.
+  Only queues with ready jobs report `oldest_ready_age`.
+- **Stale snapshot** (older than 4 × `StatsSnapshotInterval`, unknown snapshot time, or no pod with `RunMaintenance = true` refreshing it).
+  Both `jobs` and `oldest_ready_age` return an **empty set**, so the series disappears. `absent()` therefore indicates a stale or missing snapshot.
+  An empty queue with a fresh snapshot still reports zero.
 
-Порог 4 × выбран так, что одна неудачная попытка снимка ряд не скрывает (возраст публикуемого снимка в норме до ~2,4 × интервал, при одной
-неудаче до ~3,6 ×), а две подряд — скрывают. Известные очереди — это очереди серверов пода и очереди, у которых есть строка в снимке.
+The 4 × threshold keeps series visible after one failed snapshot (age normally reaches ~2.4 × the interval, or ~3.6 × after one failure)
+and hides them after two consecutive failures. Known queues include those configured on the pod's servers and those with rows in the snapshot.
 
-**`StatsSnapshotInterval` должен быть одинаковым на всех подах кластера.** Частоту снимков задаёт владелец задачи `stats`, а порог
-устаревания каждый под считает по собственному значению; при меньшем интервале на читающем поде ряды будут периодически пропадать.
+**Use the same `StatsSnapshotInterval` on all pods in the cluster.** The owner of the `stats` task determines snapshot frequency, but each pod
+uses its own interval to decide when data is stale. A reader with a shorter interval will intermittently lose series.
 
-### Статистика таблиц
+### Table statistics
 
-`dead_tuples` и `size` показывают bloat `queue` и `completions`: растущее число мёртвых строк при стабильной нагрузке означает, что
-autovacuum не успевает или его удерживает старая транзакция (xmin). Значения читает тот же цикл `stats` каждого пода с серверами, в том
-числе при `RunMaintenance = false`. Если успешного чтения не было дольше 4 × `StatsSnapshotInterval` (БД недоступна), оба ряда
-пропадают, а не застывают; ошибка чтения считается в `pgbolt.storage.errors` с `pgbolt.storage.operation = table_stats_read`.
-`n_dead_tup` — оценка статистики PostgreSQL, обновляется с задержкой; агрегируйте `max`, как и остальные кластерные метрики:
+`dead_tuples` and `size` show bloat in `queue` and `completions`. If dead tuples accumulate under steady load, autovacuum is falling behind or
+an old transaction is holding back cleanup (xmin). The same `stats` loop reads these values on every pod with servers, including pods with
+`RunMaintenance = false`. If no read succeeds for more than 4 × `StatsSnapshotInterval` (database unavailable), both series disappear.
+Read errors increment `pgbolt.storage.errors` with `pgbolt.storage.operation = table_stats_read`. PostgreSQL updates its `n_dead_tup` estimate
+with a delay. Aggregate it with `max`, as with the other cluster metrics.
 
 ```promql
 max by (pgbolt_table) (pgbolt_cluster_table_dead_tuples)
 max by (pgbolt_table) (pgbolt_cluster_table_size_bytes)
 ```
 
-Алерты на `queue` (пороги — по сценарию `vacuum` нагрузочного стенда при 10 000 задач/с,
-[docs/performance.md](performance.md#vacuum); при меньшем потоке пропорционально ниже). Мёртвые строки не убираются — autovacuum
-не успевает или его удерживает старая транзакция, с `for: 10m`:
+The following `queue` alert thresholds come from the `vacuum` load test at 10,000 jobs/s. Scale them down proportionally for lower rates.
+Use `for: 10m` to detect dead tuples that persist because autovacuum cannot keep up or an old transaction blocks cleanup. [Load test results](performance.md#vacuum)
 
 ```promql
 max(pgbolt_cluster_table_dead_tuples{pgbolt_table="queue"}) > 1000000
 ```
 
-При работающем autovacuum `n_dead_tup` `queue` растёт пилой и падает после каждого прохода: пик 1,28–2,41 млн при
-`autovacuum_naptime` 1 мин, выше 1 млн подряд — не дольше 72 с, поэтому `for: 10m` пилу не ловит. При удержании xmin счёт после
-первого прохода autovacuum растёт без спадов (с `autovacuum_naptime` 1 мин этот проход приходит через ~30 с удержания и сбрасывает
-счёт до 0,29–0,37 млн) и пересекает 1 млн через 2,6–3 мин удержания. Прогоны удерживали xmin 5 мин, и этот алерт в них не
-сработал: ожидаемое срабатывание — около 13 мин удержания при 10 000/с. Раньше удержание ловит алерт размера ниже.
+With autovacuum running, `queue`'s `n_dead_tup` rises between passes and drops after each pass. With a 1-minute `autovacuum_naptime`, it peaked
+at 1.28–2.41 million and stayed above 1 million for at most 72 s, so `for: 10m` filters out these peaks. While a transaction holds xmin,
+the count rises without dips after the first autovacuum pass. At a 1-minute `autovacuum_naptime`, that pass occurs ~30 s into the hold and
+drops the count to 0.29–0.37 million. The count exceeds 1 million after 2.6–3 minutes. The 5-minute holds in the tests ended before the alert
+could fire. At 10,000/s, it should fire after about 13 minutes. The size alert below detects the hold sooner.
 
-Таблица растёт — больше 500 МБ за час:
+Alert when the table grows by more than 500 MB in an hour.
 
 ```promql
 delta(max(pgbolt_cluster_table_size_bytes{pgbolt_table="queue"})[1h:]) > 524288000
 ```
 
-Под стационарной нагрузкой (20 мин) размер `queue` ходит пилой: с `autovacuum_naptime` 1 мин в `bouncer` — 135–259 и 142–262 МБ,
-размах до 124 МБ, в остальных прогонах — до 42 МБ; это предел `delta` любого окна внутри замера. Минимумы пилы в `bouncer`
-поднимаются на 36–43 МБ за 10 мин (135 → 158 → 178 и 142 → 162 → 178 МБ); если так пойдёт и дальше, за час — ~220–260 МБ тренда
-плюс размах пилы, ~340–380 МБ, ниже порога 500 МБ. Окно длиннее 20 мин не измерялось: если алерт срабатывает без долгих
-транзакций, проверьте autovacuum `queue` или поднимите порог. За 5 мин удержания xmin размер вырос на 324–511 МБ: 500 МБ сверх
-минимума стационарной фазы набраны к концу удержания или примерно через 20–25 с после него, сверх её максимума — не позже чем
-через 3 мин после конца удержания. После удержания размер растёт и в фазе восстановления (пик 755–893 МБ); в 3 из 6
-прогонов к концу её autovacuum вернул его к 385–498 МБ, в остальных он остался на пике. Алерт держится, пока прирост за последний
-час выше порога.
+Under steady load (20 minutes), the size of `queue` rose and fell between autovacuum passes. With a 1-minute `autovacuum_naptime`, the two
+`bouncer` runs ranged from 135–259 and 142–262 MB, a spread of up to 124 MB. Other runs varied by at most 42 MB. These ranges bound
+`delta` for any window within the measurement. In `bouncer`, successive minima rose 36–43 MB in 10 minutes (135 → 158 → 178 and 142 → 162 → 178 MB).
+Extrapolated over an hour, the ~220–260 MB trend plus the oscillation gives ~340–380 MB, below the 500 MB threshold. The longest measured
+window was 20 minutes. If the alert fires without long transactions, check autovacuum on `queue` or raise the threshold.
+During a 5-minute xmin hold, size grew by 324–511 MB. It reached 500 MB above the steady-phase minimum by the end of the hold or about
+20–25 s later, and reached the same margin above the steady-phase maximum within 3 minutes after release. Size kept growing during recovery, peaking at
+755–893 MB. By the end of recovery, autovacuum had reduced it to 385–498 MB in 3 of 6 runs. The other runs ended at the peak.
+The alert remains active while growth over the preceding hour exceeds the threshold.
 
-### `limit` не устаревает
+### `limit` stays available
 
-`pgbolt.cluster.queue.limit` не пропадает при недоступной БД: публикуется последнее прочитанное значение — то же, по которому работает
-dequeue (`QueueSettingsCache` при ошибке обновления сохраняет прошлый снимок). Метрика перестаёт публиковаться только после остановки
-серверов пода.
+When the database is unavailable, `pgbolt.cluster.queue.limit` reports the last value read, the same value dequeue uses.
+`QueueSettingsCache` keeps its previous snapshot when a refresh fails. The pod stops publishing this metric only when its servers stop.
 
-## Кардинальность
+## Cardinality
 
-Теги метрик ограничены конечными множествами: типы задач, очереди, имена виртуальных серверов, задачи обслуживания. Id задач, batch'ей
-и серверов в теги не попадают.
+Metric tag values come from bounded sets of job types, queues, virtual server names, and maintenance tasks.
+Tags exclude individual job, batch, and server IDs.
 
-Самая многочисленная метрика — `pgbolt.job.duration`: число рядов на под — число пар (очередь, тип задачи), по которым выполнялись попытки, умноженное на 5
-исходов. OTel .NET SDK по умолчанию держит до 2000 рядов на метрику и сверх них пишет overflow-ряд. Для
-инсталляций с сотнями типов задач посчитайте число рядов по формуле выше и при необходимости поднимите `CardinalityLimit`.
+`pgbolt.job.duration` has the most series. For each pod, multiply the number of (queue, job type) pairs with execution attempts by the 5 outcomes.
+By default, the OTel .NET SDK keeps up to 2000 series per metric and records excess values in an overflow series.
+If you have hundreds of job types, estimate the series count first and raise `CardinalityLimit` if needed.
 
-`MeterProviderBuilder.AddPgBoltInstrumentation()` уже добавляет View'ы бакетов на `pgbolt.job.duration`, `pgbolt.job.wait_time` и
-`pgbolt.maintenance.duration`; второй View на тот же instrument создаст **вторую, дублирующую метрику**. Чтобы поднять лимит, подпишитесь
-без `AddPgBoltInstrumentation()` — границы бакетов instrument'ы передают сами:
+`MeterProviderBuilder.AddPgBoltInstrumentation()` already adds bucket views for `pgbolt.job.duration`, `pgbolt.job.wait_time`, and
+`pgbolt.maintenance.duration`. A second view for the same instrument creates a **duplicate metric**.
+To raise the limit, subscribe without `AddPgBoltInstrumentation()`. The instruments supply their own bucket boundaries.
 
 ```csharp
 metrics
@@ -315,61 +309,60 @@ metrics
     .AddView(PgBoltDiagnostics.Instruments.JobWaitTime, new MetricStreamConfiguration { CardinalityLimit = 5000 });
 ```
 
-## Логи
+## Logs
 
-### События жизненного цикла задачи
+### Job lifecycle events
 
-Категория `PgBolt.Job`. Событие выбирается по исходу попытки; причина прерывания — поле `Reason` (`None`, `Timeout`, `HeartbeatLost`,
-`LeaseLost`, `Shutdown`): отдельного события «таймаут» или «потеря lease» нет, они приходят как `JobFailedWillRetry` / `JobFailed`.
+In the `PgBolt.Job` category, the outcome of each attempt determines the event. The `Reason` field records interruptions
+(`None`, `Timeout`, `HeartbeatLost`, `LeaseLost`, `Shutdown`). Timeouts and lease loss appear as `JobFailedWillRetry` / `JobFailed`, without separate events.
 
-События перечислены в таблице раздела «3000–3099: Жизненный цикл задачи» ниже; в ней у каждого события указан исход.
+The 3000–3099 job lifecycle table below lists each event and its corresponding outcome.
 
-Исключение каждой неуспешной попытки (`Retry`, `Fail`, подтверждённая отмена) попадает в лог вместе с `JobId` и `EventId`. Для
-`Reason = LeaseLost` исход не применится (см. `pgbolt.job.outcome.dropped`), событие фиксирует результат попытки. Логи `LeaseKeeper` и
-`CompletionSink` описывают lease и доставку исхода и не дублируют эти события.
+PgBolt logs the exception for each unsuccessful attempt (`Retry`, `Fail`, confirmed cancellation) with its `JobId` and `EventId`.
+For `Reason = LeaseLost`, the event records the attempt's result even though the outcome will not be applied (see `pgbolt.job.outcome.dropped`).
+The separate `LeaseKeeper` and `CompletionSink` events describe lease handling and outcome delivery.
 
-### Scope задачи и корреляция с трейсом
+### Job scope and trace correlation
 
-Выполнение задачи обёрнуто в scope логгера с полями `JobId`, `JobType`, `Queue`, `Attempt`; он виден логам кода задачи через любой
-`ILogger` (провайдеры с `IExternalScopeProvider`, текстовые провайдеры получают `ToString()`). `TraceId` и `SpanId` добавляет провайдер
-логов из `Activity.Current` (OTel logs exporter или `ActivityTrackingOptions`) — **только если consumer-span создан**: нужен слушатель
-источника `PgBolt`, и сэмплер не должен отказать. Без слушателя логи задачи `TraceId` не получают.
+Each execution runs in a logging scope containing `JobId`, `JobType`, `Queue`, and `Attempt`. Job code can use any `ILogger` to access the scope
+with providers supporting `IExternalScopeProvider`. Text providers receive `ToString()`. The log provider (OTel logs exporter or `ActivityTrackingOptions`)
+adds `TraceId` and `SpanId` from `Activity.Current` **only when a consumer span exists**. The `PgBolt` source needs a listener and the sampler
+must accept the span. Without a listener, job logs have no `TraceId`.
 
-### Стабильные EventId
+### Stable event IDs
 
-Все вызовы логов PgBolt используют `[LoggerMessage]` с явными `EventId` и `EventName`. `Id` и `Name` — контракт для алертов и фильтров:
-они не переиспользуются и не меняются (набор зафиксирован тестом `EventIdContractTests`). Тексты сообщений и категории логгеров не
-менялись. Диапазоны:
+All PgBolt log calls use `[LoggerMessage]` with explicit `EventId` and `EventName`. Alerts and filters can rely on stable `Id` and `Name`
+values. PgBolt never reuses them, and `EventIdContractTests` checks the set. Message text and logger categories have stayed the same.
 
-| Диапазон | Компонент |
+| Range | Component |
 |---|---|
-| 1000–1999 | жизненный цикл сервера и процесса, настройки очередей |
-| 2000–2999 | диспетчер |
-| 3000–3999 | жизненный цикл задачи, retry policy |
+| 1000–1999 | Server and process lifecycle, queue settings |
+| 2000–2999 | Dispatcher |
+| 3000–3999 | Job lifecycle, retry policy |
 | 4000–4999 | `CompletionSink`, `LeaseKeeper`, `OutcomeStatsFlusher` |
-| 5000–5999 | обслуживание, retention, recurring, resolver |
-| 6000–6999 | `PgBoltInitializer`, синхронизация recurring |
-| 7000–7999 | dashboard |
-| 8000–8999 | телеметрия |
+| 5000–5999 | Maintenance, retention, recurring jobs, resolver |
+| 6000–6999 | `PgBoltInitializer`, recurring job synchronization |
+| 7000–7999 | Dashboard |
+| 8000–8999 | Telemetry |
 
-### Сбои телеметрии
+### Telemetry failures
 
-Исключение слушателя `ActivityListener` / `MeterListener` или логгер-провайдера в точке телеметрии PgBolt перехватывается: сигнал
-пропускается, исход задачи не меняется, слот освобождается, остановка процесса проходит. О сбое сообщает событие 8001 `TelemetryFailed`
-(сбой observable-callback'а — 8002 `MetricCallbackFailed`), не чаще раза в минуту на контейнер, категория `PgBolt.Telemetry`. Если в
-логах появилось 8001, ищите ошибку в своих слушателях или провайдерах.
+PgBolt catches exceptions thrown by an `ActivityListener`, `MeterListener`, or logging provider while emitting telemetry. It skips the signal,
+preserves the job outcome, releases the slot, and allows shutdown to proceed. Event 8001 (`TelemetryFailed`) reports failures, or
+8002 (`MetricCallbackFailed`) for an observable callback. PgBolt reports failures at most once per minute per container in the
+`PgBolt.Telemetry` category. If 8001 appears, check your listeners and providers.
 
-### Таблица событий
+### Event reference
 
-Ниже все события; `Level` — уровень по умолчанию. Для 5107 уровень выбирается во время выполнения: Warning, если партиции просрочены не
-меньше чем на сутки, иначе Debug.
+The tables list all events with their default `Level`. PgBolt selects the level of event 5107 at runtime.
+It logs Warning if partitions are overdue by at least a day, otherwise Debug.
 
-### 1000–1099: Процесс и хост (`PgBoltProcessingService`)
+### 1000–1099: Process and host (`PgBoltProcessingService`)
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
 | 1000 | `JobTypeSchemaMismatch` | Warning | — | `PgBolt: job types {JobTypes} were published by another process with a different argument schema.` |
-| 1001 | `ProcessingStartFailed` | Critical | да | `PgBolt: starting processing failed; stopping what was started.` |
+| 1001 | `ProcessingStartFailed` | Critical | yes | `PgBolt: starting processing failed; stopping what was started.` |
 | 1002 | `HostStopTimeoutServers` | Warning | — | `PgBolt: host stop timeout reached; pending outcomes are dropped and servers rows are left, leases will expire.` |
 | 1003 | `HostStopTimeoutMaintenance` | Warning | — | `PgBolt: host stop timeout reached while stopping maintenance loops.` |
 | 1004 | `QueueDefaultsConflict` | Warning | — | `PgBolt: queue '{Queue}' defaults were recently published by {PublishedBy} with other values; overwritten: {Changes}.` |
@@ -377,65 +370,65 @@ metrics
 | 1006 | `PartitionDaysAheadTooShort` | Warning | — | `PgBolt: PartitionDaysAhead ({DaysAhead} days) is shorter than 2 × PartitionsInterval ({Interval}); a single failed iteration may leave no partition for the next day.` |
 | 1007 | `DeadServerTimeoutTooShort` | Warning | — | `PgBolt: DeadServerTimeout ({Timeout}) is shorter than 3 × HeartbeatInterval ({Heartbeat}); rows of live servers will be removed on short heartbeat hiccups and restored by the next heartbeat.` |
 
-### 1100–1199: Виртуальный сервер (`PgBoltServer`)
+### 1100–1199: Virtual server (`PgBoltServer`)
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
 | 1100 | `ServerStarted` | Information | — | `PgBolt server {Server} ({ServerId}) started: queues {Queues}, capacity {Capacity}.` |
 | 1101 | `ExecutionsWaitCancelled` | Warning | — | `PgBolt server {Server}: waiting for executions was cancelled by the host.` |
 | 1102 | `ServerStopCancelled` | Warning | — | `PgBolt server {Server}: stop was cancelled by the host; the servers row is left for cleanup.` |
-| 1103 | `ServerRowRemoveFailed` | Error | да | `PgBolt server {Server}: failed to remove the servers row.` |
+| 1103 | `ServerRowRemoveFailed` | Error | yes | `PgBolt server {Server}: failed to remove the servers row.` |
 | 1104 | `ServerStopped` | Information | — | `PgBolt server {Server} ({ServerId}) stopped.` |
-| 1105 | `DispatcherFailed` | Critical | да | `PgBolt server {Server}: dispatcher failed; stopping continues.` |
-| 1106 | `CancellationCallbackFailed` | Warning | да | `PgBolt server {Server}: a cancellation callback of a job threw.` |
+| 1105 | `DispatcherFailed` | Critical | yes | `PgBolt server {Server}: dispatcher failed; stopping continues.` |
+| 1106 | `CancellationCallbackFailed` | Warning | yes | `PgBolt server {Server}: a cancellation callback of a job threw.` |
 | 1107 | `JobTypesWithoutExecutor` | Warning | — | `PgBolt server {Server}: job types {JobTypes} default to its queues but have no executor in this process; such jobs go to NoExecutor.` |
-| 1108 | `MissingExecutorsCheckFailed` | Warning | да | `PgBolt server {Server}: failed to check job types without executors.` |
-| 1109 | `JobFinishFailed` | Critical | да | `PgBolt server {Server}: unexpected failure while finishing job {JobId}.` |
+| 1108 | `MissingExecutorsCheckFailed` | Warning | yes | `PgBolt server {Server}: failed to check job types without executors.` |
+| 1109 | `JobFinishFailed` | Critical | yes | `PgBolt server {Server}: unexpected failure while finishing job {JobId}.` |
 | 1110 | `JobAbandoned` | Warning | — | `PgBolt server {Server}: job {JobId} did not stop within {ShutdownTimeout} and is abandoned; its lease will expire and the sweeper will count the attempt.` |
 | 1111 | `JobIgnoresCancellation` | Warning | — | `PgBolt server {Server}: job {JobId} has ignored cancellation ({Reason}) for {Elapsed}; its slot stays occupied.` |
-| 1112 | `SlotReleaseFailed` | Error | да | `PgBolt server {Server}: slot of queue {Queue} was not returned after job {JobId} finished.` |
+| 1112 | `SlotReleaseFailed` | Error | yes | `PgBolt server {Server}: slot of queue {Queue} was not returned after job {JobId} finished.` |
 
-### 1200–1299: Настройки очередей (`QueueSettingsCache`)
+### 1200–1299: Queue settings (`QueueSettingsCache`)
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
-| 1200 | `QueueSettingsRefreshFailed` | Warning | да | `PgBolt: refreshing queue settings failed; using the previous snapshot.` |
+| 1200 | `QueueSettingsRefreshFailed` | Warning | yes | `PgBolt: refreshing queue settings failed; using the previous snapshot.` |
 
-### 2000–2999: Диспетчер (`Dispatcher`)
+### 2000–2999: Dispatcher (`Dispatcher`)
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
-| 2000 | `DequeueFailed` | Error | да | `PgBolt: dequeue from queue {Queue} failed; fetching paused for {Pause}.` |
+| 2000 | `DequeueFailed` | Error | yes | `PgBolt: dequeue from queue {Queue} failed; fetching paused for {Pause}.` |
 | 2001 | `DequeueTimedOutJobsReleased` | Warning | — | `PgBolt: dequeue from queue {Queue} returned {Count} jobs after {Elapsed}, past its timeout {Timeout}; they are released without running.` |
-| 2002 | `DispatcherIterationFailed` | Critical | да | `PgBolt: dispatcher iteration failed unexpectedly; fetching paused for {Pause}.` |
-| 2003 | `WakeupSubscriptionDisposeFailed` | Warning | да | `PgBolt: disposing a wakeup subscription failed.` |
-| 2004 | `WakeupSubscriptionFailed` | Error | да | `PgBolt: wakeup subscription for queue {Queue} failed; the queue is polled without wakeup signals.` |
-| 2005 | `StartRollbackSlotReleaseFailed` | Error | да | `PgBolt: slot of queue {Queue} was not returned after the failed start of job {JobId}.` |
+| 2002 | `DispatcherIterationFailed` | Critical | yes | `PgBolt: dispatcher iteration failed unexpectedly; fetching paused for {Pause}.` |
+| 2003 | `WakeupSubscriptionDisposeFailed` | Warning | yes | `PgBolt: disposing a wakeup subscription failed.` |
+| 2004 | `WakeupSubscriptionFailed` | Error | yes | `PgBolt: wakeup subscription for queue {Queue} failed; the queue is polled without wakeup signals.` |
+| 2005 | `StartRollbackSlotReleaseFailed` | Error | yes | `PgBolt: slot of queue {Queue} was not returned after the failed start of job {JobId}.` |
 | 2006 | `JobStartRolledBack` | Warning | — | `PgBolt: job {JobId} of queue {Queue} was not started; its registration is rolled back, the lease will expire.` |
 
-### 3000–3099: Жизненный цикл задачи (`JobRunner`, категория `PgBolt.Job`)
+### 3000–3099: Job lifecycle (`JobRunner`, category `PgBolt.Job`)
 
-| Id | Name | Исход | Level | Исключение | Шаблон |
+| Id | Name | Outcome | Level | Exception | Template |
 |---|---|---|---|---|---|
-| 3001 | `JobStarted` | старт попытки | Debug | — | `PgBolt: job {JobId} ({JobType}) attempt {Attempt} started on queue {Queue}.` |
+| 3001 | `JobStarted` | attempt started | Debug | — | `PgBolt: job {JobId} ({JobType}) attempt {Attempt} started on queue {Queue}.` |
 | 3002 | `JobSucceeded` | `Ack` | Debug | — | `PgBolt: job {JobId} succeeded in {DurationMs} ms.` |
-| 3003 | `JobFailedWillRetry` | `Retry` | Warning | да | `PgBolt: job {JobId} attempt {Attempt} of {MaxAttempts} failed ({Reason}); retrying in {NextAttemptIn}.` |
-| 3004 | `JobFailed` | `Fail` | Error | да | `PgBolt: job {JobId} failed at attempt {Attempt} of {MaxAttempts} ({Reason}); no attempts left.` |
-| 3005 | `JobNoExecutorWillRetry` | нет исполнителя, `Retry` | Warning | да | `PgBolt: no executor is registered for job {JobId} of type {JobType}; retrying in {NextAttemptIn}.` |
-| 3006 | `JobNoExecutorFailed` | нет исполнителя, `Fail` | Error | да | `PgBolt: no executor is registered for job {JobId} of type {JobType}; the job is failed.` |
-| 3007 | `JobCancelled` | `ConfirmCancel` | Information | да | `PgBolt: job {JobId} was cancelled.` |
+| 3003 | `JobFailedWillRetry` | `Retry` | Warning | yes | `PgBolt: job {JobId} attempt {Attempt} of {MaxAttempts} failed ({Reason}); retrying in {NextAttemptIn}.` |
+| 3004 | `JobFailed` | `Fail` | Error | yes | `PgBolt: job {JobId} failed at attempt {Attempt} of {MaxAttempts} ({Reason}); no attempts left.` |
+| 3005 | `JobNoExecutorWillRetry` | no executor, `Retry` | Warning | yes | `PgBolt: no executor is registered for job {JobId} of type {JobType}; retrying in {NextAttemptIn}.` |
+| 3006 | `JobNoExecutorFailed` | no executor, `Fail` | Error | yes | `PgBolt: no executor is registered for job {JobId} of type {JobType}; the job is failed.` |
+| 3007 | `JobCancelled` | `ConfirmCancel` | Information | yes | `PgBolt: job {JobId} was cancelled.` |
 | 3008 | `JobReleased` | `Release` | Debug | — | `PgBolt: job {JobId} was released without spending an attempt (ran: {Ran}).` |
 
-### 3100–3999: Retry policy и таймауты (`RetryDecider`, `JobRunner`)
+### 3100–3999: Retry policy and timeouts (`RetryDecider`, `JobRunner`)
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
-| 3100 | `RetryPolicyFailed` | Error | да | `PgBolt: RetryPolicy threw for attempt {Attempt}; the job is failed without retry.` |
+| 3100 | `RetryPolicyFailed` | Error | yes | `PgBolt: RetryPolicy threw for attempt {Attempt}; the job is failed without retry.` |
 | 3101 | `JobTimeoutCapped` | Warning | — | `PgBolt: job '{JobName}' has TimeoutSeconds = {TimeoutSeconds}, above the .NET timer limit; its timeout is capped at {MaxJobTimeout}.` |
 
-### 4000–4099: Отправка исходов (`CompletionSink`)
+### 4000–4099: Outcome delivery (`CompletionSink`)
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
 | 4000 | `OutcomeDiscardedSinkStopped` | Warning | — | `PgBolt: outcome {Outcome} of job {JobId} discarded: completion sink is stopped.` |
 | 4001 | `OutcomeDiscardedNotRunning` | Warning | — | `PgBolt: outcome {Outcome} of job {JobId} discarded: execution is {State} (abandoned or lease lost).` |
@@ -446,36 +439,36 @@ metrics
 | 4006 | `OutcomeLeaseNotFoundAfterRetry` | Information | — | `PgBolt: outcome {Outcome} of job {JobId}: lease not found after a failed attempt; the outcome was probably already applied.` |
 | 4007 | `OutcomeDiscardedLeaseLost` | Warning | — | `PgBolt: outcome {Outcome} of job {JobId} discarded: lease was lost.` |
 | 4008 | `OutcomeNotSentExecutionState` | Debug | — | `PgBolt: outcome of job {JobId} is not sent: execution is {State}.` |
-| 4009 | `LeaseFreedNotificationFailed` | Error | да | `PgBolt: lease-freed notification for queue {Queue} failed.` |
-| 4010 | `OutcomeSendFailedRetrying` | Warning | да | `PgBolt: sending outcome of {Count} job(s) failed; retrying in {Delay}.` |
-| 4011 | `OutcomeNotSentStopCancelled` | Warning | да | `PgBolt: outcome of job {JobId} was not sent before stop was cancelled; its lease will expire.` |
-| 4012 | `OutcomeSendBudgetExceeded` | Error | да | `PgBolt: outcome of job {JobId} was not sent within {Budget}; the execution is dropped, its lease will expire.` |
+| 4009 | `LeaseFreedNotificationFailed` | Error | yes | `PgBolt: lease-freed notification for queue {Queue} failed.` |
+| 4010 | `OutcomeSendFailedRetrying` | Warning | yes | `PgBolt: sending outcome of {Count} job(s) failed; retrying in {Delay}.` |
+| 4011 | `OutcomeNotSentStopCancelled` | Warning | yes | `PgBolt: outcome of job {JobId} was not sent before stop was cancelled; its lease will expire.` |
+| 4012 | `OutcomeSendBudgetExceeded` | Error | yes | `PgBolt: outcome of job {JobId} was not sent within {Budget}; the execution is dropped, its lease will expire.` |
 
-### 4100–4199: Lease и heartbeat (`LeaseKeeper`)
+### 4100–4199: Leases and heartbeats (`LeaseKeeper`)
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
 | 4100 | `LeaseRenewalNotConfirmed` | Warning | — | `PgBolt: lease renewal of job {JobId} (lease {LeaseId}) is not confirmed; cancelling the execution.` |
-| 4101 | `HeartbeatTimedOut` | Warning | да | `PgBolt: heartbeat of server {ServerId} timed out after {Timeout}; {Count} leases not renewed.` |
-| 4102 | `HeartbeatFailed` | Warning | да | `PgBolt: heartbeat of server {ServerId} failed; {Count} leases not renewed.` |
+| 4101 | `HeartbeatTimedOut` | Warning | yes | `PgBolt: heartbeat of server {ServerId} timed out after {Timeout}; {Count} leases not renewed.` |
+| 4102 | `HeartbeatFailed` | Warning | yes | `PgBolt: heartbeat of server {ServerId} failed; {Count} leases not renewed.` |
 | 4103 | `JobCancellationRequested` | Information | — | `PgBolt: cancellation of job {JobId} requested; cancelling the execution.` |
 | 4104 | `LeaseLostExecutionCancelled` | Warning | — | `PgBolt: lease {LeaseId} of job {JobId} is lost; the execution is cancelled and its outcome will be dropped.` |
 | 4105 | `LeaseLostOutcomeDropped` | Warning | — | `PgBolt: lease {LeaseId} of job {JobId} is lost; pending outcome {Outcome} is dropped.` |
 | 4106 | `HeartbeatRecovered` | Information | — | `PgBolt: heartbeat of server {ServerId} recovered.` |
-| 4107 | `HeartbeatRecoveryCallbackFailed` | Error | да | `PgBolt: heartbeat recovery callback of server {ServerId} failed.` |
+| 4107 | `HeartbeatRecoveryCallbackFailed` | Error | yes | `PgBolt: heartbeat recovery callback of server {ServerId} failed.` |
 | 4108 | `ServerReRegistered` | Warning | — | `PgBolt: servers row of server {ServerId} was missing (removed by cleanup); registered again.` |
-| 4109 | `ServerReRegistrationFailed` | Warning | да | `PgBolt: re-registering server {ServerId} failed; retrying on the next heartbeat.` |
-| 4110 | `LeaseDeadlineCheckFailed` | Error | да | `PgBolt: lease deadline check of server {ServerId} failed.` |
+| 4109 | `ServerReRegistrationFailed` | Warning | yes | `PgBolt: re-registering server {ServerId} failed; retrying on the next heartbeat.` |
+| 4110 | `LeaseDeadlineCheckFailed` | Error | yes | `PgBolt: lease deadline check of server {ServerId} failed.` |
 
-### 4200–4299: Статистика исходов (`OutcomeStatsFlusher`)
+### 4200–4299: Outcome statistics (`OutcomeStatsFlusher`)
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
-| 4200 | `OutcomeStatsFlushFailed` | Warning | да | `PgBolt: flushing outcome statistics failed; values are kept for the next flush.` |
+| 4200 | `OutcomeStatsFlushFailed` | Warning | yes | `PgBolt: flushing outcome statistics failed; values are kept for the next flush.` |
 
-### 5000–5099: Обслуживание (`ProcessingMaintenance`)
+### 5000–5099: Maintenance (`ProcessingMaintenance`)
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
 | 5000 | `BatchCompletionNotCounted` | Debug | — | `PgBolt: completion of a member of batch {BatchId} is not counted: the batch row was removed by retention.` |
 | 5001 | `ResolverLagging` | Warning | — | `PgBolt: the oldest workflow completion signal is {Age} old (ResolverInterval {Interval}); continuations are delayed. Check that a process with RunMaintenance = true is running and that no long user transaction holds workflow rows (After).` |
@@ -484,17 +477,17 @@ metrics
 | 5004 | `RecurringOverlapSkipped` | Debug | — | `PgBolt: recurring job {Id} fire skipped: previous run is still active.` |
 | 5005 | `RecurringWaitingForPrevious` | Debug | — | `PgBolt: recurring job {Id} waits for its previous run (catch-up).` |
 | 5006 | `RecurringExhausted` | Warning | — | `PgBolt: recurring job {Id} has no future occurrences and will not fire again.` |
-| 5007 | `MaintenanceTaskFailed` | Error | да | `PgBolt: maintenance task {Task} failed.` |
+| 5007 | `MaintenanceTaskFailed` | Error | yes | `PgBolt: maintenance task {Task} failed.` |
 | 5008 | `FuturePartitionsLockTimeout` | Warning | — | `PgBolt: future partitions were not created (lock_timeout); retrying in {Delay}.` |
 | 5009 | `TodayPartitionsMissing` | Error | — | `PgBolt: today's partitions are missing and could not be created (lock_timeout); enqueue fails until they exist. Retrying in {Delay}.` |
 | 5010 | `DeadServersRemoved` | Information | — | `PgBolt: removed {Count} servers rows without heartbeat for {Timeout}.` |
-| 5011 | `MaintenanceLoopIterationFailed` | Error | да | `PgBolt: {Loop} iteration failed; retrying after the next interval.` |
-| 5012 | `QueueStatsReadFailed` | Warning | да | `PgBolt: reading queue statistics failed; the previous snapshot is kept.` |
-| 5013 | `TableStatsReadFailed` | Warning | да | `PgBolt: reading table statistics failed; the previous values are kept.` |
+| 5011 | `MaintenanceLoopIterationFailed` | Error | yes | `PgBolt: {Loop} iteration failed; retrying after the next interval.` |
+| 5012 | `QueueStatsReadFailed` | Warning | yes | `PgBolt: reading queue statistics failed; the previous snapshot is kept.` |
+| 5013 | `TableStatsReadFailed` | Warning | yes | `PgBolt: reading table statistics failed; the previous values are kept.` |
 
 ### 5100–5199: Retention (`RetentionReport`)
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
 | 5100 | `RetentionPartitionsDropped` | Information | — | `PgBolt retention: dropped {JobsCount} jobs partitions [{JobsDays}], {EventsCount} job_events partitions [{EventsDays}] and {Remnants} compaction remnants.` |
 | 5101 | `RetentionBatchesDeleted` | Information | — | `PgBolt retention: deleted {Count} finished batches rows older than JobsRetention.` |
@@ -506,96 +499,95 @@ metrics
 | 5107 | `RetentionDeferredByLockTimeout` | Warning / Debug | — | `PgBolt retention: {Count} {Table} partitions were deferred by lock_timeout (overdue by up to {Overdue} days); long queries or a holder of the partition itself (autovacuum, direct query) block their removal.` |
 | 5108 | `RetentionRemnantDropFailed` | Error | — | `PgBolt retention: dropping the detached {Table} table of {Day} failed: {Error}; it will be retried as a remnant.` |
 
-### 6000–6099: Инициализация схемы (`PgBoltInitializer`)
+### 6000–6099: Schema initialization (`PgBoltInitializer`)
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
 | 6000 | `SchemaVersionNewer` | Warning | — | `PgBolt: schema '{Schema}' has version {Version}, newer than this build knows ({Latest}); continuing because migrations are additive.` |
 | 6001 | `StartupFuturePartitionsLockTimeout` | Warning | — | `PgBolt: future partitions were not created (lock_timeout); retrying in background.` |
-| 6002 | `BackgroundPartitionCreationFailed` | Error | да | `PgBolt: background partition creation failed.` |
+| 6002 | `BackgroundPartitionCreationFailed` | Error | yes | `PgBolt: background partition creation failed.` |
 
-### 6100–6199: Синхронизация recurring
+### 6100–6199: Recurring job synchronization
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
 | 6100 | `RecurringJobInserted` | Information | — | `PgBolt: recurring job {Id} of owner {Owner} inserted.` |
 | 6101 | `RecurringJobUpdated` | Information | — | `PgBolt: recurring job {Id} of owner {Owner} updated ({Fields}).` |
 | 6102 | `RecurringJobDeleted` | Information | — | `PgBolt: recurring job {Id} of owner {Owner} deleted (no longer declared).` |
 | 6103 | `RecurringJobOwnerCollision` | Error | — | `PgBolt: recurring job {Id} declared by owner {Owner} belongs to another owner or was created through the API; left untouched.` |
-| 6104 | `RecurringSyncDeadlockRetry` | Warning | да | `PgBolt: recurring sync of owner {Owner} hit a deadlock (40P01); retrying the transaction (attempt {Attempt} of {MaxAttempts}).` |
+| 6104 | `RecurringSyncDeadlockRetry` | Warning | yes | `PgBolt: recurring sync of owner {Owner} hit a deadlock (40P01); retrying the transaction (attempt {Attempt} of {MaxAttempts}).` |
 
-### 7000–7099: Dashboard: проверка при старте
+### 7000–7099: Dashboard startup checks
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
 | 7000 | `ActionsPolicyNotRegistered` | Error | — | `PgBolt dashboard: ActionsPolicy '{Policy}' is not registered: every dashboard request fails until AddAuthorization defines it.` |
 | 7001 | `AnonymousRemoteAccessAllowed` | Warning | — | `PgBolt dashboard allows anonymous remote access (AllowAnonymousRemote = true).` |
 | 7002 | `LocalRequestsOnly` | Warning | — | `PgBolt dashboard is reachable only from local requests: add RequireAuthorization(...) to the dashboard group or set AllowAnonymousRemote.` |
 
-### 7100–7199: Dashboard: действия и ошибки
+### 7100–7199: Dashboard actions and errors
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
 | 7100 | `DashboardActionPerformed` | Information | — | `PgBolt dashboard: {User} {Action} {Target}: {Result}.` |
-| 7101 | `DashboardRequestFailed` | Error | да | `PgBolt dashboard: {Method} {Path} failed.` |
+| 7101 | `DashboardRequestFailed` | Error | yes | `PgBolt dashboard: {Method} {Path} failed.` |
 
-### 8000–8999: Телеметрия (категория `PgBolt.Telemetry`)
+### 8000–8999: Telemetry (category `PgBolt.Telemetry`)
 
-| Id | Name | Level | Исключение | Шаблон |
+| Id | Name | Level | Exception | Template |
 |---|---|---|---|---|
-| 8001 | `TelemetryFailed` | Warning | да | `PgBolt: telemetry failed; the signal is skipped.` |
-| 8002 | `MetricCallbackFailed` | Warning | да | `PgBolt: metric callback failed; the measurement is skipped.` |
+| 8001 | `TelemetryFailed` | Warning | yes | `PgBolt: telemetry failed; the signal is skipped.` |
+| 8002 | `MetricCallbackFailed` | Warning | yes | `PgBolt: metric callback failed; the measurement is skipped.` |
 
-## Примеры PromQL
+## PromQL examples
 
-Имена меток — после преобразования OTel → Prometheus (`pgbolt.queue` → `pgbolt_queue`).
+These examples use the translated Prometheus label names (`pgbolt.queue` becomes `pgbolt_queue`).
 
-Пропускная способность по очередям и исходам:
+Throughput by queue and outcome
 
 ```promql
 sum by (pgbolt_queue, pgbolt_job_outcome) (rate(pgbolt_job_duration_seconds_count[5m]))
 ```
 
-p99 ожидания (для выполнения — `pgbolt_job_duration_seconds_bucket`):
+p99 wait time (use `pgbolt_job_duration_seconds_bucket` for execution time)
 
 ```promql
 histogram_quantile(0.99, sum by (le, pgbolt_queue) (rate(pgbolt_job_wait_time_seconds_bucket[5m])))
 ```
 
-Насыщение пула воркеров:
+Worker pool saturation
 
 ```promql
 sum by (pgbolt_queue) (pgbolt_worker_active) / on() group_left sum(pgbolt_worker_capacity)
 ```
 
-Насыщение кластерного лимита очереди (метрики пода — `sum`, кластерная — `max`):
+Saturation of a queue's cluster-wide limit (use `sum` for pod metrics and `max` for the cluster metric)
 
 ```promql
 sum by (pgbolt_queue) (pgbolt_worker_active) / max by (pgbolt_queue) (pgbolt_cluster_queue_limit)
 ```
 
-Застрявшая очередь — готовая задача ждёт дольше 5 минут:
+Stuck queue with a ready job waiting longer than 5 minutes
 
 ```promql
 max by (pgbolt_queue) (pgbolt_cluster_queue_oldest_ready_age_seconds) > 300
 ```
 
-Потеря lease:
+Lease loss
 
 ```promql
 sum(rate(pgbolt_job_outcome_dropped_total{pgbolt_drop_reason="lease_lost"}[5m])) > 0
 ```
 
-Снимок `queue_stats` устарел — ни один под с `RunMaintenance = true` не делает снимок или он стабильно падает. Алерт имеет смысл при
-живых подах с серверами; в простое ряд остаётся с нулями, поэтому пустая очередь с устаревшим снимком не путается:
+A stale `queue_stats` snapshot means no pod with `RunMaintenance = true` is taking snapshots or snapshot creation keeps failing.
+Use this alert when pods with servers are running. Idle queues retain a zero-valued series, so an empty queue does not trigger a stale snapshot alert.
 
 ```promql
 absent(pgbolt_cluster_queue_jobs)
 ```
 
-## Стоимость
+## Overhead
 
-Без слушателей (`ActivityListener`, `MeterListener`) телеметрия не добавляет аллокаций на задачу, кроме scope логов — одного объекта
-`JobLogScope` (32 байта). Бенчмарк `benchmarks/PgBolt.Server.Benchmarks` измеряет один `JobRunner.RunAsync` успешной no-op задачи
-(без БД и сети); результаты и сравнение с состоянием до внедрения телеметрии — в
-[README бенчмарка](../benchmarks/PgBolt.Server.Benchmarks/README.md).
+Without listeners (`ActivityListener`, `MeterListener`), the only per-job telemetry allocation is the logging scope, one 32-byte `JobLogScope` object.
+The `benchmarks/PgBolt.Server.Benchmarks` benchmark measures one successful no-op `JobRunner.RunAsync` call without database or network access.
+For results and a comparison with the implementation before telemetry, see the [benchmark README](../benchmarks/PgBolt.Server.Benchmarks/README.md).
