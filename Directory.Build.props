@@ -8,5 +8,8 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <RepoRoot>$(MSBuildThisFileDirectory)</RepoRoot>
     <Deterministic>true</Deterministic>
+    <Authors>nightNo1r</Authors>
+    <RepositoryUrl>https://github.com/NightNo1r/pgBolt</RepositoryUrl>
+    <PackageProjectUrl>$(RepositoryUrl)</PackageProjectUrl>
   </PropertyGroup>
 </Project>

@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <RootNamespace>PgBolt.Server</RootNamespace>
+    <Description>Hosted workers, queue scheduling and job execution for PgBolt.</Description>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
   <ItemGroup>
