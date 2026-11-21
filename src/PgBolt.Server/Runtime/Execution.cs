@@ -2,15 +2,15 @@ using PgBolt.Postgres.Storage;
 
 namespace PgBolt.Server.Runtime;
 
-/// <summary>Состояние записи выполнения в таблице LeaseKeeper (§6.2). Removed терминально.</summary>
+/// <summary>State of an execution in the LeaseKeeper table (§6.2). Removed is terminal.</summary>
 internal enum ExecutionState { Running, OutcomePending, OutcomeInFlight, Removed }
 
-/// <summary>Причина отмены выполнения (§5.1); значима первая.</summary>
+/// <summary>Reason for canceling an execution (§5.1). The first reason takes precedence.</summary>
 internal enum CancelReason { None, Shutdown, CancelRequested, HeartbeatLost, LeaseLost, Timeout }
 
 /// <summary>
-/// Запись таблицы выполнений (§6.2): одна взятая задача с её lease. Состояние, первая причина отмены и
-/// validUntil меняются атомарно (CAS) и читаются без блокировок.
+/// Execution table entry (§6.2) for one claimed job and its lease. State, the first cancellation reason and validUntil
+/// are updated atomically using CAS and read without locks.
 /// </summary>
 internal sealed class Execution
 {
@@ -38,31 +38,37 @@ internal sealed class Execution
 
     public LeaseRef Lease { get; }
 
-    /// <summary>Вид слота, выданного <see cref="SlotAllocator.Take"/>.</summary>
+    /// <summary>Kind of slot allocated by <see cref="SlotAllocator.Take"/>.</summary>
     public bool FromReserved { get; set; }
 
-    /// <summary>Отменяется <see cref="Cancel"/>; источник живёт столько же, сколько запись, и не освобождается (таймеров нет).</summary>
+    /// <summary>
+    /// Canceled by <see cref="Cancel"/>. The source lives as long as the entry and requires no disposal because it has no
+    /// timers.
+    /// </summary>
     public CancellationToken Token => _cts.Token;
 
     public CancelReason FirstReason => (CancelReason)Volatile.Read(ref _firstReason);
 
-    /// <summary>Нижняя граница lease_until по монотонным часам (<see cref="MonoClock"/>).</summary>
+    /// <summary>Lower bound on lease_until on the monotonic clock (<see cref="MonoClock"/>).</summary>
     public long ValidUntil => Volatile.Read(ref _validUntil);
 
     public ExecutionState State => (ExecutionState)Volatile.Read(ref _state);
 
-    /// <summary>Ставится до перехода в OutcomePending; видимость обеспечивает барьер CAS перехода.</summary>
+    /// <summary>Set before the transition to OutcomePending. The transition's CAS barrier makes the value visible.</summary>
     public JobOutcome? Outcome { get; set; }
 
-    /// <summary>Момент первой попытки отправки исхода (бюджет LeaseDuration, §6.1); 0 — не начиналась.</summary>
+    /// <summary>
+    /// Time of the first outcome send attempt, used for the LeaseDuration budget (§6.1). Zero means no attempt has
+    /// started.
+    /// </summary>
     public long OutcomeFirstAttemptAt { get; set; }
 
     /// <summary>
-    /// Запоминает причину, если она первая, и отменяет <see cref="Token"/> (всегда, идемпотентно).
-    /// Колбэки токена запускаются асинхронно (<see cref="CancellationTokenSource.CancelAsync"/>):
-    /// код задачи, продолжающийся после отмены, не выполняется на потоке heartbeat или таймера.
+    /// Records the first reason and always cancels <see cref="Token"/> idempotently. Token callbacks run asynchronously
+    /// through <see cref="CancellationTokenSource.CancelAsync"/>, keeping job continuations off the heartbeat and timer
+    /// threads.
     /// </summary>
-    /// <returns>true — причина стала первой.</returns>
+    /// <returns>True if this call recorded the first reason.</returns>
     public bool Cancel(CancelReason reason)
     {
         if (reason == CancelReason.None)
@@ -85,8 +91,11 @@ internal sealed class Execution
         }
     }
 
-    /// <summary>CAS from → to. Переходы вне §6.2 — <see cref="InvalidOperationException"/>.</summary>
-    /// <returns>false — текущее состояние не равно <paramref name="from"/>; состояние не меняется.</returns>
+    /// <summary>
+    /// Uses CAS to transition from one state to another. A transition outside §6.2 throws
+    /// <see cref="InvalidOperationException"/>.
+    /// </summary>
+    /// <returns>False if the current state differs from <paramref name="from"/> and the state was left unchanged.</returns>
     public bool TryTransition(ExecutionState from, ExecutionState to)
     {
         if (!IsAllowed(from, to))

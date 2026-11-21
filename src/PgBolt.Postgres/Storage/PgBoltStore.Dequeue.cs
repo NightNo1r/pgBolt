@@ -47,7 +47,7 @@ public sealed partial class PgBoltStore
 
     internal string DequeueSql => field ??= Render(DequeueTemplate);
 
-    /// <summary>Берёт до <paramref name="max"/> готовых задач очереди в lease. max = число свободных слотов (без prefetch).</summary>
+    /// <summary>Leases up to <paramref name="max"/> ready jobs from the queue. Supply the number of free slots to avoid prefetch.</summary>
     public Task<IReadOnlyList<LeasedJob>> DequeueAsync(string queue, int max, Guid serverId, TimeSpan lease, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(max);
@@ -63,7 +63,7 @@ public sealed partial class PgBoltStore
         P.Add(ps, "lease", lease);
     }
 
-    /// <summary>Столбцы задачи из итогового SELECT dequeue, начиная с <paramref name="o"/>.</summary>
+    /// <summary>Reads job columns from the final dequeue SELECT starting at ordinal <paramref name="o"/>.</summary>
     private static LeasedJob ReadLeasedJob(NpgsqlDataReader r, int o) => new(
         r.GetGuid(o), r.GetGuid(o + 1), r.GetString(o + 2), r.GetString(o + 3), r.GetInt32(o + 4), r.GetInt32(o + 5),
         r.GetNullable<int[]>(o + 6), r.GetNullableValue<Guid>(o + 7), r.GetNullableValue<Guid>(o + 8), r.GetNullable<string>(o + 9),

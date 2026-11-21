@@ -1,11 +1,11 @@
 <tr>
-    <td><a href="recurring/item?id=@Uri.EscapeDataString(Row.Id)">@Row.Id</a>@if (Row.Paused) { <span class="muted"> пауза</span> }</td>
+    <td><a href="recurring/item?id=@Uri.EscapeDataString(Row.Id)">@Row.Id</a>@if (Row.Paused) { <span class="muted"> paused</span> }</td>
     <td>@Row.Type</td>
     <td>@Row.Cron</td>
     <td>@Row.TimeZone</td>
     <td>@Row.Owner</td>
     <td><Time Utc="Row.NextFireAt" /></td>
-    <td><Time Utc="Row.LastFireAt" />@if (Row.LastJobId is { } last) { <text> </text><a href="jobs/@last">задача</a> }</td>
+    <td><Time Utc="Row.LastFireAt" />@if (Row.LastJobId is { } last) { <text> </text><a href="jobs/@last">job</a> }</td>
     <td>@if (Row.LastError is { } error) { <pre>@error</pre> }</td>
     @if (Context.CanAct)
     {

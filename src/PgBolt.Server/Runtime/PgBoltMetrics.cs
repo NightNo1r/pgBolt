@@ -7,7 +7,7 @@ using I = PgBolt.PgBoltDiagnostics.Instruments;
 
 namespace PgBolt.Server.Runtime;
 
-/// <summary>Значения тега <c>pgbolt.drop.reason</c>.</summary>
+/// <summary>Values of the <c>pgbolt.drop.reason</c> tag.</summary>
 internal static class DropReasons
 {
     public const string LeaseLost = "lease_lost";
@@ -16,18 +16,16 @@ internal static class DropReasons
     public const string SendTimeout = "send_timeout";
 }
 
-/// <summary>Значения тега <c>pgbolt.maintenance.result</c>.</summary>
+/// <summary>Values of the <c>pgbolt.maintenance.result</c> tag.</summary>
 internal static class MaintenanceResults
 {
     public const string Ok = "ok";
     public const string Error = "error";
-    /// <summary>Задача вернула ошибку без исключения (например, lock_timeout партиций).</summary>
+    /// <summary>The task returned an error without throwing, for example lock_timeout during partition maintenance.</summary>
     public const string Deferred = "deferred";
 }
 
-/// <summary>
-/// Значения тега <c>pgbolt.storage.operation</c>. Исключения итераций циклов обслуживания пишутся с именем цикла.
-/// </summary>
+/// <summary>Values of the <c>pgbolt.storage.operation</c> tag. Maintenance loop iteration exceptions use the loop name.</summary>
 internal static class StorageOperations
 {
     public const string Dequeue = "dequeue";
@@ -41,9 +39,9 @@ internal static class StorageOperations
 }
 
 /// <summary>
-/// Метрики сервера. Синхронная запись под защитой: сбой слушателя пишет 8001 и не ломает вызывающего. Observable-instruments
-/// создаются один раз; их callbacks перечисляют зарегистрированные виртуальные серверы и читают только память.
-/// Кластерные gauges публикуются, только пока зарегистрирован хотя бы один сервер: под без серверов их не публикует.
+/// Server metrics. Guarded synchronous recording logs event 8001 on listener failure and allows the caller to continue.
+/// Observable instruments are created once. Their callbacks enumerate registered virtual servers and read only in-memory
+/// state. Only pods with at least one registered server publish cluster gauges.
 /// </summary>
 internal sealed class PgBoltMetrics
 {
@@ -87,10 +85,10 @@ internal sealed class PgBoltMetrics
         meter.CreateObservableGauge(I.ClusterTableSize, () => Observe(_ => TableMeasurements(r => r.SizeBytes)), "By");
     }
 
-    /// <summary>Общая точка сообщения о сбоях телеметрии для компонентов, которым нужны и метрики, и spans.</summary>
+    /// <summary>Shared telemetry failure reporting for components that use both metrics and spans.</summary>
     public PgBoltInstrumentation Instrumentation => _instrumentation;
 
-    /// <summary>Значение тега <c>pgbolt.job.outcome</c>.</summary>
+    /// <summary>Value of the <c>pgbolt.job.outcome</c> tag.</summary>
     public static string OutcomeName(JobOutcome outcome) => outcome switch
     {
         JobOutcome.Ack => "succeeded",
@@ -112,7 +110,7 @@ internal sealed class PgBoltMetrics
     public void OutcomeDropped(string queue, string reason, int count = 1) =>
         GuardedInstruments.Add(_dropped, count, new TagList { { Attr.Queue, queue }, { Attr.DropReason, reason } }, _instrumentation);
 
-    /// <param name="operation">Константа <see cref="StorageOperations"/> или имя цикла обслуживания.</param>
+    /// <param name="operation">A <see cref="StorageOperations"/> constant or maintenance loop name.</param>
     public void StorageError(string operation) =>
         GuardedInstruments.Add(_storageErrors, 1, new TagList { { Attr.StorageOperation, operation } }, _instrumentation);
 
@@ -129,8 +127,9 @@ internal sealed class PgBoltMetrics
         GuardedInstruments.Add(_retentionDeferred, count, new TagList { { Attr.RetentionReason, reason } }, _instrumentation);
 
     /// <summary>
-    /// Источник observable-метрик виртуального сервера до <c>Dispose</c> результата. <paramref name="settings"/> читается
-    /// у первого зарегистрированного сервера: все серверы процесса делят один кэш настроек очередей.
+    /// Provides observable metrics for a virtual server until the returned registration's <c>Dispose</c> is called. Reads
+    /// <paramref name="settings"/> from the first registered server because all servers in the process share one queue
+    /// settings cache.
     /// </summary>
     public IDisposable RegisterServer(string serverName, SlotAllocator slots, int capacity, IReadOnlyList<string> queues,
         Func<QueueSettingsSnapshot> settings)
@@ -141,7 +140,9 @@ internal sealed class PgBoltMetrics
         return source;
     }
 
-    /// <summary>Сбой callback'а пишет 8002 и даёт пустой набор, а не исключение в сборщик метрик.</summary>
+    /// <summary>
+    /// On callback failure, logs event 8002 and returns an empty sequence so the metrics collector can continue.
+    /// </summary>
     private IEnumerable<Measurement<T>> Observe<T>(Func<ServerSource[], List<Measurement<T>>> collect) where T : struct
     {
         try
@@ -171,8 +172,9 @@ internal sealed class PgBoltMetrics
         [.. servers.Select(s => new Measurement<int>(s.Capacity, new TagList { { Attr.ServerName, s.Name } }))];
 
     /// <summary>
-    /// Четыре состояния на каждую известную очередь — очереди серверов пода и строки снимка, без дублей; очередь без строки —
-    /// нули, чтобы простой отличался от устаревшего снимка (тогда рядов нет).
+    /// Reports four states per distinct known queue, combining this pod's server queues with snapshot rows. A queue
+    /// missing from a fresh snapshot has zero counts. A stale snapshot produces no series, distinguishing it from an idle
+    /// queue.
     /// </summary>
     private List<Measurement<long>> ClusterJobs(ServerSource[] servers)
     {

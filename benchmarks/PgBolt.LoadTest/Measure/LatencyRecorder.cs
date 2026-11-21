@@ -2,18 +2,17 @@ using HdrHistogram;
 
 namespace PgBolt.LoadTest.Measure;
 
-/// <summary>Перцентили задержки в миллисекундах; у пустой гистограммы все значения 0.</summary>
+/// <summary>Latency percentiles in milliseconds. An empty histogram has all values zero.</summary>
 internal sealed record LatencySummary(long Count, double P50Ms, double P90Ms, double P99Ms, double P999Ms, double MaxMs);
 
 /// <summary>
-/// Гистограмма задержки старта: запись из многих потоков, закрытие окон 10 с из одного. Интервальная
-/// гистограмма каждого закрытого окна добавляется в общую (с последнего <see cref="ResetTotal"/>) и в сегмент
-/// (с последнего <see cref="BeginSegment"/>) — так перцентили общей и сегмента считаются по всем значениям
-/// вместе, а не из перцентилей окон.
+/// Start latency histogram written by many threads, with one thread closing 10-second windows. Each closed window's histogram contributes to the
+/// total since <see cref="ResetTotal"/> and the segment since <see cref="BeginSegment"/>. Total and segment percentiles are computed from pooled
+/// observations.
 /// </summary>
 internal sealed class LatencyRecorder
 {
-    /// <summary>60 с: значение больше насыщается до него, чтобы запись в обработчике задачи никогда не бросала.</summary>
+    /// <summary>Caps latency at 60 seconds so recording a measurement in the job handler never throws for a larger value.</summary>
     private const long MaxMicros = 60_000_000;
 
     // Recorder только переключает гистограммы окна; одновременную запись из многих потоков держит сама гистограмма.
@@ -25,7 +24,7 @@ internal sealed class LatencyRecorder
     private HistogramBase? _interval;
     private long _overflows;
 
-    /// <summary>Сколько значений больше 60 с насыщено до 60 с.</summary>
+    /// <summary>Number of values above 60 seconds capped at 60 seconds.</summary>
     public long Overflows => Interlocked.Read(ref _overflows);
 
     public void Record(long micros)
@@ -67,8 +66,8 @@ internal sealed class LatencyRecorder
     }
 
     /// <summary>
-    /// Сводка окон, закрытых с последнего <see cref="BeginSegment"/>; до первого вызова <see cref="BeginSegment"/>
-    /// сегмент считается от начала прогона.
+    /// Summarizes windows closed since the last <see cref="BeginSegment"/>. Before the first <see cref="BeginSegment"/>, the segment starts with the
+    /// run.
     /// </summary>
     public LatencySummary SegmentSummary()
     {

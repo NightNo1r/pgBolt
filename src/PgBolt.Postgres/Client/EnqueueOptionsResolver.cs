@@ -6,7 +6,7 @@ internal readonly record struct ResolvedEnqueue(
     string Queue, short Priority, int MaxAttempts, int[]? RetryDelaysSeconds,
     DateTime? RunAtUtc, TimeSpan Delay, NpgsqlTransaction? Transaction);
 
-/// <summary>[Job]-умолчания + EnqueueOptions (§6.2): поле опций, если задано, переопределяет умолчание.</summary>
+/// <summary>Merges [Job] defaults with EnqueueOptions. Each supplied option overrides its default (§6.2).</summary>
 internal static class EnqueueOptionsResolver
 {
     public static ResolvedEnqueue Resolve(JobDescriptor descriptor, EnqueueOptions? options)
@@ -34,7 +34,9 @@ internal static class EnqueueOptionsResolver
             transaction);
     }
 
-    /// <summary>Значения опций, общие для EnqueueOptions и StepOptions (часть 5 §5.2); type — имя типа опций в сообщениях.</summary>
+    /// <summary>
+    /// Option values shared by EnqueueOptions and StepOptions (Part 5 §5.2). The type argument supplies the options type name in messages.
+    /// </summary>
     internal static void ValidateValues(string type, DateTimeOffset? runAt, TimeSpan? delay, int? maxAttempts, string? queue,
         string paramName)
     {

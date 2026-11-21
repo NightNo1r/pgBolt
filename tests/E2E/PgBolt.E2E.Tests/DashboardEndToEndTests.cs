@@ -85,7 +85,7 @@ public abstract class DashboardEndToEndTests(PostgresFixture pg, ConnectionMode 
         Assert.Equal(JobState.Enqueued, (await client.GetAsync(scheduled, Ct))!.State);
 
         var created = await PostAsync(http, "/pgbolt/actions/types/enqueue?name=e2e.ping", [new("json", """{"Message":"from-dashboard"}""")]);
-        Assert.Contains("задача поставлена", created, StringComparison.Ordinal);
+        Assert.Contains("job enqueued", created, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public abstract class DashboardEndToEndTests(PostgresFixture pg, ConnectionMode 
             var limited = await PostAsync(http, Limit, [new("op", "set"), new("value", "2")]);
             Assert.Matches(@"\d+ / 2", limited);
             var weighted = await PostAsync(http, "/pgbolt/actions/queues/weight?queue=e2e-limited", [new("op", "set"), new("value", "7")]);
-            Assert.Matches(@"<td>\s*7\s*<span class=""muted"">переопределён", weighted);
+            Assert.Matches(@"<td>\s*7\s*<span class=""muted"">overridden by", weighted);
             await PostAsync(http, "/pgbolt/actions/queues/cache/reset", []);
         }
         finally

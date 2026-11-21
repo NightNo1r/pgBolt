@@ -16,16 +16,17 @@ public sealed record BenchArgs(int N);
 [JsonSerializable(typeof(BenchArgs))]
 internal sealed partial class BenchJson : JsonSerializerContext;
 
-/// <summary>Задача без работы: в замер попадает только накладная JobRunner.</summary>
+/// <summary>No-op job used to isolate JobRunner overhead.</summary>
 public sealed class NoopJob : IJob<BenchArgs>
 {
     public Task ExecuteAsync(BenchArgs args, JobContext context, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
-/// <summary>Какие слушатели телеметрии подключены на время замера.</summary>
+/// <summary>Telemetry listeners attached during the measurement.</summary>
 public enum Listeners { None, Activity, Meter, Both }
 
-/// <summary>Один <c>JobRunner.RunAsync</c> успешной задачи: scope, десериализация аргументов, вызов исполнителя.</summary>
+/// <summary>One successful <c>JobRunner.RunAsync</c> call, including scope creation, argument deserialization, and executor
+/// invocation.</summary>
 [MemoryDiagnoser]
 public class JobRunnerBenchmarks
 {

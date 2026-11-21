@@ -1,8 +1,8 @@
 namespace PgBolt.LoadTest.Slo;
 
 /// <summary>
-/// Код возврата сценария: 2 — сбой стенда или упор в CPU процесса стенда, 1 — нарушен хотя бы один SLO,
-/// иначе 0. «Нет данных» нарушением не считается.
+/// Scenario exit code: 2 for harness failure or harness process CPU saturation, 1 for an SLO violation, otherwise 0. Missing data is not a
+/// violation.
 /// </summary>
 internal static class ExitCode
 {

@@ -12,7 +12,7 @@ namespace PgBolt.Dashboard.Tests.Endpoints;
 
 public sealed class QueueSettingsActionsTests(PostgresFixture pg)
 {
-    private const string PauseBadge = "<span class=\"pgbolt-state\">Пауза</span>";
+    private const string PauseBadge = "<span class=\"pgbolt-state\">Paused</span>";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -63,8 +63,8 @@ public sealed class QueueSettingsActionsTests(PostgresFixture pg)
         Assert.StartsWith("<tr", set, StringComparison.Ordinal);
         Assert.Equal(Regex.Count(header, "<th[ >]"), Regex.Count(set, "<td[ >]"));
         Assert.Contains("0 / 7", set, StringComparison.Ordinal);
-        Assert.Contains("переопределён: dashboard: alice", set, StringComparison.Ordinal);
-        Assert.Equal("лимит 7", setMessage);
+        Assert.Contains("overridden by dashboard: alice", set, StringComparison.Ordinal);
+        Assert.Equal("limit 7", setMessage);
         var settings = (await Manager(host).GetAsync("a", Ct))!;
         Assert.Equal((true, 7, "dashboard: alice"), (settings.OverrideConcurrencySet, settings.OverrideMaxConcurrency,
             settings.OverrideConcurrencyUpdatedBy));
@@ -72,14 +72,14 @@ public sealed class QueueSettingsActionsTests(PostgresFixture pg)
         var (paused, pauseMessage) = await ActAsync(PostAsync(host, "actions/queues/limit?queue=a", "pause"));
 
         Assert.Contains(PauseBadge, paused, StringComparison.Ordinal);
-        Assert.Equal("пауза", pauseMessage);
+        Assert.Equal("paused", pauseMessage);
         settings = (await Manager(host).GetAsync("a", Ct))!;
         Assert.Equal((true, "dashboard: alice"), (settings.Paused, settings.OverrideConcurrencyUpdatedBy));
 
         var (unlimited, unlimitedMessage) = await ActAsync(PostAsync(host, "actions/queues/limit?queue=a", "unlimited"));
 
         Assert.DoesNotContain(PauseBadge, unlimited, StringComparison.Ordinal);
-        Assert.Equal("без лимита", unlimitedMessage);
+        Assert.Equal("unlimited", unlimitedMessage);
         settings = (await Manager(host).GetAsync("a", Ct))!;
         Assert.Equal((true, null, 2, "dashboard: alice"), (settings.OverrideConcurrencySet, settings.EffectiveMaxConcurrency,
             settings.EffectiveWeight, settings.OverrideConcurrencyUpdatedBy));
@@ -87,8 +87,8 @@ public sealed class QueueSettingsActionsTests(PostgresFixture pg)
         var (reset, resetMessage) = await ActAsync(PostAsync(host, "actions/queues/limit?queue=a", "reset"));
 
         Assert.Contains("0 / 3", reset, StringComparison.Ordinal);
-        Assert.DoesNotContain("переопределён", reset, StringComparison.Ordinal);
-        Assert.Equal("лимит из кода", resetMessage);
+        Assert.DoesNotContain("overridden by", reset, StringComparison.Ordinal);
+        Assert.Equal("configured limit", resetMessage);
         Assert.False((await Manager(host).GetAsync("a", Ct))!.OverrideConcurrencySet);
     }
 
@@ -103,15 +103,15 @@ public sealed class QueueSettingsActionsTests(PostgresFixture pg)
 
         Assert.StartsWith("<tr", set, StringComparison.Ordinal);
         Assert.Contains("<td>1000", set, StringComparison.Ordinal);
-        Assert.Contains("переопределён: dashboard: alice", set, StringComparison.Ordinal);
-        Assert.Equal("вес 1000", setMessage);
+        Assert.Contains("overridden by dashboard: alice", set, StringComparison.Ordinal);
+        Assert.Equal("weight 1000", setMessage);
         var settings = (await Manager(host).GetAsync("a", Ct))!;
         Assert.Equal((true, 1000, "dashboard: alice", false), (settings.OverrideWeightSet, settings.OverrideWeight,
             settings.OverrideWeightUpdatedBy, settings.OverrideConcurrencySet));
 
         var (_, noneMessage) = await ActAsync(PostAsync(host, "actions/queues/weight?queue=a", "none"));
 
-        Assert.Equal("без веса", noneMessage);
+        Assert.Equal("unweighted", noneMessage);
         settings = (await Manager(host).GetAsync("a", Ct))!;
         Assert.Equal((true, null, "dashboard: alice"), (settings.OverrideWeightSet, settings.EffectiveWeight,
             settings.OverrideWeightUpdatedBy));
@@ -119,7 +119,7 @@ public sealed class QueueSettingsActionsTests(PostgresFixture pg)
         var (reset, resetMessage) = await ActAsync(PostAsync(host, "actions/queues/weight?queue=a", "reset"));
 
         Assert.Contains("<td>2", reset, StringComparison.Ordinal);
-        Assert.Equal("вес из кода", resetMessage);
+        Assert.Equal("configured weight", resetMessage);
         Assert.False((await Manager(host).GetAsync("a", Ct))!.OverrideWeightSet);
     }
 
@@ -135,7 +135,7 @@ public sealed class QueueSettingsActionsTests(PostgresFixture pg)
         var (row, message) = await ActAsync(PostAsync(host, "actions/queues/limit?queue=limited", "reset"));
 
         Assert.Equal("", row);
-        Assert.Equal("лимит из кода", message);
+        Assert.Equal("configured limit", message);
         Assert.DoesNotContain("queue=limited\"", await BodyAsync(host.GetAsync("/pgbolt/queues")), StringComparison.Ordinal);
     }
 
@@ -271,11 +271,11 @@ public sealed class QueueSettingsActionsTests(PostgresFixture pg)
 
         var (_, message) = await ActAsync(PostAsync(host, "actions/queues/cache/reset"));
 
-        Assert.Equal("кэш настроек сброшен", message);
+        Assert.Equal("settings cache reset", message);
         Assert.Equal(1, refresher.Calls);
         Assert.Equal(5, (await Manager(host).GetAsync("a", Ct))!.EffectiveMaxConcurrency);
         Assert.Contains(logs.Entries, e => e.Level == LogLevel.Information
-            && e.Message == "PgBolt dashboard: alice reset queue settings cache: кэш настроек сброшен.");
+            && e.Message == "PgBolt dashboard: alice reset queue settings cache: settings cache reset.");
 
         await using var plain = await StartAsync(db);
         await ActAsync(PostAsync(plain, "actions/queues/cache/reset"));
@@ -292,7 +292,7 @@ public sealed class QueueSettingsActionsTests(PostgresFixture pg)
         await ActAsync(PostAsync(host, "actions/queues/limit?queue=a", "set", "7"));
         await ActAsync(PostAsync(host, "actions/queues/weight?queue=a", "reset"));
 
-        Assert.Equal(["PgBolt dashboard: alice limit set queue a: лимит 7.", "PgBolt dashboard: alice weight reset queue a: вес из кода."],
+        Assert.Equal(["PgBolt dashboard: alice limit set queue a: limit 7.", "PgBolt dashboard: alice weight reset queue a: configured weight."],
             logs.Entries.Where(e => e.Category == "PgBolt.Dashboard.Actions" && e.Level == LogLevel.Information).Select(e => e.Message));
     }
 

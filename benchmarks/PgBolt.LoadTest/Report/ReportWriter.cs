@@ -8,22 +8,22 @@ using static System.FormattableString;
 
 namespace PgBolt.LoadTest.Report;
 
-/// <summary>Пропуски среза: пропущенные тики, попытки без единого удачного запроса и неудачные запросы.</summary>
+/// <summary>Sampling gaps: skipped ticks, attempts with no successful query, and failed queries.</summary>
 internal sealed record SamplerSummary(long SkippedTicks, long FailedAttempts, long FailedQueries);
 
-/// <summary>Счётчики <c>Meter</c> PgBolt хостов и продюсера; <see cref="Enqueued"/> — справочно.</summary>
+/// <summary>PgBolt <c>Meter</c> counters for hosts and producer. <see cref="Enqueued"/> is informational.</summary>
 internal sealed record PgBoltCounters(long OutcomeDropped, IReadOnlyDictionary<string, long> StorageErrors, long Enqueued)
 {
     public long StorageErrorsTotal => StorageErrors.Values.Sum();
 }
 
 /// <summary>
-/// Всё, что пишется в отчёт одного прогона; <see cref="Aborted"/> — прогон прерван, значения неполные;
-/// <see cref="Ramp"/> — итог сценария <c>ramp</c>; <see cref="WindowRamp"/> — для каждого окна <c>Data.Windows</c> rate
-/// его ступени и признак «оценивается» (окно не из первой трети ступени); <see cref="Combination"/> — комбинация
-/// сценария <c>partitions</c>: из неё в отчёт идут P, набор индексов и блокировки statement'ов;
-/// <see cref="VacuumOutcome"/> — входы выбора параметров autovacuum прогона <c>vacuum</c>, <c>null</c> — нет данных;
-/// <see cref="DuplicatedExecutions"/> — лишние выполнения прогона без дренажа (при проверке корректности берутся из неё).
+/// Data written to one run report. <see cref="Aborted"/> marks an interrupted run with incomplete measurements. <see cref="Ramp"/> holds the
+/// <c>ramp</c> result. For each <c>Data.Windows</c> window, <see cref="WindowRamp"/> records the stage rate and evaluation flag (outside the
+/// first third of the stage). <see cref="Combination"/> identifies the <c>partitions</c> combination, supplying P, the index set, and statement
+/// locks. <see cref="VacuumOutcome"/> supplies autovacuum selection inputs for <c>vacuum</c>, or <c>null</c> for missing data.
+/// <see cref="DuplicatedExecutions"/> counts excess executions for runs without a drain. Runs with correctness verification use the count from
+/// that check.
 /// </summary>
 internal sealed record ReportModel(
     LoadTestOptions Options, LoadMode Mode, DateTime StartedAt, string Schema,
@@ -34,14 +34,13 @@ internal sealed record ReportModel(
     CombinationResult? Combination = null, ModeOutcome? VacuumOutcome = null, long? DuplicatedExecutions = null);
 
 /// <summary>
-/// Отчёт прогона: <c>&lt;yyyyMMdd-HHmm&gt;-&lt;сценарий&gt;-&lt;режим&gt;.md</c> (у комбинации <c>partitions</c> — с
-/// суффиксом <c>-p&lt;P&gt;-&lt;индексы&gt;</c>) и рядом <c>.csv</c> с посекундными срезами; сводка <c>partitions</c> —
-/// <c>&lt;yyyyMMdd-HHmm&gt;-partitions-summary.md</c>. Существующие файлы не перезаписываются: к имени добавляется
-/// <c>-2</c>, <c>-3</c>…
+/// Run report <c>&lt;yyyyMMdd-HHmm&gt;-&lt;scenario&gt;-&lt;mode&gt;.md</c>, with suffix <c>-p&lt;P&gt;-&lt;indexes&gt;</c> for a
+/// <c>partitions</c> combination and an adjacent <c>.csv</c> of per-second samples. The <c>partitions</c> summary is
+/// <c>&lt;yyyyMMdd-HHmm&gt;-partitions-summary.md</c>. Appends <c>-2</c>, <c>-3</c>, etc. to avoid overwriting existing files.
 /// </summary>
 internal static class ReportWriter
 {
-    private const string NoData = "нет данных";
+    private const string NoData = "no data";
 
     public static async Task<string> WriteAsync(string outDir, ReportModel model)
     {
@@ -54,43 +53,43 @@ internal static class ReportWriter
     }
 
     /// <summary>
-    /// Сводка <c>partitions</c>: SLO 1 и 2 и измерения каждой комбинации, statement'ы горячего пути, порог P по режимам и
-    /// наборам индексов и ёмкость общей таблицы блокировок.
+    /// Summarizes <c>partitions</c> SLOs 1 and 2, measurements per combination, hot-path statements, P thresholds by mode and index set, and shared
+    /// lock table capacity.
     /// </summary>
     public static async Task<string> WriteSummaryAsync(string outDir, DateTime startedAt, LoadTestOptions options,
         IReadOnlyList<CombinationResult> results, long lockTableCapacity, IReadOnlyList<string> warnings)
     {
         var md = new StringBuilder();
-        md.AppendLine("# Нагрузочный прогон: partitions, сводка").AppendLine();
+        md.AppendLine("# Load test: partitions summary").AppendLine();
 
-        Section(md, "Параметры прогона");
-        Table(md, ["Параметр", "Значение"],
+        Section(md, "Run parameters");
+        Table(md, ["Parameter", "Value"],
         [
-            ["Старт", startedAt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)],
-            ["rate", Invariant($"{options.Rate}/с")],
-            ["Прогрев", Invariant($"{options.Warmup.TotalSeconds} с")],
-            ["Окно замера", Invariant($"{options.Duration.TotalSeconds} с на комбинацию")],
+            ["Start", startedAt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)],
+            ["rate", Invariant($"{options.Rate}/s")],
+            ["Warmup", Invariant($"{options.Warmup.TotalSeconds} s")],
+            ["Measurement window", Invariant($"{options.Duration.TotalSeconds} s per combination")],
             ["--queue-profile", Kebab(options.Queues)],
-            ["Ёмкость таблицы блокировок", Invariant($"{lockTableCapacity}")],
+            ["Lock table capacity", Invariant($"{lockTableCapacity}")],
         ]);
 
-        Section(md, "Комбинации");
+        Section(md, "Combinations");
         Table(md,
-            ["Режим", "Индексы", "P", "SLO 1", "SLO 2", "p99 немедл., мс", "Ограничено стендом", "LockManager, макс.",
-             "LockManager, среднее", "storage.errors", "Сбой"],
+            ["Mode", "Indexes", "P", "SLO 1", "SLO 2", "Immediate p99, ms", "Harness-limited", "LockManager, max",
+             "LockManager, mean", "storage.errors", "Failure"],
             results.Select(r => new[]
             {
                 Kebab(r.Mode), Kebab(r.Indexes), Invariant($"{r.P}"), Result(r.Slo1), Result(r.Slo2),
-                r.ImmediateP99Ms is { } p99 ? Invariant($"{p99:F1}") : NoData, r.CpuBound ? "да" : "",
+                r.ImmediateP99Ms is { } p99 ? Invariant($"{p99:F1}") : NoData, r.CpuBound ? "yes" : "",
                 r.LockManagerWaitsMax is { } max ? Invariant($"{max}") : NoData,
                 r.LockManagerWaitsMean is { } mean ? Invariant($"{mean:F2}") : NoData,
                 r.StorageErrors is { } errors ? Invariant($"{errors}") : NoData, r.Failure ?? "",
             }));
 
-        Section(md, "Statement'ы");
+        Section(md, "Statements");
         Table(md,
-            ["Режим", "Индексы", "P", "Statement", "План", "Блокировок вне fast-path", "Блокировок всего", "Оценка",
-             "mean plan, мс", "mean exec, мс"],
+            ["Mode", "Indexes", "P", "Statement", "Plan", "Non-fast-path locks", "Total locks", "Measurement type",
+             "mean plan, ms", "mean exec, ms"],
             results.SelectMany(r => r.Statements?.Select(s => (string[])
             [
                 Kebab(r.Mode), Kebab(r.Indexes), Invariant($"{r.P}"), .. StatementCells(s.Key, s.Value),
@@ -99,24 +98,24 @@ internal static class ReportWriter
 
         FetchTable(md, results);
 
-        Section(md, "Порог P");
-        md.AppendLine("Наименьшее P матрицы, с которого режим и набор индексов нарушают SLO 1 или 2.").AppendLine();
-        Table(md, ["Режим", "Индексы", "Порог P"],
+        Section(md, "P threshold");
+        md.AppendLine("Smallest P in the matrix at which a mode and index set violate SLO 1 or 2.").AppendLine();
+        Table(md, ["Mode", "Indexes", "P threshold"],
             results.Select(r => (r.Mode, r.Indexes)).Distinct().Select(k => new[]
             {
                 Kebab(k.Mode), Kebab(k.Indexes),
-                PartitionsVerdict.Threshold(results, k.Mode, k.Indexes) is { } p ? Invariant($"{p}") : "нет",
+                PartitionsVerdict.Threshold(results, k.Mode, k.Indexes) is { } p ? Invariant($"{p}") : "none",
             }));
 
-        Section(md, "Предупреждения");
-        md.AppendLine(warnings.Count == 0 ? "нет" : string.Join(Environment.NewLine, warnings.Select(w => "- " + w)));
+        Section(md, "Warnings");
+        md.AppendLine(warnings.Count == 0 ? "none" : string.Join(Environment.NewLine, warnings.Select(w => "- " + w)));
 
         var path = FreePath(outDir, $"{startedAt:yyyyMMdd-HHmm}-partitions-summary");
         await File.WriteAllTextAsync(path, md.ToString());
         return path;
     }
 
-    /// <summary>Путь <c>.md</c>, у которого нет ни отчёта, ни <c>.csv</c> рядом.</summary>
+    /// <summary>Returns a <c>.md</c> path with neither an existing report nor an adjacent <c>.csv</c>.</summary>
     private static string FreePath(string outDir, string name)
     {
         Directory.CreateDirectory(outDir);
@@ -126,19 +125,19 @@ internal static class ReportWriter
         return path;
     }
 
-    /// <summary>Statement, план, блокировки вне fast-path и всего, измерены они или оценены.</summary>
+    /// <summary>Statement, plan, non-fast-path and total locks, and whether those counts were measured or estimated.</summary>
     private static string[] StatementCells(string statement, StatementResult s) =>
     [
         statement, s.Locks is null ? NoData : s.Plan == PlanKind.Generic ? "generic" : "custom",
         s.Locks?.NonFastPath.ToString() ?? NoData, s.Locks?.Total.ToString() ?? NoData,
-        s.Locks is null ? NoData : s.LowerBound ? "нижняя оценка" : "измерение",
+        s.Locks is null ? NoData : s.LowerBound ? "lower bound" : "measured",
     ];
 
     private static void FetchTable(StringBuilder md, IEnumerable<CombinationResult> results)
     {
-        Section(md, "Выдача задач");
-        Table(md, ["Режим", "P", "Индексы", "Вызовов", "Пустых", "С задачами", "Ошибок", "p99 вызова, мс",
-            "Замеров advisory lock", "p99 lock, мс", "Отправок в БД", "Отправок/вызов"], results.Select(r =>
+        Section(md, "Job fetches");
+        Table(md, ["Mode", "P", "Indexes", "Calls", "Empty", "With jobs", "Errors", "Call p99, ms",
+            "Advisory lock samples", "Lock p99, ms", "Database sends", "Sends/call"], results.Select(r =>
         {
             var f = r.Fetches;
             return new[] { Kebab(r.Mode), Invariant($"{r.P}"), Kebab(r.Indexes),
@@ -162,54 +161,54 @@ internal static class ReportWriter
         // Недогруз окна считается от rate его ступени.
         int RateOf(int windowIndex) => m.WindowRamp?[windowIndex].Rate ?? d.Rate;
         var md = new StringBuilder();
-        md.AppendLine($"# Нагрузочный прогон: {Kebab(m.Options.Scenario)}, {Kebab(m.Mode)}").AppendLine();
+        md.AppendLine($"# Load test: {Kebab(m.Options.Scenario)}, {Kebab(m.Mode)}").AppendLine();
         if (m.Aborted)
-            md.AppendLine("**Прогон прерван**: значения неполные, вердикты SLO не вычислялись.").AppendLine();
+            md.AppendLine("**Run aborted**. Measurements are incomplete. SLOs were not evaluated.").AppendLine();
 
-        Section(md, "Параметры прогона");
+        Section(md, "Run parameters");
         var o = m.Options;
         string[][] load = m.Ramp is null
             ?
             [
-                ["rate", Invariant($"{d.Rate}/с")],
-                ["Прогрев", Invariant($"{o.Warmup.TotalSeconds} с")],
+                ["rate", Invariant($"{d.Rate}/s")],
+                ["Warmup", Invariant($"{o.Warmup.TotalSeconds} s")],
             ]
             :
             [
-                ["Прогрев", "нет"],
-                ["ramp-start", Invariant($"{o.RampStart}/с")],
-                ["ramp-step", Invariant($"{o.RampStep}/с")],
-                ["ramp-step-duration", Invariant($"{o.RampStepDuration.TotalSeconds} с")],
-                ["ramp-max", Invariant($"{o.RampMax}/с")],
+                ["Warmup", "none"],
+                ["ramp-start", Invariant($"{o.RampStart}/s")],
+                ["ramp-step", Invariant($"{o.RampStep}/s")],
+                ["ramp-step-duration", Invariant($"{o.RampStepDuration.TotalSeconds} s")],
+                ["ramp-max", Invariant($"{o.RampMax}/s")],
             ];
-        Table(md, ["Параметр", "Значение"],
+        Table(md, ["Parameter", "Value"],
         [
-            ["Старт", m.StartedAt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)],
-            ["Схема", m.Schema],
+            ["Start", m.StartedAt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)],
+            ["Schema", m.Schema],
             .. load,
-            ["Окно замера", Invariant($"{d.MeasureStart.TotalSeconds:F0}–{d.MeasureEnd.TotalSeconds:F0} с от начала прогона")],
+            ["Measurement window", Invariant($"{d.MeasureStart.TotalSeconds:F0}–{d.MeasureEnd.TotalSeconds:F0} s from the start of the run")],
             .. d.Phases is { } p
-                ? new[] { new[] { "Фазы", Invariant($"1: {p.Phase1Start.TotalSeconds:F0}–{p.Phase2Start.TotalSeconds:F0} с, 2 (удержание xmin): до {p.Phase3Start.TotalSeconds:F0} с, 3: до {p.End.TotalSeconds:F0} с") } }
+                ? new[] { new[] { "Phases", Invariant($"1: {p.Phase1Start.TotalSeconds:F0}–{p.Phase2Start.TotalSeconds:F0} s, 2 (holding xmin): until {p.Phase3Start.TotalSeconds:F0} s, 3: until {p.End.TotalSeconds:F0} s") } }
                 : [],
         ]);
 
         if (m.Ramp is { } ramp)
         {
-            Section(md, "Результат ramp");
-            Table(md, ["Показатель", "Значение"],
+            Section(md, "Ramp result");
+            Table(md, ["Metric", "Value"],
             [
-                ["Максимальный устойчивый rate", ramp.MaxSustainedRate is { } max
-                    ? Invariant($"{max}/с") + (ramp.LimitedByStand ? " (ограничено стендом)" : "")
-                    : "нет: нарушена первая ступень"],
-                ["Нарушено первым", ramp.FirstViolation ?? "ничего до ramp-max"],
+                ["Maximum sustained rate", ramp.MaxSustainedRate is { } max
+                    ? Invariant($"{max}/s") + (ramp.LimitedByStand ? " (harness-limited)" : "")
+                    : "none (first step failed)"],
+                ["First violation", ramp.FirstViolation ?? "none through ramp-max"],
             ]);
         }
 
-        Section(md, "Окружение");
-        Table(md, ["Параметр", "Значение"], m.Environment.Select(e => new[] { e.Key, e.Value }));
+        Section(md, "Environment");
+        Table(md, ["Parameter", "Value"], m.Environment.Select(e => new[] { e.Key, e.Value }));
 
         Section(md, "SLO");
-        Table(md, ["#", "SLO", "Порог", "Значение", "Результат", "Пометка"], m.Verdicts.Select(v => new[]
+        Table(md, ["#", "SLO", "Threshold", "Value", "Result", "Note"], m.Verdicts.Select(v => new[]
         {
             v.Number.ToString(CultureInfo.InvariantCulture), v.Name, v.Threshold, v.Value,
             Result(v.Result), v.Mark ?? "",
@@ -217,26 +216,26 @@ internal static class ReportWriter
 
         if (m.Options.Scenario == Scenario.Vacuum && !m.Aborted)
         {
-            Section(md, "Входы выбора параметров autovacuum");
+            Section(md, "Autovacuum selection inputs");
             if (m.VacuumOutcome is { } v)
-                Table(md, ["SLO 7–9", "Пик размера queue в фазе 1, МБ", "p99 немедл. фазы 1, мс"],
-                    [[v.Slo7To9 switch { Verdict.Pass => "да", Verdict.Fail => "нет", _ => NoData }, Invariant($"{v.PeakSizeBytes / 1_048_576:F1}"), Invariant($"{v.P99Ms:F1}")]]);
+                Table(md, ["SLO 7–9", "Peak phase 1 queue size, MiB", "Phase 1 immediate p99, ms"],
+                    [[v.Slo7To9 switch { Verdict.Pass => "yes", Verdict.Fail => "no", _ => NoData }, Invariant($"{v.PeakSizeBytes / 1_048_576:F1}"), Invariant($"{v.P99Ms:F1}")]]);
             else
                 md.AppendLine(NoData).AppendLine();
         }
 
-        Section(md, "Задержка старта");
-        Table(md, ["Задачи", "Число", "p50, мс", "p90, мс", "p99, мс", "p99.9, мс", "max, мс", "Переполнений"],
+        Section(md, "Start latency");
+        Table(md, ["Jobs", "Count", "p50, ms", "p90, ms", "p99, ms", "p99.9, ms", "max, ms", "Overflows"],
         [
-            Latency("немедленные", d.Immediate, m.ImmediateOverflows),
-            Latency("отложенные", d.Delayed, m.DelayedOverflows),
+            Latency("immediate", d.Immediate, m.ImmediateOverflows),
+            Latency("delayed", d.Delayed, m.DelayedOverflows),
         ]);
 
-        Section(md, "Пропускная способность по окнам 10 с");
+        Section(md, "Throughput per 10 s window");
         Table(md,
-            ["#", "Старт, с", "Замер", "Выполнено/с", "Поставлено/с", "Вызовов/с", "Ср. пачка", "Ошибок enqueue",
-             "p99 enqueue, мс", "CPU, %", "Ожидание генератора, мс", "Отброшено токенов", "p99 немедл., мс",
-             "p99 отлож., мс", "Недогруз"],
+            ["#", "Start, s", "Measured", "Completed/s", "Enqueued/s", "Calls/s", "Mean batch size", "Enqueue errors",
+             "Enqueue p99, ms", "CPU, %", "Generator wait, ms", "Dropped tokens", "Immediate p99, ms",
+             "Delayed p99, ms", "Underloaded"],
             d.Windows.Select((w, i) =>
             {
                 // Окно короче 10 с (неполное окно прогрева) кончается там, где начинается следующее.
@@ -244,37 +243,37 @@ internal static class ReportWriter
                 return new[]
                 {
                     w.Index.ToString(CultureInfo.InvariantCulture), Invariant($"{w.Start.TotalSeconds:F0}"),
-                    measured.Contains(w) ? "да" : "", Invariant($"{w.Completed / seconds:F0}"),
+                    measured.Contains(w) ? "yes" : "", Invariant($"{w.Completed / seconds:F0}"),
                     Invariant($"{w.Enqueued / seconds:F0}"), Invariant($"{w.EnqueueCalls / seconds:F1}"), BatchSize(w.Enqueued, w.EnqueueCalls),
                     Invariant($"{w.EnqueueErrors}"), Invariant($"{w.EnqueueP99Ms:F1}"), Invariant($"{w.CpuFraction * 100:F0}"),
                     Invariant($"{w.MaxGeneratorWait.TotalMilliseconds:F0}"), Invariant($"{w.DroppedTokens}"),
                     Invariant($"{w.Immediate.P99Ms:F1}"), Invariant($"{w.Delayed.P99Ms:F1}"),
-                    measured.Contains(w) && SloEvaluator.IsUnderloaded(w, RateOf(i)) ? "да" : "",
+                    measured.Contains(w) && SloEvaluator.IsUnderloaded(w, RateOf(i)) ? "yes" : "",
                 };
             }));
 
         var calls = measured.Sum(w => w.EnqueueCalls);
         Section(md, "Enqueue");
-        Table(md, ["Показатель (окно замера)", "Значение"],
+        Table(md, ["Metric (measurement window)", "Value"],
         [
-            ["Вызовов EnqueueManyAsync/с", measured.Count == 0 ? NoData : Invariant($"{calls / (measured.Count * 10.0):F1}")],
-            ["Средний размер пачки", BatchSize(measured.Sum(w => w.Enqueued), calls)],
-            ["Ошибок EnqueueManyAsync", Invariant($"{measured.Sum(w => w.EnqueueErrors)}")],
-            ["Seq неуспешных вызовов", d.Correctness is { } c ? Invariant($"{c.ExcludedFailedCalls}") : NoData],
-            ["Окон недогруза", Invariant($"{d.Windows.Where((w, i) => measured.Contains(w) && SloEvaluator.IsUnderloaded(w, RateOf(i))).Count()} из {measured.Count}")],
+            ["EnqueueManyAsync calls/s", measured.Count == 0 ? NoData : Invariant($"{calls / (measured.Count * 10.0):F1}")],
+            ["Mean batch size", BatchSize(measured.Sum(w => w.Enqueued), calls)],
+            ["EnqueueManyAsync errors", Invariant($"{measured.Sum(w => w.EnqueueErrors)}")],
+            ["Seq values from failed calls", d.Correctness is { } c ? Invariant($"{c.ExcludedFailedCalls}") : NoData],
+            ["Underloaded windows", Invariant($"{d.Windows.Where((w, i) => measured.Contains(w) && SloEvaluator.IsUnderloaded(w, RateOf(i))).Count()} of {measured.Count}")],
         ]);
 
-        Section(md, "Загрузка CPU стенда");
-        Table(md, ["Показатель (окно замера)", "Значение"],
+        Section(md, "Harness CPU usage");
+        Table(md, ["Metric (measurement window)", "Value"],
         [
-            ["Среднее, % ядер", Stat(measured.Average(w => (double?)w.CpuFraction * 100), "F0")],
-            ["Максимум, % ядер", Stat(measured.Max(w => (double?)w.CpuFraction * 100), "F0")],
-            ["Окон выше 80 %", Invariant($"{measured.Count(w => w.CpuFraction > 0.8)} из {measured.Count}")],
+            ["Mean, % of cores", Stat(measured.Average(w => (double?)w.CpuFraction * 100), "F0")],
+            ["Maximum, % of cores", Stat(measured.Max(w => (double?)w.CpuFraction * 100), "F0")],
+            ["Windows above 80%", Invariant($"{measured.Count(w => w.CpuFraction > 0.8)} of {measured.Count}")],
         ]);
 
         Section(md, "pg_stat_statements");
         if (m.Statements.Classes is { } classes)
-            Table(md, ["Класс", "calls", "mean plan, мс", "mean exec, мс", "total plan, мс", "total exec, мс"],
+            Table(md, ["Class", "calls", "mean plan, ms", "mean exec, ms", "total plan, ms", "total exec, ms"],
                 classes.OrderBy(c => c.Key, StringComparer.Ordinal).Select(c => new[]
                 {
                     c.Key, Invariant($"{c.Value.Calls}"), Ms(c.Value.MeanPlanTime), Ms(c.Value.MeanExecTime),
@@ -287,75 +286,75 @@ internal static class ReportWriter
         {
             FetchTable(md, [m.Combination]);
             if (m.Combination.Failure is { } failure) { md.AppendLine(failure).AppendLine(); }
-            md.AppendLine("Время read_jobs включено во внешний dequeue. Счётчик отправок включает повторные ExecuteReaderAsync и исключает подготовку соединения. Сервер исполняет queue_lock и dequeue_limited в одном пакете.").AppendLine();
-            Section(md, "Блокировки statement'ов");
-            Table(md, ["Statement", "План", "Вне fast-path", "Всего", "Оценка"],
+            md.AppendLine("The outer dequeue time includes read_jobs. The send count includes ExecuteReaderAsync retries and excludes connection setup. The server executes queue_lock and dequeue_limited in a single batch.").AppendLine();
+            Section(md, "Statement locks");
+            Table(md, ["Statement", "Plan", "Non-fast-path", "Total", "Measurement type"],
                 probed.Where(p => p.Value.Locks is not null).Select(p => StatementCells(p.Key, p.Value)));
         }
 
         var s = d.Samples;
-        Section(md, "Bloat и autovacuum");
-        Table(md, ["Показатель (за прогон)", "Значение"],
+        Section(md, "Bloat and autovacuum");
+        Table(md, ["Metric (whole run)", "Value"],
         [
-            ["Размер queue, макс. МБ", Stat(s.Max(x => x.QueueTotalBytes / 1_048_576.0), "F1")],
-            ["n_dead_tup queue, макс.", Stat(s.Max(x => x.Queue?.DeadTuples), "F0")],
-            ["n_dead_tup completions, макс.", Stat(s.Max(x => x.Completions?.DeadTuples), "F0")],
-            ["autovacuum queue, раз", Delta(s, x => x.Queue?.AutovacuumCount)],
-            ["autovacuum completions, раз", Delta(s, x => x.Completions?.AutovacuumCount)],
-            ["Активных autovacuum workers, макс.", Stat(s.Max(x => x.AutovacuumWorkers), "F0")],
-            ["Размер БД в конце прогона, МБ", Stat(s.LastOrDefault(x => x.DatabaseBytes is not null)?.DatabaseBytes / 1_048_576.0, "F1")],
+            ["Maximum queue size, MiB", Stat(s.Max(x => x.QueueTotalBytes / 1_048_576.0), "F1")],
+            ["Maximum queue n_dead_tup", Stat(s.Max(x => x.Queue?.DeadTuples), "F0")],
+            ["Maximum completions n_dead_tup", Stat(s.Max(x => x.Completions?.DeadTuples), "F0")],
+            ["Queue autovacuum runs", Delta(s, x => x.Queue?.AutovacuumCount)],
+            ["Completions autovacuum runs", Delta(s, x => x.Completions?.AutovacuumCount)],
+            ["Maximum active autovacuum workers", Stat(s.Max(x => x.AutovacuumWorkers), "F0")],
+            ["Database size at end of run, MiB", Stat(s.LastOrDefault(x => x.DatabaseBytes is not null)?.DatabaseBytes / 1_048_576.0, "F1")],
         ]);
 
-        Section(md, "Checkpoint'ы");
-        Table(md, ["Показатель (за прогон)", "Значение"],
+        Section(md, "Checkpoints");
+        Table(md, ["Metric (whole run)", "Value"],
         [
             ["num_timed", Delta(s, x => x.Checkpointer?.NumTimed)],
             ["num_requested", Delta(s, x => x.Checkpointer?.NumRequested)],
-            ["write_time, мс", Delta(s, x => (long?)x.Checkpointer?.WriteTimeMs)],
-            ["sync_time, мс", Delta(s, x => (long?)x.Checkpointer?.SyncTimeMs)],
+            ["write_time, ms", Delta(s, x => (long?)x.Checkpointer?.WriteTimeMs)],
+            ["sync_time, ms", Delta(s, x => (long?)x.Checkpointer?.SyncTimeMs)],
             ["buffers_written", Delta(s, x => x.Checkpointer?.BuffersWritten)],
-            ["WAL, байт", Delta(s, x => x.WalBytes)],
+            ["WAL, bytes", Delta(s, x => x.WalBytes)],
         ]);
 
-        Section(md, "Ожидания LockManager");
-        Table(md, ["Показатель (за прогон)", "Значение"],
+        Section(md, "LockManager waits");
+        Table(md, ["Metric (whole run)", "Value"],
         [
-            ["Backend'ов в ожидании, макс.", Stat(s.Max(x => x.LockManagerWaits), "F0")],
-            ["Backend'ов в ожидании, среднее", Stat(s.Average(x => x.LockManagerWaits), "F2")],
+            ["Maximum waiting backends", Stat(s.Max(x => x.LockManagerWaits), "F0")],
+            ["Mean waiting backends", Stat(s.Average(x => x.LockManagerWaits), "F2")],
         ]);
 
-        Section(md, "Корректность и счётчики PgBolt");
+        Section(md, "Correctness and PgBolt counters");
         var r = d.Correctness;
-        Table(md, ["Показатель", "Значение"],
+        Table(md, ["Metric", "Value"],
         [
-            ["Пропущенные выполнения", r is null ? NoData : Invariant($"{r.MissingExecutions}")],
-            ["Повторные (лишние) выполнения", (r?.DuplicatedExecutions ?? m.DuplicatedExecutions) is { } dup ? Invariant($"{dup}") : NoData],
-            ["Seq неуспешных вызовов вне сверки", r is null ? NoData : Invariant($"{r.ExcludedFailedCalls}")],
-            ["jobs не в Succeeded", r is null ? NoData : Invariant($"{r.JobsNotSucceeded}")],
-            ["queue после дренажа", r is null ? NoData : Invariant($"{r.QueueRowsAfterDrain}")],
-            ["Дренаж уложился в 2 мин", r is null ? NoData : r.DrainedInTime ? "да" : "нет"],
-            ["jobs с неверным attempt", r is null ? NoData : Invariant($"{r.AttemptMismatches}")],
+            ["Missing executions", r is null ? NoData : Invariant($"{r.MissingExecutions}")],
+            ["Duplicate (extra) executions", (r?.DuplicatedExecutions ?? m.DuplicatedExecutions) is { } dup ? Invariant($"{dup}") : NoData],
+            ["Seq values excluded due to failed calls", r is null ? NoData : Invariant($"{r.ExcludedFailedCalls}")],
+            ["Jobs outside Succeeded", r is null ? NoData : Invariant($"{r.JobsNotSucceeded}")],
+            ["Queue rows after drain", r is null ? NoData : Invariant($"{r.QueueRowsAfterDrain}")],
+            ["Drained within 2 min", r is null ? NoData : r.DrainedInTime ? "yes" : "no"],
+            ["Jobs with incorrect attempt", r is null ? NoData : Invariant($"{r.AttemptMismatches}")],
             ["pgbolt.job.outcome.dropped", Invariant($"{m.Counters.OutcomeDropped}")],
             ["pgbolt.storage.errors", m.Counters.StorageErrors.Count == 0
                 ? "0"
                 : string.Join(", ", m.Counters.StorageErrors.OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => Invariant($"{e.Key} {e.Value}")))],
-            ["pgbolt.job.enqueued (справочно)", Invariant($"{m.Counters.Enqueued}")],
+            ["pgbolt.job.enqueued (for reference)", Invariant($"{m.Counters.Enqueued}")],
         ]);
 
-        Section(md, "Срез");
-        Table(md, ["Показатель (за прогон)", "Значение"],
+        Section(md, "Sampler");
+        Table(md, ["Metric (whole run)", "Value"],
         [
-            ["Ежесекундные запросы, среднее мс", Stat(s.Average(x => x.QueryTime?.TotalMilliseconds), "F1")],
-            ["Ежесекундные запросы, макс. мс", Stat(s.Max(x => x.QueryTime?.TotalMilliseconds), "F1")],
-            ["Счёт по queue раз в 10 с, среднее мс", Stat(s.Average(x => x.CountsTime?.TotalMilliseconds), "F1")],
-            ["Счёт по queue раз в 10 с, макс. мс", Stat(s.Max(x => x.CountsTime?.TotalMilliseconds), "F1")],
-            ["Пропущенных тиков", Invariant($"{m.Sampler.SkippedTicks}")],
-            ["Неудачных запросов", Invariant($"{m.Sampler.FailedQueries}")],
-            ["Неудачных попыток", Invariant($"{m.Sampler.FailedAttempts}")],
+            ["Per-second queries, mean ms", Stat(s.Average(x => x.QueryTime?.TotalMilliseconds), "F1")],
+            ["Per-second queries, max ms", Stat(s.Max(x => x.QueryTime?.TotalMilliseconds), "F1")],
+            ["Queue counts every 10 s, mean ms", Stat(s.Average(x => x.CountsTime?.TotalMilliseconds), "F1")],
+            ["Queue counts every 10 s, max ms", Stat(s.Max(x => x.CountsTime?.TotalMilliseconds), "F1")],
+            ["Skipped ticks", Invariant($"{m.Sampler.SkippedTicks}")],
+            ["Failed queries", Invariant($"{m.Sampler.FailedQueries}")],
+            ["Failed attempts", Invariant($"{m.Sampler.FailedAttempts}")],
         ]);
 
-        Section(md, "Предупреждения");
-        md.AppendLine(m.Warnings.Count == 0 ? "нет" : string.Join(Environment.NewLine, m.Warnings.Select(w => "- " + w)));
+        Section(md, "Warnings");
+        md.AppendLine(m.Warnings.Count == 0 ? "none" : string.Join(Environment.NewLine, m.Warnings.Select(w => "- " + w)));
         return md.ToString();
     }
 
@@ -404,10 +403,10 @@ internal static class ReportWriter
 
     private static string Ms(double? value) => value is { } v ? Invariant($"{v:F3}") : NoData;
 
-    /// <summary>Значение агрегата; <c>null</c> — значений не было.</summary>
+    /// <summary>Aggregate value, or <c>null</c> when there were no readings.</summary>
     private static string Stat(double? value, string format) => value?.ToString(format, CultureInfo.InvariantCulture) ?? NoData;
 
-    /// <summary>Разница между последним и первым срезом, где значение есть.</summary>
+    /// <summary>Difference between the last and first samples containing the value.</summary>
     private static string Delta(IReadOnlyList<Sample> samples, Func<Sample, long?> value)
     {
         var values = samples.Select(value).OfType<long>().ToList();

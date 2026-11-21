@@ -91,7 +91,7 @@ public sealed partial class PgBoltStore
                 ? new JobTypeRecord(r.GetString(0), r.GetString(1), r.GetString(2), r.GetInt32(3), r.GetInt16(4), r.GetNullable<int[]>(5))
                 : null, ct);
 
-    /// <summary>Имена job_types, у которых default_queue ∈ queues (предупреждение NoExecutor на старте, часть 3 §4.4 п. 4).</summary>
+    /// <summary>Names from job_types whose default_queue is in queues, used for the startup NoExecutor warning (Part 3 §4.4, step 4).</summary>
     public Task<IReadOnlyList<string>> GetJobTypeNamesByQueuesAsync(IReadOnlyList<string> queues, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(queues);

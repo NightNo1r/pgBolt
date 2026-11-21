@@ -2,14 +2,16 @@ using System.Globalization;
 
 namespace PgBolt.LoadTest.Env;
 
-/// <summary>Строка <c>SHOW POOLS</c>.</summary>
-/// <param name="MaxWaitMicros">Ожидание самого старого клиента в очереди пула: <c>maxwait</c> (секунды) и <c>maxwait_us</c> (микросекундная часть).</param>
+/// <summary>A <c>SHOW POOLS</c> row.</summary>
+/// <param name="MaxWaitMicros">
+/// Wait of the oldest queued client, combining <c>maxwait</c> in seconds and the <c>maxwait_us</c> fractional microseconds.
+/// </param>
 internal sealed record PoolRow(
     string Database, string User, int ClActive, int ClWaiting, int SvActive, int SvIdle, long MaxWaitMicros);
 
 /// <summary>
-/// Разбор вывода <c>psql -At</c> админ-консоли PgBouncer: строки без заголовка, колонки через <c>|</c>.
-/// Порядок колонок — PgBouncer 1.24, образ стенда закреплён.
+/// Parses PgBouncer admin console output from <c>psql -At</c>: no header and columns separated by <c>|</c>. Column order matches the harness's
+/// pinned PgBouncer 1.24 image.
 /// </summary>
 internal static class PgBouncerOutputParser
 {
@@ -21,7 +23,7 @@ internal static class PgBouncerOutputParser
             c[0], c[1], Int(c[2]), Int(c[3]), Int(c[6]), Int(c[9]), Long(c[13]) * 1_000_000 + Long(c[14]))),
     ];
 
-    /// <summary>Значение <c>max_prepared_statements</c> из <c>SHOW CONFIG</c> (key|value|default|changeable).</summary>
+    /// <summary>Value of <c>max_prepared_statements</c> from <c>SHOW CONFIG</c> (key|value|default|changeable).</summary>
     public static int? ParseMaxPreparedStatements(string psqlOutput) =>
         Rows(psqlOutput).FirstOrDefault(c => c[0] == "max_prepared_statements") is { } row ? Int(row[1]) : null;
 

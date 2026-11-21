@@ -6,8 +6,8 @@ namespace PgBolt.Dashboard.Endpoints;
 internal static class DashboardPaths
 {
     /// <summary>
-    /// Базовый путь dashboard без хвостового «/»: PathBase + первые N сегментов пути запроса, где N — число сегментов шаблона
-    /// endpoint'а минус число сегментов его локального шаблона (работает при UsePathBase и при вложении в группу хоста).
+    /// Dashboard base path without a trailing slash: PathBase plus the first N request segments. N is the endpoint
+    /// template's segment count minus the local template's segment count. Supports UsePathBase and nested route groups.
     /// </summary>
     public static string BasePath(HttpContext http)
     {

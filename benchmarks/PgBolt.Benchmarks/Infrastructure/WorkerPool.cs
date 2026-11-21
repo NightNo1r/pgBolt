@@ -3,8 +3,8 @@ using System.Runtime.ExceptionServices;
 namespace PgBolt.Benchmarks.Infrastructure;
 
 /// <summary>
-/// N выделенных потоков для конкурентных бенчмарков: <see cref="Run"/> одновременно стартует работу на всех (Barrier) и
-/// ждёт, пока все закончат. Потоки создаются один раз (GlobalSetup), чтобы не мерить их создание.
+/// N dedicated threads for concurrent benchmarks. <see cref="Run"/> starts them together using a Barrier and waits for all to finish.
+/// GlobalSetup creates the threads once, outside measurements.
 /// </summary>
 internal sealed class WorkerPool : IDisposable
 {
@@ -28,7 +28,7 @@ internal sealed class WorkerPool : IDisposable
 
     public int Count => _threads.Length;
 
-    /// <summary>Выполняет work(i) на каждом потоке i, одновременный старт; возвращается, когда закончили все.</summary>
+    /// <summary>Starts work(i) simultaneously on each thread i and returns after all threads finish.</summary>
     public void Run(Action<int> work)
     {
         _work = work;

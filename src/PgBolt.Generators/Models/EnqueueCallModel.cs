@@ -3,7 +3,7 @@ using Microsoft.CodeAnalysis;
 
 namespace PgBolt.Generators
 {
-    /// <summary>Места вызова, требующие метаданных TArgs: EnqueueAsync / EnqueueManyAsync, типизированные recurring-вызовы (часть 4) и типизированные шаги workflow (часть 5).</summary>
+    /// <summary>Call sites requiring TArgs metadata: EnqueueAsync, EnqueueManyAsync, typed recurring calls (part 4) and typed workflow steps (part 5).</summary>
     internal static class EnqueueCallModel
     {
         public static JobTypeModel? From(GeneratorSyntaxContext ctx, CancellationToken ct)

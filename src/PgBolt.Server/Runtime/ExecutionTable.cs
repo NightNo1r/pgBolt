@@ -3,14 +3,14 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace PgBolt.Server.Runtime;
 
-/// <summary>Таблица выполнений сервера по lease_id (§6.2): одна задача, взятая повторно, — две разные записи.</summary>
+/// <summary>Server execution table keyed by lease_id (§6.2). Reclaiming the same job creates a separate entry.</summary>
 internal sealed class ExecutionTable
 {
     private readonly ConcurrentDictionary<Guid, Execution> _byLease = new();
 
     public int Count => _byLease.Count;
 
-    /// <exception cref="InvalidOperationException">Запись с таким lease_id уже есть.</exception>
+    /// <exception cref="InvalidOperationException">An entry with the same lease_id already exists.</exception>
     public void Add(Execution execution)
     {
         ArgumentNullException.ThrowIfNull(execution);
@@ -18,7 +18,7 @@ internal sealed class ExecutionTable
             throw new InvalidOperationException($"Lease {execution.Lease.LeaseId} is already registered.");
     }
 
-    /// <summary>Удаляет именно этот объект (не другую запись с тем же lease_id).</summary>
+    /// <summary>Removes this specific object, preserving any other entry with the same lease_id.</summary>
     public bool Remove(Execution execution)
     {
         ArgumentNullException.ThrowIfNull(execution);
@@ -29,9 +29,9 @@ internal sealed class ExecutionTable
         _byLease.TryGetValue(leaseId, out execution);
 
     /// <summary>
-    /// Все записи (в том числе <see cref="ExecutionState.Removed"/>) без копии и без блокировок: перечисление
-    /// ConcurrentDictionary их не берёт, в отличие от Count/Values, захватывающих все полосы словаря и
-    /// останавливающих Add/Remove. Видит записи, существовавшие всё время перечисления; одновременные Add/Remove — может.
+    /// Enumerates all entries, including <see cref="ExecutionState.Removed"/>, without copying or locking.
+    /// ConcurrentDictionary enumeration avoids the all-stripe locks taken by Count and Values, which block Add and
+    /// Remove. Enumeration sees entries present for its entire duration and may see concurrent additions and removals.
     /// </summary>
     public IEnumerable<Execution> Entries()
     {
@@ -39,7 +39,7 @@ internal sealed class ExecutionTable
             yield return execution;
     }
 
-    /// <summary>Копия записей, кроме уже <see cref="ExecutionState.Removed"/>.</summary>
+    /// <summary>Copies all entries except those already marked <see cref="ExecutionState.Removed"/>.</summary>
     public IReadOnlyList<Execution> Snapshot()
     {
         var result = new List<Execution>(_byLease.Count);

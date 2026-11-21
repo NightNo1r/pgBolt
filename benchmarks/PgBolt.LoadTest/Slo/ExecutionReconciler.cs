@@ -3,9 +3,8 @@ using PgBolt.LoadTest.Load;
 namespace PgBolt.LoadTest.Slo;
 
 /// <summary>
-/// Сверка счётчика выполнений: у каждого выданного <c>Seq</c> ожидается 2 выполнения при
-/// <c>FailFirstAttempt</c> и 1 у остальных. <c>Seq</c> вызовов <c>EnqueueManyAsync</c>, завершившихся
-/// исключением, не сверяются: строки могли закоммититься (таймаут после commit) или нет.
+/// Reconciles executions per issued <c>Seq</c>. Jobs with <c>FailFirstAttempt</c> should execute twice and the rest once. Excludes <c>Seq</c>
+/// values from <c>EnqueueManyAsync</c> calls that threw because a timeout after commit leaves the commit outcome unknown.
 /// </summary>
 internal static class ExecutionReconciler
 {

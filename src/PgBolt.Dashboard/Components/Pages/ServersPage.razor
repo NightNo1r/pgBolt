@@ -1,8 +1,8 @@
-<h1>Серверы</h1>
+<h1>Servers</h1>
 <div class="pgbolt-table-wrap">
     <table>
         <thead>
-            <tr><th>Имя</th><th>Хост</th><th>Очереди</th><th>Ёмкость</th><th>Старт</th><th>Heartbeat</th><th>Succeeded за час</th><th>Failed за час</th><th>Retried за час</th></tr>
+            <tr><th>Name</th><th>Host</th><th>Queues</th><th>Capacity</th><th>Started</th><th>Heartbeat</th><th>Succeeded (last hour)</th><th>Failed (last hour)</th><th>Retried (last hour)</th></tr>
         </thead>
         <tbody>
             @foreach (var s in Data.Servers)
@@ -13,7 +13,7 @@
                     <td>@string.Join(", ", s.Queues)</td>
                     <td>@s.Capacity</td>
                     <td><Time Utc="s.StartedAt" /></td>
-                    <td><Time Utc="s.HeartbeatAt" />@if (s.Stale) { <span class="failed"> не отвечает</span> }</td>
+                    <td><Time Utc="s.HeartbeatAt" />@if (s.Stale) { <span class="failed"> unresponsive</span> }</td>
                     <td>@s.Succeeded</td>
                     <td>@s.Failed</td>
                     <td>@s.Retried</td>
@@ -22,11 +22,11 @@
         </tbody>
     </table>
 </div>
-<h2>Задачи обслуживания</h2>
+<h2>Maintenance tasks</h2>
 <div class="pgbolt-table-wrap">
     <table>
         <thead>
-            <tr><th>Задача</th><th>Последний запуск</th><th>Завершена</th><th>Следующий запуск</th><th>Состояние</th><th>Ошибка</th></tr>
+            <tr><th>Task</th><th>Last run</th><th>Finished</th><th>Next run</th><th>State</th><th>Error</th></tr>
         </thead>
         <tbody>
             @foreach (var t in Data.Tasks)
@@ -36,7 +36,7 @@
                     <td><Time Utc="t.LastRunAt" /></td>
                     <td><Time Utc="t.LastFinishedAt" /></td>
                     <td><Time Utc="t.NextRunAt" /></td>
-                    <td>@(t.Running ? "идёт" : "")</td>
+                    <td>@(t.Running ? "running" : "")</td>
                     <td>@if (t.LastError is { } error) { <pre>@error</pre> }</td>
                 </tr>
             }

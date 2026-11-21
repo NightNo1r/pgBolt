@@ -4,8 +4,8 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.Postgres.Client;
 
 /// <summary>
-/// Runtime API переопределений лимита и веса очередей. Валидация — до обращения к БД; после записи, в том числе неудачной
-/// (она могла закоммититься), кэш чтения этого процесса сбрасывается, а серверы процесса обновляют настройки немедленно.
+/// Manages queue limit and weight overrides. Validates before accessing the database. After any write attempt, clears this process's read cache
+/// and refreshes local servers. A write that reported failure might still have committed.
 /// </summary>
 internal sealed class QueueSettingsManager(PgBoltStore store, QueueSettingsReadCache cache, IServiceProvider services) : IQueueSettingsManager
 {

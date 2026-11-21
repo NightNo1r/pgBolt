@@ -11,8 +11,8 @@ using static PgBolt.Postgres.Diagnostics.PgBoltTelemetry;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Выполнение одной задачи и классификация исхода с consumer-span'ом, scope и событиями жизненного цикла.
-/// Сбой телеметрии исход не меняет; исключение вне её защиты выходит наружу, закрыв span и scope.
+/// Runs one job and classifies its outcome with a consumer span, logging scope and lifecycle events. Telemetry failures
+/// preserve the outcome. Exceptions outside the telemetry guard propagate after the span and scope close.
 /// </summary>
 internal sealed partial class JobRunner
 {
@@ -120,8 +120,8 @@ internal sealed partial class JobRunner
     }
 
     /// <summary>
-    /// Consumer-span попытки — удалённый ребёнок <c>trace_parent</c> задачи; без него или при нераспознанном значении — корень.
-    /// Без слушателя источника span не создаётся, и теги не вычисляются.
+    /// Creates a consumer span for an attempt, using the job's <c>trace_parent</c> as the remote parent. Missing or
+    /// unrecognized values start a root span. Without a source listener, no span is created and tags are not evaluated.
     /// </summary>
     private Activity? StartSpan(Execution execution)
     {
@@ -175,7 +175,10 @@ internal sealed partial class JobRunner
         }
     }
 
-    /// <summary>Исход, а для Retry и Fail — статус Error, error.type (причина отмены или тип исключения) и событие исключения.</summary>
+    /// <summary>
+    /// Records the outcome. Retry and Fail also set Error status, populate error.type from the cancellation reason or
+    /// exception type, and record an exception event.
+    /// </summary>
     private void TagOutcome(Activity span, CancelReason reason, JobOutcome outcome, Exception? error)
     {
         try
@@ -196,7 +199,7 @@ internal sealed partial class JobRunner
         catch (Exception e) { _instrumentation.ReportFailure(e); }
     }
 
-    /// <summary>Событие жизненного цикла по исходу классификатора; причина отмены — поле Reason.</summary>
+    /// <summary>Emits the lifecycle event for the classified outcome, with the cancellation reason in Reason.</summary>
     private void LogOutcome(Execution execution, CancelReason reason, JobOutcome outcome, Exception? error, TimeSpan duration)
     {
         var job = execution.Job;
@@ -231,9 +234,9 @@ internal sealed partial class JobRunner
     }
 
     /// <summary>
-    /// TimeoutSeconds задачи > 0, иначе DefaultJobTimeout (он уже ≤ MaxJobTimeout). TimeoutSeconds больше
-    /// предела таймеров .NET урезается до него: иначе CancellationTokenSource бросил бы ArgumentOutOfRangeException.
-    /// Урезание пишется в лог один раз на тип задачи (для [Job] его уже отметил BOLT008 при компиляции).
+    /// Uses a positive job TimeoutSeconds, otherwise DefaultJobTimeout (already ≤ MaxJobTimeout). Values above the .NET
+    /// timer limit are capped to avoid ArgumentOutOfRangeException in CancellationTokenSource. The cap is logged once per
+    /// job type. For [Job], BOLT008 already reports it at compile time.
     /// </summary>
     private TimeSpan? TimeoutOf(JobDescriptor descriptor)
     {
@@ -259,7 +262,7 @@ internal sealed partial class JobRunner
         await _filters.InvokeAsync(executing, () => InvokeExecutor(registration, executing));
     }
 
-    /// <summary>Синхронное исключение исполнителя и null вместо Task превращаются в обычный сбой.</summary>
+    /// <summary>Treats synchronous executor exceptions and null Task results as ordinary failures.</summary>
     private static ValueTask InvokeExecutor(JobExecutorRegistration registration, JobExecutingContext context)
     {
         Task? task;

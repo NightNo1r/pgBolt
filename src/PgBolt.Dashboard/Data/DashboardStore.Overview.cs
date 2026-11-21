@@ -117,7 +117,7 @@ internal sealed partial class DashboardStore
     public Task<IReadOnlyList<ThroughputPoint>> GetThroughputDayAsync(CancellationToken ct) =>
         ReadThroughputAsync(DaySql, TimeSpan.FromMinutes(15), 96, ct);
 
-    /// <summary>count точек шага step, последняя — текущая (столбец 0); бакеты без строк — нули.</summary>
+    /// <summary>Returns count points spaced by step, ending with the current bucket (column 0). Empty buckets contain zeros.</summary>
     private Task<IReadOnlyList<ThroughputPoint>> ReadThroughputAsync(string sql, TimeSpan step, int count, CancellationToken ct) =>
         ReadAsync<IReadOnlyList<ThroughputPoint>>(sql, static _ => { }, async (r, c) =>
         {
@@ -142,7 +142,7 @@ internal sealed partial class DashboardStore
         ReadAsync<IReadOnlyList<QueueRow>>(QueuesSql, BindStale, static async (r, c) => await r.ReadAllAsync(static r => new QueueRow(
             r.GetString(0), r.GetInt64(1), r.GetInt64(2), r.GetInt64(3), r.GetInt64(4), r.GetInt32(5), r.GetNullableValue<DateTime>(6)), c), ct);
 
-    /// <summary>Взятые строки по очередям queues; очереди без взятых строк в ответе нет.</summary>
+    /// <summary>Counts leased rows for the requested queues. Omits queues with no leased rows.</summary>
     public Task<IReadOnlyDictionary<string, int>> CountLeasedAsync(string[] queues, CancellationToken ct) =>
         ReadAsync<IReadOnlyDictionary<string, int>>(LeasedSql, ps => P.Add(ps, "queues", queues),
             static async (r, c) => (await r.ReadAllAsync(static r => (Queue: r.GetString(0), Count: r.GetInt32(1)), c))

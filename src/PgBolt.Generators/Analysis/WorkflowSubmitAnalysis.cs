@@ -8,15 +8,14 @@ using Microsoft.CodeAnalysis.Operations;
 namespace PgBolt.Generators.Analysis
 {
     /// <summary>
-    /// BOLT009 (часть 5 §5.4): результат IJobClient.Workflow(), сохранённый в локальную переменную или использованный цепочкой,
-    /// ни одно значение потока которого (сам workflow, шаги от вызовов над значениями потока, параметр лямбды-тела batch,
-    /// переданной вызову из потока, список шагов EnqueueMany и его элементы, локальные с ними, выражения ?:, ??, switch с ветвью
-    /// из потока, присваивание, x?.M() и получатель ?. над значением потока, локальные из шаблонов is / switch над значением)
-    /// не дошло до SubmitAsync в том же методе. Тело batch, переданное группой методов, не прослеживается (см. BatchBodyCall). Ложное срабатывание хуже пропуска: любое использование значения
-    /// потока, кроме распознанных форм (получатель вызова, ?. или чтения свойства, сохранение в обычную локальную, ветвь ?: / ?? /
-    /// switch, проверка типа и непозиционный шаблон, отброшенное выражение-statement), считается уходом из анализируемого потока
-    /// и подавляет диагностику — возврат, аргумент, поле, кортеж, коллекция, делегат, Deconstruct и т. п.
-    /// Анализ нечувствителен к порядку и ветвлениям — эвристика, а не поток управления.
+    /// BOLT009 (§5.4, part 5) detects an IJobClient.Workflow() chain or local whose values never reach SubmitAsync in the
+    /// same method. Tracks derived steps, inline batch lambda parameters, EnqueueMany lists and items, locals, conditional
+    /// and coalescing expressions, switch arms, assignments, conditional access and is/switch pattern locals. Batch bodies
+    /// supplied as method groups are outside the analysis (see BatchBodyCall). To avoid false positives, unrecognized uses
+    /// count as escapes, including returns, arguments, fields, tuples, collections, delegates and deconstruction.
+    /// Recognized uses include call receivers, conditional access, property reads, local assignments, expression branches,
+    /// type tests, non-positional patterns and discarded expression statements. The heuristic ignores statement order and
+    /// control-flow branches.
     /// </summary>
     internal sealed class WorkflowSubmitAnalysis
     {
@@ -40,8 +39,8 @@ namespace PgBolt.Generators.Analysis
         }
 
         /// <summary>
-        /// Дешёвый фильтр: разбор блока (AnalyzeBlock) только если в нём встретился вызов IJobClient.Workflow — иначе тела
-        /// методов без workflow не обходятся вовсе.
+        /// Runs AnalyzeBlock only when a block calls IJobClient.Workflow, avoiding traversal of method bodies without
+        /// workflows.
         /// </summary>
         public void OnBlockStart(OperationBlockStartAnalysisContext start)
         {
@@ -75,13 +74,13 @@ namespace PgBolt.Generators.Analysis
             }
         }
 
-        /// <summary>Виды операций, которые могут войти в поток (ветви switch в Escapes).</summary>
+        /// <summary>Operation kinds that can participate in the tracked flow (switch cases in Escapes).</summary>
         private static bool CanJoin(IOperation op) =>
             op is IInvocationOperation or ILocalReferenceOperation or IParameterReferenceOperation or IPropertyReferenceOperation
                 or IConditionalOperation or ICoalesceOperation or ISwitchExpressionOperation or IConditionalAccessOperation
                 or IConditionalAccessInstanceOperation or ISimpleAssignmentOperation;
 
-        /// <summary>IJobClient.Workflow или его реализация: перегрузки с тем же именем, не возвращающие IWorkflow, — не корни.</summary>
+        /// <summary>Matches IJobClient.Workflow and its implementations. Overloads returning a type other than IWorkflow are excluded as roots.</summary>
         private bool IsWorkflowCall(IInvocationOperation invocation) =>
             invocation.TargetMethod.Name == "Workflow"
             && SymbolEqualityComparer.Default.Equals(invocation.TargetMethod.ReturnType, _workflow)
@@ -91,11 +90,11 @@ namespace PgBolt.Generators.Analysis
             type is INamedTypeSymbol named
             && (SymbolEqualityComparer.Default.Equals(named, _workflow) || KnownNames.Implements(named, _node));
 
-        /// <summary>Обобщённый тип с единственным аргументом — типом потока: IReadOnlyList&lt;IJobStep&gt; из EnqueueMany.</summary>
+        /// <summary>Generic type whose sole argument is a flow type, such as IReadOnlyList&lt;IJobStep&gt; from EnqueueMany.</summary>
         private bool IsFlowList(ITypeSymbol? type) =>
             type is INamedTypeSymbol { IsGenericType: true, TypeArguments.Length: 1 } named && IsFlowType(named.TypeArguments[0]);
 
-        /// <summary>Замыкание потока от root; true — хотя бы одно значение потока отправлено или ушло из анализируемого потока.</summary>
+        /// <summary>Follows values derived from root. Returns true if any is submitted or escapes analysis.</summary>
         private bool Escapes(IInvocationOperation root, List<IOperation> candidates)
         {
             var flow = new HashSet<IOperation> { root };
@@ -140,8 +139,8 @@ namespace PgBolt.Generators.Analysis
         }
 
         /// <summary>
-        /// true — значение потока отправлено (получатель SubmitAsync) или ушло в форму, которую анализ не распознаёт
-        /// (консервативно: уход подавляет BOLT009).
+        /// Returns true if the value is a SubmitAsync receiver or escapes into an unrecognized operation. Escapes suppress
+        /// BOLT009.
         /// </summary>
         private static bool Leaves(IOperation op)
         {
@@ -164,10 +163,9 @@ namespace PgBolt.Generators.Analysis
         }
 
         /// <summary>
-        /// Вызов, аргументом которого передана лямбда с этим параметром (b в wf.StartBatch(b => …)), иначе null: параметр тела
-        /// batch входит в поток вместе с вызовом StartBatch / ContinueWithBatch. Тело, переданное группой методов (локальная
-        /// функция или метод), не распознаётся: шаги, созданные в нём и отправленные после вызова через захваченную локальную,
-        /// дают ложный BOLT009 — редкий случай, обходится лямбдой.
+        /// Finds the call receiving the lambda that owns this parameter (b in wf.StartBatch(b => …)), or null. The batch
+        /// parameter joins the flow at StartBatch or ContinueWithBatch. A method-group body that stores steps in captured
+        /// locals and submits them later can trigger a false BOLT009. Use an inline lambda for that case.
         /// </summary>
         private static IInvocationOperation? BatchBodyCall(IParameterReferenceOperation reference)
         {
@@ -195,8 +193,8 @@ namespace PgBolt.Generators.Analysis
         };
 
         /// <summary>
-        /// Локальные, в которые сохранено значение: инициализатор объявления, присваивание локальной, объявление верхнего уровня
-        /// в шаблоне is / case / ветви switch над значением (вложенные подшаблоны — чтение свойств).
+        /// Finds locals holding the value through a declaration initializer, assignment or top-level declaration in an is,
+        /// case or switch-arm pattern. Nested subpatterns read properties instead.
         /// </summary>
         private static IEnumerable<ILocalSymbol> StoredLocals(IOperation op)
         {
@@ -210,7 +208,7 @@ namespace PgBolt.Generators.Analysis
             };
         }
 
-        /// <summary>Шаблоны, проверяемые над самим значением: x is P, switch (x) { case P: }, x switch { P => … }; иначе null.</summary>
+        /// <summary>Returns a pattern tested against the value itself in an is expression, switch statement or switch expression, or null.</summary>
         private static IEnumerable<IPatternOperation>? PatternsOn(IOperation op) => Parent(op) switch
         {
             IIsPatternOperation isPattern when Is(isPattern.Value, op) => [isPattern.Pattern],
@@ -220,7 +218,7 @@ namespace PgBolt.Generators.Analysis
             _ => null,
         };
 
-        /// <summary>Локальные, связанные с самим значением: объявление шаблона и обе стороны and.</summary>
+        /// <summary>Locals bound to the value itself by a declaration pattern or either side of an and pattern.</summary>
         private static IEnumerable<ILocalSymbol> DeclaredLocals(IPatternOperation pattern) => pattern switch
         {
             IDeclarationPatternOperation { DeclaredSymbol: ILocalSymbol local } => [local],
@@ -232,7 +230,7 @@ namespace PgBolt.Generators.Analysis
         private static bool IsPositional(IPatternOperation pattern) =>
             pattern.DescendantsAndSelf().OfType<IRecursivePatternOperation>().Any(recursive => !recursive.DeconstructionSubpatterns.IsEmpty);
 
-        /// <summary>Условный доступ, к которому относится x в x?.M(): ближайший предок, в чью ветку WhenNotNull мы поднялись.</summary>
+        /// <summary>Finds the conditional access owning x in x?.M() by locating the nearest ancestor reached through its WhenNotNull branch.</summary>
         private static IConditionalAccessOperation? ConditionalAccessOf(IOperation instance)
         {
             for (var (child, parent) = (instance, instance.Parent); parent is not null; (child, parent) = (parent, parent.Parent))

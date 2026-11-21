@@ -3,8 +3,8 @@ using Microsoft.Extensions.Logging;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Сброс счётчиков исходов (часть 6 §4.1): раз в interval — один statement со всеми строками процесса; при остановке —
-/// финальный сброс после идущего. Одновременно идёт не больше одного сброса: цикл последовательный, финальный — после него.
+/// Flushes outcome counters (part 6 §4.1) once per interval in one statement for all process rows. On shutdown, the final
+/// flush follows any flush in progress. The sequential loop and final flush never overlap.
 /// </summary>
 internal sealed partial class OutcomeStatsFlusher(IServerStore store, OutcomeStats stats, TimeSpan interval, MonoClock clock, ILogger logger,
     PgBoltMetrics metrics)
@@ -15,12 +15,15 @@ internal sealed partial class OutcomeStatsFlusher(IServerStore store, OutcomeSta
     private Task _loop = Task.CompletedTask;
     private int _idleWaits;
 
-    /// <summary>Для тестов: сколько раз цикл встал на паузу (таймер уже взведён).</summary>
+    /// <summary>For tests, counts loop pauses that have started with their timer armed.</summary>
     internal int IdleWaits => Volatile.Read(ref _idleWaits);
 
     public void Start() => _loop = LoopAsync();
 
-    /// <summary>Останавливает цикл, дождавшись идущего сброса, и выполняет финальный; отменённый ct обрывает сброс и пропускает финальный.</summary>
+    /// <summary>
+    /// Stops the loop, waits for the current flush and performs a final flush. Canceling ct interrupts the flush and
+    /// skips the final one.
+    /// </summary>
     public async Task StopAsync(CancellationToken ct)
     {
         using var abort = ct.Register(static s => ((CancellationTokenSource)s!).Cancel(), _abort);

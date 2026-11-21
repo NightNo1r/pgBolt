@@ -1,15 +1,15 @@
 namespace PgBolt;
 
 /// <summary>
-/// Имена источника трассировки, <c>Meter</c> и instruments PgBolt. Единственное место, где они записаны литералами:
-/// подписчики (OpenTelemetry и т. п.) берут имена и границы бакетов отсюда.
+/// Names of the PgBolt trace source, <c>Meter</c>, and instruments. Subscribers such as OpenTelemetry use these names and histogram bucket
+/// boundaries.
 /// </summary>
 public static class PgBoltDiagnostics
 {
     public const string ActivitySourceName = "PgBolt";
     public const string MeterName = "PgBolt";
 
-    /// <summary>Имена instruments метрик пода и кластерных метрик.</summary>
+    /// <summary>Names of per-pod and cluster-wide metric instruments.</summary>
     public static class Instruments
     {
         public const string JobEnqueued = "pgbolt.job.enqueued";
@@ -30,7 +30,7 @@ public static class PgBoltDiagnostics
         public const string ClusterTableSize = "pgbolt.cluster.table.size";
     }
 
-    /// <summary>Границы бакетов гистограмм, секунды.</summary>
+    /// <summary>Histogram bucket boundaries in seconds.</summary>
     public static class HistogramBuckets
     {
         public static IReadOnlyList<double> Job { get; } = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600];

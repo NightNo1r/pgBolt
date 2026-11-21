@@ -8,7 +8,7 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public static class DashboardServiceCollectionExtensions
 {
-    /// <summary>Регистрирует dashboard PgBolt; endpoints — <c>app.MapPgBoltDashboard()</c>. Требует <c>AddPgBolt</c> к моменту Map.</summary>
+    /// <summary>Registers dashboard services. Register <c>AddPgBolt</c> before mapping the routes with <c>app.MapPgBoltDashboard()</c>.</summary>
     public static IServiceCollection AddPgBoltDashboard(this IServiceCollection services, Action<PgBoltDashboardOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);

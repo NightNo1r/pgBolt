@@ -1,50 +1,38 @@
-# PgBolt.Server.Benchmarks: накладные расходы JobRunner
+# PgBolt.Server.Benchmarks — JobRunner overhead
 
-Один `JobRunner.RunAsync` успешной no-op задачи: scope DI, десериализация аргументов, вызов исполнителя. БД и сеть не
-участвуют. Бенчмарк нужен, чтобы подтвердить критерий: телеметрия (трассировка, метрики, логи) без подключённых
-слушателей не добавляет аллокаций на задачу, кроме scope логов. Порога по времени нет: колонка `Mean` приводится для
-сравнения до и после изменений.
+This benchmark measures one successful no-op job through `JobRunner.RunAsync`. It includes the DI scope, argument deserialization and executor call. It performs no database or network I/O. The acceptance criterion allows only the logging scope to add per-job allocations when tracing, metrics and logging have no listeners. The `Mean` column compares timings before and after changes. There is no timing threshold.
 
-Параметр `Subscribed` задаёт слушателей на время замера: `None` — без слушателей, `Activity` — `ActivityListener` на источник
-`PgBolt` (сэмплер записывает всё), `Meter` — `MeterListener` на instruments `Meter` этого экземпляра, `Both` — оба. `GlobalSetup`
-один раз прогоняет задачу и проверяет, что исход — `Ack`: замеряется успешный путь.
+`Subscribed` selects the listeners. `None` runs without listeners. `Activity` attaches an `ActivityListener` to the `PgBolt` source and records every activity. `Meter` attaches a `MeterListener` to this instance's instruments. `Both` attaches both listeners. `GlobalSetup` runs the job once and checks that it returns `Ack` so every measurement exercises the successful path.
 
-Не тестовый проект: `IsTestProject=false`, `dotnet test PgBolt.slnx` его не запускает. Internal-типы `PgBolt.Server` и
-`PgBolt.Postgres` открыты ему через `InternalsVisibleTo`.
+The project sets `IsTestProject=false`, so `dotnet test PgBolt.slnx` skips it. It accesses internal types in `PgBolt.Server` and `PgBolt.Postgres` through `InternalsVisibleTo`.
 
-## Запуск
+## Run
 
 ```bash
 dotnet run -c Release --project benchmarks/PgBolt.Server.Benchmarks -- --filter '*JobRunner*'
 ```
 
-Отчёт BenchmarkDotNet сохраняется локально в `BenchmarkDotNet.Artifacts/results/`.
+BenchmarkDotNet writes the report to `BenchmarkDotNet.Artifacts/results/`.
 
-## Результаты
+## Results
 
-На одной машине Arm64 с .NET 10.0.9 сравнили исходный `JobRunner` и варианты с телеметрией до и после раннего выхода. Все замеры выполнены с `DefaultJob`.
+Measurements used `DefaultJob` on one Arm64 machine running .NET 10.0.9. The baseline predates telemetry. The other rows compare telemetry before and after adding an early return.
 
-| Вариант | Mean | Allocated (на задачу) |
+| Variant | Mean | Allocated per job |
 |---|---|---|
-| baseline (до внедрения телеметрии) | 220 нс | 1,01 КБ |
-| до раннего выхода, `Subscribed = None` | 250 нс | 1,04 КБ |
-| до раннего выхода, `Subscribed = Meter` | 255 нс | 1,04 КБ |
-| до раннего выхода, `Subscribed = Activity` | 461 нс | 1,98 КБ |
-| до раннего выхода, `Subscribed = Both` | 468 нс | 1,98 КБ |
-| после раннего выхода, `Subscribed = None` | 253 нс | 1,04 КБ |
-| после раннего выхода, `Subscribed = Meter` | 252 нс | 1,04 КБ |
-| после раннего выхода, `Subscribed = Activity` | 474 нс | 1,98 КБ |
-| после раннего выхода, `Subscribed = Both` | 474 нс | 1,98 КБ |
+| Baseline (before telemetry) | 220 ns | 1.01 KB |
+| Before early return, `Subscribed = None` | 250 ns | 1.04 KB |
+| Before early return, `Subscribed = Meter` | 255 ns | 1.04 KB |
+| Before early return, `Subscribed = Activity` | 461 ns | 1.98 KB |
+| Before early return, `Subscribed = Both` | 468 ns | 1.98 KB |
+| After early return, `Subscribed = None` | 253 ns | 1.04 KB |
+| After early return, `Subscribed = Meter` | 252 ns | 1.04 KB |
+| After early return, `Subscribed = Activity` | 474 ns | 1.98 KB |
+| After early return, `Subscribed = Both` | 474 ns | 1.98 KB |
 
-- **Сравнение до и после раннего выхода не меряет разбор `trace_parent`.** Задача в бенчмарке создаётся без `trace_parent`
-  (`TraceParent: null`), поэтому при любом `Subscribed` разбирать нечего, а строки `None` и `Meter` совпадают по построению;
-  расхождение в несколько наносекунд между ними — шум замера. Выигрыш раннего выхода на задачах с `trace_parent` бенчмарк не показывает.
-- **Аллокации без слушателей** выросли примерно на 32 байта (1,01 → 1,04 КБ) — это объект `JobLogScope`, scope логов выполнения;
-  с `NullLoggerFactory` узел scope не создаётся. Эта прибавка принимается. Больше ничего на задачу не аллоцируется.
-  `MeterListener` аллокаций не добавляет (измерения идут через `TagList` на стеке).
-- **Время без слушателей** выросло примерно на 30 нс (220 → 250–253 нс): отметка начала попытки, сброс `Activity.Current`,
-  запись `job.duration` / `job.wait_time` и scope. На задаче, которая сама ходит в БД, это не заметно.
-- **С `ActivityListener`** добавляются сам `Activity` и его теги (≈ 1 КБ на попытку) и ≈ 210–220 нс.
+- **Trace context.** The benchmark job sets `TraceParent: null`, so no variant parses `trace_parent`. The `None` and `Meter` paths are equivalent for this comparison. A few nanoseconds of difference fall within measurement noise. These figures cannot establish the benefit of the early return for jobs that carry a `trace_parent`.
+- **Allocations without listeners** rose by about 32 bytes (1.01 → 1.04 KB). The `JobLogScope` object accounts for that increase. With `NullLoggerFactory`, no scope node is created. This is the accepted overhead. No other per-job allocation was added. A `MeterListener` adds no allocations because the measurements use a stack-allocated `TagList`.
+- **Time without listeners** rose by about 30 ns (220 → 250–253 ns). The runner records the attempt start, clears `Activity.Current`, records `job.duration` and `job.wait_time`, and opens the logging scope. This overhead is negligible for a job that accesses the database.
+- **An `ActivityListener`** adds the `Activity` and its tags, about 1 KB and 210–220 ns per attempt.
 
-Точные байты на операцию — в JSON-отчёте BDN (`--exporters json`, `BytesAllocatedPerOperation`); в `*-report-github.md` показаны
-килобайты с округлением.
+For exact bytes per operation, use `BytesAllocatedPerOperation` in the BenchmarkDotNet JSON report (`--exporters json`). The `*-report-github.md` report rounds to kilobytes.

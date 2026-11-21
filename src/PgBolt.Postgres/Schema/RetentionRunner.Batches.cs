@@ -3,16 +3,19 @@ using Npgsql;
 namespace PgBolt.Postgres.Schema;
 
 /// <summary>
-/// Часть 5 §7.1: источники живых строк партиции jobs [lo, hi) — (а) родители-задачи с ждущими детьми (loose index scan по
-/// queue_await_jobs / batches_await_jobs, не больше T + 1 спусков), (б) Failed- и Cancelled-члены существующих незавершённых
-/// успехом batches (только в предпроверке, по партиции); удаление строк batches по JobsRetention — окно по batches_finished,
-/// блокировка кандидатов окна, затем проверка новым снимком.
+/// Live rows in jobs partition [lo, hi) include (a) parent jobs with waiting children, found by loose index scans on queue_await_jobs and
+/// batches_await_jobs with at most T + 1 descents, and (b) Failed or Cancelled members of existing batches that have not succeeded, checked only
+/// during the partition precheck. To expire batches older than JobsRetention, scan windows on batches_finished, lock candidates, then recheck in
+/// a fresh snapshot (Part 5 §7.1).
 /// </summary>
 internal sealed partial class RetentionRunner
 {
     internal const int BatchDeleteChunk = 1000;
 
-    /// <summary>(а): различные parent_id ожиданий родителей-задач (коды 1, 2) в [lo, hi); lo/hi/limit — текст параметров ($N).</summary>
+    /// <summary>
+    /// Source (a): distinct parent_id values in [lo, hi) for jobs waiting on parent jobs (codes 1 and 2). lo, hi, and limit are parameter
+    /// placeholders ($N).
+    /// </summary>
     internal string AwaitingParentsSql(bool batches, string lo, string hi, string limit)
     {
         var (table, predicate) = batches
@@ -32,8 +35,8 @@ internal sealed partial class RetentionRunner
     }
 
     /// <summary>
-    /// (б): у Succeeded-batch Failed/Cancelled-членов нет (§6.6), поэтому обходятся batches_open. Читается партиция кандидата
-    /// по имени (её строки — ровно [lo, hi), jobs_batch на ней есть), а не родитель jobs; $1/$2 — диапазон, $3 — лимит.
+    /// Source (b): a Succeeded batch has no Failed or Cancelled members (§6.6), so scan batches_open. Read the named candidate partition, whose rows
+    /// cover exactly [lo, hi) and have a jobs_batch index. $1 and $2 bound the range, and $3 limits rows.
     /// </summary>
     private string BatchMembersSql(string partition) => $"""
         SELECT j.id FROM {_schema}.batches b
@@ -43,9 +46,7 @@ internal sealed partial class RetentionRunner
         LIMIT $3
         """;
 
-    /// <summary>
-    /// Предпроверка: живые queue в [$1, $2) и (б) одним statement'ом — в одном снимке (§7.1); каждый источник — LIMIT $3.
-    /// </summary>
+    /// <summary>Reads live queue rows in [$1, $2) and source (b) in one statement and snapshot (§7.1). Each source uses LIMIT $3.</summary>
     internal string QueueAndBatchMembersSql(string partition) => $"""
         (SELECT job_id FROM {_schema}.queue WHERE job_id >= $1 AND job_id < $2 LIMIT $3)
         UNION ALL
@@ -53,9 +54,8 @@ internal sealed partial class RetentionRunner
         """;
 
     /// <summary>
-    /// §7.1, окно statement'а 1: следующие строки в порядке (finished_at, id) — чистый range scan по batches_finished, без
-    /// блокировок и anti-join, поэтому каждая строка читается запуском один раз. $1 — порог, $2/$3 — курсор (последняя
-    /// строка предыдущего окна, в пределах запуска).
+    /// Window for statement 1 (§7.1). Scan the next rows in (finished_at, id) order via batches_finished, without locks or an anti-join. Each row is
+    /// read once per run. $1 is the cutoff, and $2/$3 identify the previous window's last row.
     /// </summary>
     internal string BatchCandidatesSql(bool withCursor) => $"""
         SELECT id, finished_at FROM {_schema}.batches
@@ -65,10 +65,9 @@ internal sealed partial class RetentionRunner
         """;
 
     /// <summary>
-    /// §7.1, statement 1: блокировка кандидатов окна $1 с проверками statement'а 2 (только отсев заведомо живых),
-    /// FOR UPDATE SKIP LOCKED в порядке id. Порог $2 повторяется здесь, а не только в окне без блокировок: batch, который
-    /// между окном и блокировкой прошёл requeue и завершился снова, моложе JobsRetention; строку, изменённую во время
-    /// ожидания блокировки, условие перепроверяет на новой версии (EvalPlanQual).
+    /// Statement 1 (§7.1) locks candidates in window $1 with FOR UPDATE SKIP LOCKED in ID order. Statement 2's checks filter out obviously live
+    /// rows. Recheck cutoff $2 because a batch requeued and finished again since the unlocked scan can be younger than JobsRetention. EvalPlanQual
+    /// checks the new row version if it changed while awaiting a lock.
     /// </summary>
     private string BatchLockSql => $"""
         SELECT b.id FROM {_schema}.batches b
@@ -82,7 +81,7 @@ internal sealed partial class RetentionRunner
         FOR UPDATE OF b SKIP LOCKED
         """;
 
-    /// <summary>§7.1, statement 2: решение — новым снимком после блокировок (подписка, закоммиченная до блокировки, видна).</summary>
+    /// <summary>Statement 2 (§7.1) decides from a fresh snapshot after locking, so subscriptions committed before the lock are visible.</summary>
     private string BatchDeleteSql => $"""
         DELETE FROM {_schema}.batches b
         WHERE b.id = ANY($1)
@@ -93,8 +92,8 @@ internal sealed partial class RetentionRunner
         """;
 
     /// <summary>
-    /// §7.1: окна по 1000 строк; порог now() − JobsRetention фиксируется на запуск; курсор — последняя строка окна;
-    /// окно короче 1000 завершает запуск. Окно и блокировка — два round-trip'а (блокировка зависит от окна).
+    /// Reads windows of 1000 rows, fixing the cutoff at now() − JobsRetention for the run (§7.1). The last row supplies the cursor. A short window
+    /// ends the run. Reading and locking require separate round trips because the lock depends on the window.
     /// </summary>
     private async Task<int> DeleteBatchesAsync(TimeSpan retention, CancellationToken ct)
     {

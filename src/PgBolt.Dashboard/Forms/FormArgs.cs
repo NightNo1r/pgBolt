@@ -5,9 +5,10 @@ using Microsoft.AspNetCore.Http;
 namespace PgBolt.Dashboard.Forms;
 
 /// <summary>
-/// args из полей формы args.{Path}. Пустое значение: nullable-поле — null (в том числе обязательное), необязательное — не пишется,
-/// обязательное — ошибка; nullable-объект, все поля которого пусты, — null. bestEffort (префилл JSON): неразобранное пишется
-/// строкой, ошибок нет. Дата-время и UUID пишутся строкой — формат проверяет ArgsValidator.
+/// Reads args.{Path} form fields. A blank nullable field becomes null even if required. An optional blank field is
+/// omitted and a required non-nullable field reports an error. A nullable object with all fields blank becomes null.
+/// bestEffort preserves unparsed values as strings for JSON prefill. Dates and UUIDs stay strings for ArgsValidator to
+/// check.
 /// </summary>
 internal static class FormArgs
 {
@@ -32,7 +33,7 @@ internal static class FormArgs
                 if (field.Nullable)
                     obj[field.Name] = null;
                 else if (field.Required && !bestEffort)
-                    errors.Add(new(field.Path, "обязательное поле"));
+                    errors.Add(new(field.Path, "required field"));
             }
             else
             {
@@ -46,18 +47,18 @@ internal static class FormArgs
         return obj;
     }
 
-    /// <summary>Пустое поле или объект из пустых полей (флажок — снят).</summary>
+    /// <summary>Tests for an empty field or an object containing only empty fields. An unchecked box counts as empty.</summary>
     private static bool IsEmpty(FormField field, IFormCollection form) => field.Kind == FieldKind.Object
         ? field.Children.All(c => IsEmpty(c, form))
         : form["args." + field.Path].ToString().Length == 0;
 
-    /// <summary>Значение поля или сообщение об ошибке разбора.</summary>
+    /// <summary>The field value or its parse error message.</summary>
     private static (JsonNode? Value, string? Error) Parse(FieldKind kind, string text) => kind switch
     {
         FieldKind.Integer => long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var l)
-            ? (JsonValue.Create(l), null) : (null, "ожидается целое число"),
+            ? (JsonValue.Create(l), null) : (null, "expected an integer"),
         FieldKind.Number => decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
-            ? (JsonValue.Create(d), null) : (null, "ожидается число"),
+            ? (JsonValue.Create(d), null) : (null, "expected a number"),
         _ => (JsonValue.Create(text), null),
     };
 }

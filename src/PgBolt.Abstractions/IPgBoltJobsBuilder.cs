@@ -3,7 +3,7 @@ using System.Text.Json.Serialization.Metadata;
 
 namespace PgBolt;
 
-/// <summary>Приёмник регистраций из сгенерированного PgBoltJobRegistry.Register.</summary>
+/// <summary>Accepts registrations from the generated PgBoltJobRegistry.Register method.</summary>
 public interface IPgBoltJobsBuilder
 {
     IPgBoltJobsBuilder AddExecutor<TArgs, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TJob>(

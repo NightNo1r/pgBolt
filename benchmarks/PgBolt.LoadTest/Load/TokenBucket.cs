@@ -1,8 +1,8 @@
 namespace PgBolt.LoadTest.Load;
 
 /// <summary>
-/// Token bucket: копит <c>rate</c> токенов в секунду не выше потолка; излишек сверх потолка отбрасывает и считает.
-/// Потокобезопасен: ступени <c>ramp</c> меняют поток из потока сценария, а цикл генератора берёт токены.
+/// Accumulates <c>rate</c> tokens per second up to capacity, counting and discarding excess tokens. Thread-safe so <c>ramp</c> stages can change
+/// the rate from the scenario thread while the generator consumes tokens.
 /// </summary>
 internal sealed class TokenBucket
 {
@@ -22,7 +22,7 @@ internal sealed class TokenBucket
         _accruedAt = time.GetTimestamp();
     }
 
-    /// <summary>Сколько токенов отброшено сверх потолка; учитывает время до момента чтения.</summary>
+    /// <summary>Tokens discarded above capacity, including accrual up to the time of reading.</summary>
     public long Dropped
     {
         get
@@ -35,7 +35,7 @@ internal sealed class TokenBucket
         }
     }
 
-    /// <summary>Целое число токенов, доступных сейчас.</summary>
+    /// <summary>Whole tokens available now.</summary>
     public int Available()
     {
         lock (_gate)
@@ -45,15 +45,15 @@ internal sealed class TokenBucket
         }
     }
 
-    /// <summary>Списывает токены.</summary>
+    /// <summary>Consumes tokens.</summary>
     public void Consume(int count)
     {
         lock (_gate) _tokens -= count;
     }
 
     /// <summary>
-    /// Списывает один токен, если он есть сейчас. Проверка и списание под одним <c>lock</c>: после снижения
-    /// потока токены, сверх нового потолка уже учтённые как отброшенные, повторно не выдаются.
+    /// Consumes one token if available. Checks and consumes under one <c>lock</c> so a rate decrease cannot reissue excess tokens already counted as
+    /// dropped.
     /// </summary>
     public bool TryConsume()
     {
@@ -65,10 +65,7 @@ internal sealed class TokenBucket
         }
     }
 
-    /// <summary>
-    /// Меняет поток: накопленное до вызова начислено по старому потоку, дальше идёт новый.
-    /// Потолок — секунда нового потока.
-    /// </summary>
+    /// <summary>Accrues tokens up to now at the old rate, then switches rates. The new capacity equals one second of the new rate.</summary>
     public void SetRate(double ratePerSecond)
     {
         lock (_gate)
@@ -79,7 +76,7 @@ internal sealed class TokenBucket
         }
     }
 
-    /// <summary>Начисляет токены за время с прошлого начисления. Вызывать под <c>_gate</c>.</summary>
+    /// <summary>Accrues tokens since the last update. Call while holding <c>_gate</c>.</summary>
     private void Accrue()
     {
         var now = _time.GetTimestamp();

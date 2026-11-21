@@ -1,9 +1,9 @@
 namespace PgBolt.Postgres.Client;
 
-/// <summary>Общее для in-process сигналов (IWakeupSignal, ICompletionSignal): вызов подписчиков и подписка с идемпотентной отпиской.</summary>
+/// <summary>Subscriber invocation and idempotent unsubscription for local IWakeupSignal and ICompletionSignal implementations.</summary>
 internal static class SignalSubscribers
 {
-    /// <summary>Вызывает всех; ошибка подписчика не доходит до вызывающего и не мешает остальным. Без аллокаций.</summary>
+    /// <summary>Invokes all subscribers without allocations. Subscriber failures neither escape to the caller nor prevent other callbacks.</summary>
     public static void InvokeAll(Action[] callbacks)
     {
         foreach (var callback in callbacks)
@@ -19,7 +19,7 @@ internal static class SignalSubscribers
         }
     }
 
-    /// <summary>Подписка: первый Dispose вызывает unsubscribe, повторные — ничего.</summary>
+    /// <summary>The first Dispose unsubscribes. Subsequent calls have no effect.</summary>
     public sealed class Subscription(Action unsubscribe) : IDisposable
     {
         private int _disposed;

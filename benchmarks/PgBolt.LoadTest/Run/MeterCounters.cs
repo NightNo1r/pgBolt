@@ -7,8 +7,8 @@ using I = PgBolt.PgBoltDiagnostics.Instruments;
 namespace PgBolt.LoadTest.Run;
 
 /// <summary>
-/// Счётчики <c>Meter</c> PgBolt всех хостов процесса: <c>outcome.dropped</c>, <c>storage.errors</c> по операции и
-/// <c>job.enqueued</c>. Создаётся до старта хостов: измерения до создания не учитываются.
+/// PgBolt <c>Meter</c> counters across all hosts in the process: <c>outcome.dropped</c>, <c>storage.errors</c> by operation, and
+/// <c>job.enqueued</c>. Create before host startup to capture all measurements.
 /// </summary>
 internal sealed class MeterCounters : IDisposable
 {

@@ -37,7 +37,7 @@ namespace PgBolt.Generators
             sb.AppendLine();
             sb.AppendLine($"namespace {rootNamespace}");
             sb.AppendLine("{");
-            sb.AppendLine("    /// <summary>Исполнители PgBolt этой сборки: o.AddJobs(PgBoltJobRegistry.Register).</summary>");
+            sb.AppendLine("    /// <summary>Register this assembly’s PgBolt job handlers with o.AddJobs(PgBoltJobRegistry.Register).</summary>");
             sb.AppendLine("    public static class PgBoltJobRegistry");
             sb.AppendLine("    {");
             sb.AppendLine("        public static void Register(global::PgBolt.IPgBoltJobsBuilder builder)");
@@ -73,8 +73,8 @@ namespace PgBolt.Generators
         }
 
         /// <summary>
-        /// TimeoutSeconds дописывается инициализатором только при значении &gt; 0: вывод для задач без таймаута
-        /// не меняется (снапшоты), отрицательное значение отклоняет BOLT007.
+        /// Emits the TimeoutSeconds initializer only for values &gt; 0, preserving snapshot output for jobs without timeouts.
+        /// BOLT007 rejects negative values.
         /// </summary>
         internal static string Descriptor(JobTypeModel t) =>
             $"new global::PgBolt.JobDescriptor({Literal(t.JobName)}, {Literal(t.Queue)}, {t.MaxAttempts}, (short){t.Priority}, {Delays(t.RetryDelays)})"

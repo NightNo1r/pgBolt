@@ -5,12 +5,12 @@ using PgBolt.Dashboard.Endpoints;
 
 namespace PgBolt.Dashboard.Data;
 
-/// <summary>Поля ключа в курсоре: Id; (At, Id); (Priority, At, Id); Text.</summary>
+/// <summary>Cursor key fields by shape: Id, (At, Id), (Priority, At, Id), or Text.</summary>
 internal enum CursorShape : byte { Id, AtId, PriorityAtId, Text }
 
 /// <summary>
-/// Непрозрачный курсор keyset-пагинации (§6): base64url от байта версии, байта формы и полей формы в big-endian —
-/// Priority (int16), At (тики int64, UTC), Id (16 байт), Text (UTF-8 до конца, не больше 800 байт).
+/// Opaque keyset cursor (§6). The base64url payload contains version and shape bytes followed by big-endian fields:
+/// Priority (int16), At (int64 UTC ticks), Id (16 bytes), or Text (remaining UTF-8 bytes, up to 800).
 /// </summary>
 internal static class Cursor
 {
@@ -42,7 +42,7 @@ internal static class Cursor
         return Base64Url.EncodeToString(bytes);
     }
 
-    /// <summary>null или "" — без курсора; ошибка разбора или другая форма — <see cref="DashboardBadRequestException"/>.</summary>
+    /// <summary>A null or empty string represents no cursor. Invalid data or an unexpected shape throws <see cref="DashboardBadRequestException"/>.</summary>
     public static ListKey? Decode(string? value, CursorShape shape)
     {
         if (string.IsNullOrEmpty(value))

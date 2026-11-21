@@ -3,9 +3,9 @@ using System.Text.Json;
 namespace PgBolt;
 
 /// <summary>
-/// Задача для клиента. Awaiting — строка queue ждёт родителя (RunAt = null). ParentId — родитель-задача (continuation 1, 2),
-/// ParentBatchId — родитель-batch (3, 4); у члена batch-продолжения (5) оба null, BatchId заполнен. Continuation: 1/3 — OnSuccess,
-/// 2/4 — OnAnyFinished, 5 и NULL — null (часть 5 §5.3).
+/// Client view of a job. An Awaiting queue row is waiting for its parent and has RunAt = null. ParentId identifies a parent job (continuation
+/// codes 1 and 2), and ParentBatchId identifies a parent batch (3 and 4). For a member of a batch continuation (5), both are null and BatchId
+/// identifies the containing batch. Continuation is OnSuccess for 1 and 3, OnAnyFinished for 2 and 4, and null for 5 or NULL (Part 5 §5.3).
 /// </summary>
 public sealed record JobInfo(
     JobId Id,

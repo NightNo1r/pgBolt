@@ -1,6 +1,6 @@
 namespace PgBolt.Postgres.Client;
 
-/// <summary>Внеочередное обновление настроек очередей на серверах этого процесса (после записи менеджера).</summary>
+/// <summary>Requests an immediate refresh of queue settings on local servers after a manager write.</summary>
 internal interface IQueueSettingsRefresher
 {
     void RefreshNow();

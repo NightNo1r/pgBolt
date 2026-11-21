@@ -1,12 +1,12 @@
 namespace PgBolt.Server;
 
-/// <summary>Продолжение конвейера: следующий фильтр или вызов исполнителя (§3.6).</summary>
+/// <summary>Invokes the next filter in the pipeline, or the job executor (§3.6).</summary>
 public delegate ValueTask JobExecutionDelegate();
 
 /// <summary>
-/// Фильтр выполнения (§3.6). Резолвится из DI scope задачи (регистрируется как scoped). Может выполнить код до и
-/// после <c>next</c>, перехватить или заменить исключение, не вызывать <c>next</c> (задача считается успешной).
-/// Исключение фильтра — исключение задачи (§5.2).
+/// An execution filter resolved from the job's DI scope (register it as scoped, §3.6). It can run code before or after <c>next</c>, catch or
+/// replace an exception, or return without calling <c>next</c> to complete the job successfully. Exceptions thrown by a filter are treated as
+/// job exceptions (§5.2).
 /// </summary>
 public interface IJobFilter
 {

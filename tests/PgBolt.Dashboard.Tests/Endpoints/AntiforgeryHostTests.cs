@@ -76,7 +76,7 @@ public sealed class AntiforgeryHostTests(PostgresFixture pg)
         var body = await response.Content.ReadAsStringAsync(Ct);
 
         Assert.True(response.StatusCode == HttpStatusCode.OK, body);
-        Assert.Contains("выполнено 1, неприменимо 0", body, StringComparison.Ordinal);
+        Assert.Contains("Applied 1, not applicable 0", body, StringComparison.Ordinal);
     }
 
     /// <summary>Форма «Поставить» (form-urlencoded) → 200, задача создана.</summary>

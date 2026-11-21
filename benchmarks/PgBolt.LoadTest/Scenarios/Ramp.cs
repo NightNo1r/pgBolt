@@ -10,9 +10,8 @@ using PgBolt.LoadTest.Slo;
 namespace PgBolt.LoadTest.Scenarios;
 
 /// <summary>
-/// Поиск максимального устойчивого потока: поток растёт ступенями без прогрева и дренажа до первой ступени с
-/// нарушением. Порогов нет: код 0, если стенд отработал без сбоев, в том числе при остановке «стенд» (это результат
-/// прогона); 2 — сбой стенда.
+/// Finds the maximum sustainable rate by increasing load in steps without warmup or drain until the first violation. Uses no pass threshold.
+/// Returns 0 if the harness ran successfully, including when measured harness limits stopped the ramp, and 2 on harness failure.
 /// </summary>
 internal sealed class Ramp : IScenario
 {

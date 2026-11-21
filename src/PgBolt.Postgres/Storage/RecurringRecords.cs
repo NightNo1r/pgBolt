@@ -4,7 +4,7 @@ internal enum RecurringUpsertResult { Inserted, Updated, OwnedByCodeFirst }
 
 internal enum RecurringRemoveResult { NotFound, Removed, OwnedByCodeFirst }
 
-/// <summary>Строка расписания с умолчаниями job_types для Trigger (часть 4 §4.2); UnknownType — типа нет в job_types.</summary>
+/// <summary>Schedule row with job_types defaults for Trigger (Part 4 §4.2). UnknownType indicates a missing job_types entry.</summary>
 internal sealed record RecurringTriggerRow(
     string Type,
     string ArgsJson,
@@ -15,16 +15,19 @@ internal sealed record RecurringTriggerRow(
     OverlapPolicy Overlap,
     bool UnknownType);
 
-/// <summary>Ошибка строки (часть 4 §5.2 п. 2): строка не поставлена, курсор стоит, wake_at = db_now + 1 мин.</summary>
+/// <summary>Row error (Part 4 §5.2, step 2). No job is enqueued, the cursor stays put, and wake_at becomes db_now + 1 minute.</summary>
 internal sealed record RecurringRowError(string Id, string Error);
 
-/// <summary>Срабатывания, отброшенные misfire-политикой при сдвиге курсора (Warning §7): CatchUp — [FromUtc, ToUtc), Skip — [FromUtc, ToUtc] (как MissedRange).</summary>
+/// <summary>
+/// Occurrences discarded by the misfire policy when advancing the cursor (warning in §7). As in MissedRange, CatchUp uses [FromUtc, ToUtc),
+/// while Skip includes both endpoints.
+/// </summary>
 internal sealed record RecurringMissed(string Id, DateTime FromUtc, DateTime ToUtc);
 
 /// <summary>
-/// Итог транзакции тика. Full — захвачено batchSize строк или исчерпан лимит срабатываний: цикл повторяет тик сразу.
-/// OverlapSkipped — FireOnce/Skip пропущены из-за живого запуска; Waiting — CatchUp + Skip ждут его завершения;
-/// Exhausted — у cron больше нет срабатываний, строка больше не сработает.
+/// Scheduler tick transaction result. Full means batchSize rows were claimed or the occurrence budget was exhausted, so the loop ticks again
+/// immediately. OverlapSkipped counts FireOnce/Skip occurrences skipped because a previous run is active. Waiting counts CatchUp + Skip
+/// schedules waiting for it. Exhausted means the cron expression has no further occurrences.
 /// </summary>
 internal sealed record RecurringTickResult(
     int Claimed,
@@ -42,7 +45,8 @@ internal sealed record RecurringTickResult(
 
 internal sealed record RecurringFieldChange(string Id, IReadOnlyList<string> Fields);
 
-/// <summary>Записи синхронизации владельца (часть 4 §6.2); Collisions — id занят другим владельцем или API, строка не тронута.</summary>
+/// <summary>Owner synchronization changes (Part 4 §6.2). Collisions are IDs held by another owner or the API. Their rows remain
+/// untouched.</summary>
 internal sealed record RecurringSyncResult(
     IReadOnlyList<string> Inserted,
     IReadOnlyList<RecurringFieldChange> Updated,

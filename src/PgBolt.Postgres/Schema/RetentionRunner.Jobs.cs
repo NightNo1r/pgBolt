@@ -6,8 +6,8 @@ namespace PgBolt.Postgres.Schema;
 internal sealed partial class RetentionRunner
 {
     /// <summary>
-    /// §5.3: предпроверка всех присоединённых кандидатов, запрос публикаций, группы отсоединения, затем компактирования
-    /// по одной. LockTimeout/HoldTimeout транзакции 1 останавливает этап jobs (п. 2).
+    /// Prechecks all attached candidates, checks publications, detaches groups, then compacts partitions individually (§5.3). LockTimeout or
+    /// HoldTimeout in transaction 1 stops the jobs stage (step 2).
     /// </summary>
     private async Task ApplyJobsAsync(List<Candidate> candidates, Accumulator acc, CancellationToken ct)
     {
@@ -74,12 +74,11 @@ internal sealed partial class RetentionRunner
     private sealed record Compaction(Candidate Candidate, Guid[] Live);
 
     /// <summary>
-    /// §5.3 п. 1: короткая транзакция на партицию с lock_timeout. Живые — (а) части 5 §7.1, затем (после сверки oid) по PK
-    /// queue и (б) по партиции одним statement'ом с повторной сверкой oid; окупаемость сжатия — seq scan,
-    /// остановленный на L + max(L, 100)-й строке. Имя не указывает на oid из списка (удалена или заменена другим подом)
-    /// → Gone без запроса к партиции; после count сверка повторяется (count по имени мог дождаться блокировки старого oid
-    /// и прочитать новую таблицу) — не совпала → Gone. 55P03 → LockTimeout, 42P01 запроса к партиции (удалена другим
-    /// подом) → Gone; 42P01 запроса к queue — исключение.
+    /// Uses a short transaction per partition with lock_timeout (§5.3, step 1). Finds live rows from source (a) in Part 5 §7.1, then checks the OID
+    /// and reads the queue primary key and source (b) in one statement with another OID check. A sequential scan stops at row L + max(L, 100) to
+    /// assess compaction. If the name no longer identifies the listed OID, returns Gone without reading the partition. Rechecks after counting
+    /// because a lookup by name can wait on the old OID and read its replacement. A mismatch returns Gone. SQLSTATE 55P03 means LockTimeout. A 42P01
+    /// for the partition means Gone, but a 42P01 for queue propagates.
     /// </summary>
     private async Task<Precheck> PrecheckAsync(Candidate c, CancellationToken ct)
     {
@@ -198,7 +197,7 @@ internal sealed partial class RetentionRunner
         }
     }
 
-    /// <summary>§5.3 «Публикации»: любая публикация, затрагивающая jobs или её партиции (в т. ч. FOR ALL TABLES).</summary>
+    /// <summary>Detects any publication covering jobs or its partitions, including FOR ALL TABLES (§5.3, Publications).</summary>
     private async Task<bool> PublishedAsync(CancellationToken ct)
     {
         await using var cmd = _dataSource.CreateCommand("""
@@ -209,7 +208,9 @@ internal sealed partial class RetentionRunner
         return (bool)(await cmd.ExecuteScalarAsync(ct))!;
     }
 
-    /// <summary>§5.3 п. 4: текст строки читает все колонки и детоастит args — план по heap, не Index Only Scan.</summary>
+    /// <summary>
+    /// Reading the row as text accesses every column and detoasts args, forcing a heap read instead of an index-only scan (§5.3, step 4).
+    /// </summary>
     internal string WarmUpSql(string partition) =>
         $"SELECT sum(octet_length(j::text)) FROM {Qualified(partition)} j WHERE j.id = ANY($1)";
 
@@ -248,12 +249,12 @@ internal sealed partial class RetentionRunner
     }
 
     /// <summary>
-    /// §5.3 п. 3–6 для одной партиции: pg_locks → прогрев → транзакция 1 (повтор проверки присоединённости по oid и живых
-    /// под блокировкой; DETACH, RENAME в остаток, CREATE LIKE, INSERT живых по @ids, ATTACH) → DROP остатка транзакцией 2.
-    /// Часть 5 §7.1: под блокировкой повторяются живые queue и (а) (без (б)); @ids — объединение с набором предпроверки,
-    /// поэтому отсоединения в транзакции компактирования нет.
+    /// Compacts one partition (§5.3, steps 3–6). Check pg_locks and warm the data. Transaction 1 rechecks attachment by OID and live rows under
+    /// lock, detaches and renames the old partition, creates a replacement with LIKE, copies live @ids, and attaches it. Transaction 2 drops the
+    /// remnant. Under lock, recheck live queue rows and source (a) but omit (b) (Part 5 §7.1). Union @ids with the precheck set, so this compaction
+    /// transaction never performs a detach-only operation.
     /// </summary>
-    /// <returns>false — остановка этапа jobs (LockTimeout/HoldTimeout транзакции 1).</returns>
+    /// <returns>False if LockTimeout or HoldTimeout in transaction 1 stops the jobs stage.</returns>
     private async Task<bool> CompactAsync(Candidate c, Guid[] live, Accumulator acc, CancellationToken ct)
     {
         if ((await ExcludeHeldAsync("jobs", [c], acc, ct)).Count == 0)
@@ -323,8 +324,8 @@ internal sealed partial class RetentionRunner
     }
 
     /// <summary>
-    /// §5.3 п. 5, пакет Б компактирования. SELECT *: партиции создаёт только PgBolt через LIKE родителя, порядок логических
-    /// колонок у старой, новой таблицы и родителя совпадает (§11). CHECK по диапазону не создаётся — ATTACH проверит ≤ T строк.
+    /// Compaction batch B (§5.3, step 5). SELECT * is safe because PgBolt alone creates partitions with LIKE, preserving logical column order across
+    /// parent, old, and new tables (§11). ATTACH checks at most T rows, so no range CHECK is needed.
     /// </summary>
     private List<NpgsqlBatchCommand> CompactionCommands(Candidate c, string remnant, Guid[] ids)
     {

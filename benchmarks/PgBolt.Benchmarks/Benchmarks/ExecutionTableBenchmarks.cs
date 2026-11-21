@@ -4,7 +4,7 @@ using PgBolt.Benchmarks.Infrastructure;
 
 namespace PgBolt.Benchmarks.Benchmarks;
 
-/// <summary>Фон для бенчмарков таблицы: таблица на Entries записей и потоки, непрерывно делающие Add/Remove своих записей.</summary>
+/// <summary>Table benchmark fixture with Entries records and threads continuously adding and removing their own entries.</summary>
 internal sealed class TableLoad : IDisposable
 {
     private readonly Thread[] _writers;
@@ -46,7 +46,9 @@ internal sealed class TableLoad : IDisposable
     }
 }
 
-/// <summary>Время Snapshot при Entries записях и фоне из Writers потоков Add/Remove: текущий (List(Count)) против без Count.</summary>
+/// <summary>
+/// Measures Snapshot with Entries records and Writers concurrent Add/Remove threads, comparing List(Count) to enumeration without Count.
+/// </summary>
 [Config(typeof(BenchConfig))]
 public class ExecutionTableSnapshotBenchmarks
 {
@@ -72,8 +74,8 @@ public class ExecutionTableSnapshotBenchmarks
 }
 
 /// <summary>
-/// Вычисление ближайшего рубежа, как в LeaseKeeper.RearmDeadlineTimer: Snapshot() + цикл (текущий) против минимума прямо
-/// по перечислению без List.
+/// Finds the earliest deadline as in LeaseKeeper.RearmDeadlineTimer. Compares Snapshot() followed by a loop with direct enumeration without a
+/// List.
 /// </summary>
 [Config(typeof(BenchConfig))]
 public class ExecutionTableMinDeadlineBenchmarks
@@ -109,9 +111,9 @@ public class ExecutionTableMinDeadlineBenchmarks
 }
 
 /// <summary>
-/// Пропускная способность Add+Remove из N потоков при Entries записях, пока отдельный поток непрерывно (без пауз —
-/// худший случай «периодического» снимка) делает: ничего / Snapshot / Snapshot без Count / минимум по перечислению.
-/// 120 000 пар Add+Remove на вызов; результат — время на пару (агрегированно).
+/// Measures Add/Remove throughput from N threads on a table with Entries records. A dedicated thread continuously does nothing, takes Snapshot,
+/// takes Snapshot without Count, or finds the minimum by enumeration. No pause represents the worst case for periodic snapshots. Reports
+/// aggregate time per pair across 120,000 Add/Remove pairs per invocation.
 /// </summary>
 [Config(typeof(BenchConfig))]
 public class ExecutionTableWriteBenchmarks

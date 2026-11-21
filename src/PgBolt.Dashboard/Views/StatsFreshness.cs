@@ -2,17 +2,18 @@ using System.ComponentModel;
 
 namespace PgBolt.Dashboard.Views;
 
-/// <summary>Внутренний тип dashboard, не входит в контракт пакета: свежесть снимка статистики (§6.4).</summary>
+/// <summary>Internal dashboard freshness state of a statistics snapshot (§6.4).</summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
 public enum StatsFreshnessKind { Fresh, NotRunning, Failing }
 
-/// <summary>Внутренний тип dashboard, не входит в контракт пакета: свежесть снимка и текст ошибки последнего прохода.</summary>
+/// <summary>Internal dashboard snapshot freshness and the error from the latest pass.</summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
 public sealed record StatsFreshness(StatsFreshnessKind Kind, string? Error)
 {
     /// <summary>
-    /// §6.4: строки нет или next_run_at просрочен дольше staleAfter + 0,5 × (next_run_at − last_run_at) — задачу никто не
-    /// захватывает (захват ставит срок 0,8 интервала, законное опоздание — до 0,4 интервала); иначе last_error — Failing.
+    /// A missing row or a next_run_at overdue by more than staleAfter + 0.5 × (next_run_at − last_run_at) indicates an
+    /// unclaimed task (§6.4). Claiming sets a deadline of 0.8 intervals and normal lateness can reach 0.4 intervals.
+    /// Otherwise last_error indicates Failing.
     /// </summary>
     public static StatsFreshness Evaluate(StatsTaskRow? row, DateTime dbNowUtc, TimeSpan staleAfter)
     {

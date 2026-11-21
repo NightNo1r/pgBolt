@@ -7,18 +7,16 @@ using PgBolt.LoadTest.Load;
 namespace PgBolt.LoadTest.Measure;
 
 /// <summary>
-/// Посекундный срез БД и PgBouncer на отдельном прямом соединении, не из пулов хостов. Каждый запрос среза
-/// выполняется отдельно: неудачный даёт пропуск только своих значений. Соединение открывается один раз в начале
-/// попытки; если запрос его разорвал, остальные запросы попытки неудачны, а новое соединение — на следующей
-/// попытке. Так при недоступной БД попытка стоит одного таймаута открытия, а не по таймауту на запрос.
-/// Попытка без единого удачного запроса к БД не записывается; после 30 таких подряд <see cref="Exhausted"/> —
-/// соединение стенда потеряно, срез останавливается.
+/// Samples PostgreSQL and PgBouncer every second using a dedicated direct connection outside the host pools. Queries run independently. A failed
+/// query leaves only its measurements missing. Each attempt opens one connection. After a disconnect, subsequent queries in the same attempt
+/// fail and the next attempt reconnects. An unavailable database therefore costs one connection timeout per attempt. Attempts with no successful
+/// database query produce no sample. After 30 consecutive such attempts, <see cref="Exhausted"/> signals connection loss and sampling stops.
 /// </summary>
-/// <param name="schema">Схема прогона: имя — уже проверенный идентификатор, подставляется в текст SQL.</param>
-/// <param name="console">Админ-консоль своего PgBouncer; <c>null</c> — данных PgBouncer нет.</param>
-/// <param name="applicationNames"><c>application_name</c> соединений хостов и продюсера.</param>
-/// <param name="rate">Текущий целевой поток: готовые задачи считаются до rate + 1.</param>
-/// <param name="completed">Выполнено задач с начала прогона.</param>
+/// <param name="schema">Run schema, inserted into SQL as an already validated identifier.</param>
+/// <param name="console">Local PgBouncer admin console. <c>null</c> omits PgBouncer data.</param>
+/// <param name="applicationNames">Host and producer connection <c>application_name</c> values.</param>
+/// <param name="rate">Current target rate. The ready-job count stops at rate + 1.</param>
+/// <param name="completed">Jobs completed since the start of the run.</param>
 internal sealed class Sampler(
     string connectionString, string schema, PgBouncerConsole? console, IReadOnlyCollection<string> applicationNames,
     Func<int> rate, Func<long> completed)
@@ -48,15 +46,15 @@ internal sealed class Sampler(
         get { lock (_schedule) return _schedule.SkippedTicks; }
     }
 
-    /// <summary>Попытки, в которых не выполнился ни один запрос к БД.</summary>
+    /// <summary>Attempts in which every database query failed.</summary>
     public long FailedAttempts
     {
         get { lock (_schedule) return _schedule.FailedAttempts; }
     }
 
     /// <summary>
-    /// Неудачные запросы среза, включая <c>SHOW POOLS</c>. Неудачное открытие соединения или его обрыв — один
-    /// неудачный запрос на попытку: запросы, пропущенные после этого в той же попытке, не считаются.
+    /// Failed sample queries, including <c>SHOW POOLS</c>. A failed connection or disconnect counts once per attempt. Queries skipped afterward in
+    /// that attempt do not count as failures.
     /// </summary>
     public long FailedQueries => Interlocked.Read(ref _failedQueries);
 
@@ -65,7 +63,7 @@ internal sealed class Sampler(
         get { lock (_schedule) return _schedule.Exhausted; }
     }
 
-    /// <summary>Снимает срезы до отмены <paramref name="ct"/> или до <see cref="Exhausted"/>.</summary>
+    /// <summary>Samples until <paramref name="ct"/> is cancelled or <see cref="Exhausted"/> is reached.</summary>
     public async Task RunAsync(CancellationToken ct)
     {
         using var timer = new PeriodicTimer(_schedule.Period);
@@ -228,8 +226,8 @@ internal sealed class Sampler(
     }
 
     /// <summary>
-    /// Выполняет запрос и читает все строки; <c>false</c> — запрос не выполнился. Ошибка сервера (например,
-    /// «out of shared memory») соединение не разрывает, и следующие запросы попытки идут по нему же.
+    /// Runs a query and reads all rows. Returns <c>false</c> on failure. A server error such as “out of shared memory” leaves the connection usable
+    /// for subsequent queries in the same attempt.
     /// </summary>
     private async Task<bool> TryAsync(string sql, Action<NpgsqlParameterCollection>? bind,
         Action<NpgsqlDataReader> read, CancellationToken ct, int? timeoutSeconds = null)

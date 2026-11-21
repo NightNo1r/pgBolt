@@ -4,33 +4,36 @@ using NpgsqlTypes;
 namespace PgBolt.Postgres.Storage;
 
 /// <summary>
-/// Resolver части 5 (§6.4). Т1 — один statement: захват, счётчики batches, сигналы исходов batches, отсев сигналов без детей.
-/// Т2 — одна транзакция с бюджетом строк: statement на этап (задачи, затем batches), а не на узел; исход узла перечитывается в
-/// каждом statement'е выборки детей; строки queue / batches — SKIP LOCKED, остаток за чужими блокировками — retry_after.
+/// Workflow resolver (Part 5 §6.4). T1 claims signals, updates batch counters, emits batch outcome signals, and discards signals without
+/// children in one statement. T2 uses one row-budgeted transaction with a statement per stage (jobs then batches), regardless of node count.
+/// Each child selection rereads the node outcome. Queue and batch rows use SKIP LOCKED, and retry_after defers remaining rows locked by other
+/// transactions.
 /// </summary>
 public sealed partial class PgBoltStore
 {
     private const int MaxWalkPortion = 1000;
 
-    /// <summary>Коды ожиданий детей-задач, которые запускает исход узла (§2.2): Failed — только OnAnyFinished, Activated — члены.</summary>
+    /// <summary>
+    /// Wait codes for child jobs activated by a node outcome (§2.2). Failed activates only OnAnyFinished, and Activated releases members.
+    /// </summary>
     private const string JobChildConditions =
         "WHEN 3 THEN '{2,4}'::smallint[] WHEN 5 THEN '{5}'::smallint[] ELSE '{1,2,3,4}'::smallint[] END";
 
-    /// <summary>То же для batch-продолжений (кода 5 у batches.condition нет).</summary>
+    /// <summary>Corresponding codes for batch continuations. batches.condition has no code 5.</summary>
     private const string BatchChildConditions = "WHEN 3 THEN '{2,4}'::smallint[] ELSE '{1,2,3,4}'::smallint[] END";
 
-    /// <summary>Готовый к захвату Т1 сигнал (частичный индекс completions_count).</summary>
+    /// <summary>Signal eligible for a T1 claim via the completions_count partial index.</summary>
     private const string CountReadyPredicate = "kind <> 6 AND NOT counted AND (retry_after IS NULL OR retry_after <= now())";
 
-    /// <summary>Готовый к захвату Т2 сигнал (частичный индекс completions_walk).</summary>
+    /// <summary>Signal eligible for a T2 claim via the completions_walk partial index.</summary>
     private const string WalkReadyPredicate = "counted AND (retry_after IS NULL OR retry_after <= now())";
 
-    /// <summary>Готовый к захвату CancelMembers сигнал (частичный индекс completions_cancel).</summary>
+    /// <summary>Signal eligible for a CancelMembers claim via the completions_cancel partial index.</summary>
     private const string CancelReadyPredicate = "kind = 6 AND (retry_after IS NULL OR retry_after <= now())";
 
     /// <summary>
-    /// Т1. walk_ready / cancel_ready — снимок statement'а: сигналы, переданные Т2 этим же statement'ом (walk), в нём не видны —
-    /// их число возвращает walking.
+    /// T1 calculates walk_ready and cancel_ready from the statement snapshot. Signals handed to T2 by this statement's walk are absent from the
+    /// snapshot. Their count is returned in walking.
     /// </summary>
     private const string CountTemplate = $$"""
         WITH c AS MATERIALIZED (
@@ -114,7 +117,10 @@ public sealed partial class PgBoltStore
         FOR UPDATE SKIP LOCKED
         """;
 
-    /// <summary>Исход узла в снимке statement'а (§6.4 Т2.2): 2/3/4 — если состояние узла равно kind; 7 — терминальный batches.state; 5 — всегда.</summary>
+    /// <summary>
+    /// Node outcome in the statement snapshot (§6.4 T2.2). Codes 2/3/4 require node state = kind. Code 7 requires terminal batches.state. Code 5
+    /// always qualifies.
+    /// </summary>
     private const string WalkNodesCte = $$"""
         n AS MATERIALIZED (
             SELECT u.ord, u.node, COALESCE(u.cur, '00000000-0000-0000-0000-000000000000'::uuid) AS cur, o.outcome,
@@ -132,8 +138,8 @@ public sealed partial class PgBoltStore
         """;
 
     /// <summary>
-    /// §6.4 Т2.3: дети-задачи всех узлов этапа. Запуск — UPDATE queue; отмена (Cancelled-родитель с OnSuccess или отмена ветки
-    /// по cancel_requested batch ребёнка и внешних) — statement cancel core §5.7 с дополнением §6.3.
+    /// Child jobs for all nodes in this stage (§6.4 T2.3). UPDATE queue activates them. Cancellation uses the core §5.7 cancel statement extended by
+    /// §6.3 when the parent is Cancelled with OnSuccess or the child's batch or an enclosing batch has cancel_requested.
     /// </summary>
     private const string WalkJobsTemplate = "WITH RECURSIVE " + WalkNodesCte + """
         ,
@@ -201,9 +207,9 @@ public sealed partial class PgBoltStore
         """;
 
     /// <summary>
-    /// §6.4 Т2.4: дети-batches. 2/3/4/7 — batch-продолжения узла (batches_awaiting); 5 — вложенные без родителя (batches_nested).
-    /// Запуск — state = 0 и Activated; отмена (Cancelled-родитель с OnSuccess или отмена ветки от parent_batch_id) —
-    /// cancel_requested и CancelMembers; batch с собственным cancel_requested не трогается.
+    /// Child batches (§6.4 T2.4). Codes 2/3/4/7 select the node's batch continuations (batches_awaiting). Code 5 selects nested batches without a
+    /// parent dependency (batches_nested). Activation sets state = 0 and emits Activated. Cancellation sets cancel_requested and emits CancelMembers
+    /// for a Cancelled parent with OnSuccess or a branch cancelled via parent_batch_id. Batches already marked cancel_requested are left alone.
     /// </summary>
     private const string WalkBatchesTemplate = "WITH RECURSIVE " + WalkNodesCte + """
         ,
@@ -263,7 +269,9 @@ public sealed partial class PgBoltStore
         ORDER BY n.ord
         """;
 
-    /// <summary>§6.4 Т2.3: остаток узлов, дошедших до конца, — первая строка тем же предикатом без курсора и без блокировки.</summary>
+    /// <summary>
+    /// Finds remaining children for nodes that reached the end by selecting the first row with the same predicate and no cursor or lock (§6.4 T2.3).
+    /// </summary>
     private const string WalkJobsTailTemplate = $$"""
         SELECT u.ord,
                (SELECT q.job_id FROM {schema}.queue q
@@ -290,7 +298,9 @@ public sealed partial class PgBoltStore
         FROM unnest(@nodes::uuid[], @outcomes::smallint[]) WITH ORDINALITY AS u(node, outcome, ord)
         """;
 
-    /// <summary>§6.4 Т2.5: прошедшие оба этапа без остатка удаляются; остальные — stage, cursor, retry_after.</summary>
+    /// <summary>
+    /// Deletes signals that finished both stages without remaining rows. Updates stage, cursor, and retry_after for the rest (§6.4 T2.5).
+    /// </summary>
     private const string WalkFinishTemplate = """
         WITH f AS (
             SELECT * FROM unnest(@ids::bigint[], @done::boolean[], @stages::smallint[], @cursors::uuid[], @defer::boolean[])
@@ -308,8 +318,8 @@ public sealed partial class PgBoltStore
     private const string OldestCompletionTemplate = "SELECT now() - created_at FROM {schema}.completions ORDER BY id LIMIT 1";
 
     /// <summary>
-    /// Есть ли сигнал, который взял бы захват Т1, Т2 или CancelMembers: те же предикаты, каждый — по своему частичному индексу
-    /// (completions_count, completions_walk, completions_cancel; вместе они покрывают все строки).
+    /// Checks whether T1, T2, or CancelMembers could claim a signal. Uses the same predicates and their partial indexes: completions_count,
+    /// completions_walk, and completions_cancel together cover all rows.
     /// </summary>
     private const string ReadyCompletionsTemplate = $$"""
         SELECT EXISTS (SELECT 1 FROM {schema}.completions WHERE {{CountReadyPredicate}})
@@ -327,10 +337,10 @@ public sealed partial class PgBoltStore
     private string OldestCompletionSql => field ??= Render(OldestCompletionTemplate);
     internal string ReadyCompletionsSql => field ??= Render(ReadyCompletionsTemplate);
 
-    /// <summary>Только для тестов: вызывается перед COMMIT транзакции Т2 (Walked).</summary>
+    /// <summary>Test callback invoked at Walked before the T2 transaction commits.</summary>
     internal Func<ResolverStep, CancellationToken, Task>? ResolverHook { get; set; }
 
-    /// <summary>Т1 (§6.4): один statement; повтор целиком при 40P01/40001.</summary>
+    /// <summary>Runs T1 in one statement and retries the entire operation on 40P01 or 40001 (§6.4).</summary>
     internal Task<CompletionCountResult> CountCompletionsAsync(int batchSize, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
@@ -342,11 +352,11 @@ public sealed partial class PgBoltStore
         }, ct);
     }
 
-    /// <summary>Возраст старейшего сигнала (§8: Warning при лаге resolver'а); null — сигналов нет.</summary>
+    /// <summary>Age of the oldest signal, used to warn about resolver lag (§8). Null when no signals exist.</summary>
     internal Task<TimeSpan?> OldestCompletionAgeAsync(CancellationToken ct) =>
         QueryAsync<TimeSpan?>(OldestCompletionSql, _ => { }, async (r, c) => await r.ReadAsync(c) ? r.GetFieldValue<TimeSpan>(0) : null, ct);
 
-    /// <summary>Проверка простоя resolver'а по таймеру (§6.4): один дешёвый запрос вместо транзакций Т1, Т2 и CancelMembers.</summary>
+    /// <summary>Checks for resolver work on a timer with one inexpensive query in place of T1, T2, and CancelMembers transactions (§6.4).</summary>
     internal Task<bool> HasReadyCompletionsAsync(CancellationToken ct) =>
         QueryAsync(ReadyCompletionsSql, _ => { }, async (r, c) => await r.ReadAsync(c) && r.GetBoolean(0), ct);
 
@@ -372,7 +382,7 @@ public sealed partial class PgBoltStore
         public HashSet<string> Queues { get; } = new(StringComparer.Ordinal);
     }
 
-    /// <summary>Т2 (§6.4): одна транзакция; повтор целиком при 40P01/40001.</summary>
+    /// <summary>Runs T2 in one transaction and retries the entire operation on 40P01 or 40001 (§6.4).</summary>
     internal Task<ResolveResult> ResolveAsync(int batchSize, int rowBudget, TimeSpan retryDelay, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);

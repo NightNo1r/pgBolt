@@ -3,7 +3,7 @@ using PgBolt.Postgres.Storage;
 
 namespace PgBolt.Postgres.Recurring;
 
-/// <summary>Часть 4 §7: каждая запись синхронизации — Information, коллизия — Error. Проход без разницы не пишет ничего.</summary>
+/// <summary>Logs synchronization changes at Information and collisions at Error. A pass with no differences logs nothing (Part 4 §7).</summary>
 internal static partial class RecurringSyncLog
 {
     public static void Write(ILogger logger, string owner, RecurringSyncResult result)
@@ -34,7 +34,7 @@ internal static partial class RecurringSyncLog
         Message = "PgBolt: recurring job {Id} declared by owner {Owner} belongs to another owner or was created through the API; left untouched.")]
     private static partial void RecurringJobOwnerCollision(ILogger logger, string id, string owner);
 
-    /// <summary>Вызывается из <see cref="PgBoltStore"/>: повтор транзакции синхронизации после deadlock.</summary>
+    /// <summary>Called by <see cref="PgBoltStore"/> when retrying a synchronization transaction after a deadlock.</summary>
     [LoggerMessage(EventId = 6104, EventName = nameof(RecurringSyncDeadlockRetry), Level = LogLevel.Warning,
         Message = "PgBolt: recurring sync of owner {Owner} hit a deadlock (40P01); retrying the transaction (attempt {Attempt} of {MaxAttempts}).")]
     internal static partial void RecurringSyncDeadlockRetry(ILogger logger, Exception e, string owner, int attempt, int maxAttempts);

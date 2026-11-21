@@ -34,17 +34,17 @@ public sealed class SmokeTests : IDisposable
         foreach (var cls in StatementClasses.Required)
         {
             var row = Regex.Match(text, $@"^\| {cls} \| (\d+) \|", RegexOptions.Multiline);
-            Assert.True(row.Success, $"нет строки класса {cls}");
-            Assert.True(long.Parse(row.Groups[1].Value) > 0, $"у класса {cls} calls = 0");
+            Assert.True(row.Success, $"missing row for class {cls}");
+            Assert.True(long.Parse(row.Groups[1].Value) > 0, $"class {cls} has 0 calls");
         }
 
         // После остановки продюсера бакет не копит токены: окна дренажа (после последнего окна замера) не
         // показывают отброса больше секунды потока. В окнах замера отброс законен при обратном давлении.
-        var windows = text[text.IndexOf("## Пропускная способность", StringComparison.Ordinal)..text.IndexOf("## Enqueue", StringComparison.Ordinal)]
+        var windows = text[text.IndexOf("## Throughput", StringComparison.Ordinal)..text.IndexOf("## Enqueue", StringComparison.Ordinal)]
             .Split('\n').Where(l => Regex.IsMatch(l, @"^\| \d+ \|")).Select(l => l.Split('|', StringSplitOptions.TrimEntries)).ToList();
-        var drain = windows.Skip(windows.FindLastIndex(cells => cells[3] == "да") + 1).ToList();
+        var drain = windows.Skip(windows.FindLastIndex(cells => cells[3] == "yes") + 1).ToList();
         Assert.NotEmpty(drain);
-        Assert.All(drain, cells => Assert.True(long.Parse(cells[12]) < 500, $"окно {cells[1]}: отброшено {cells[12]}"));
+        Assert.All(drain, cells => Assert.True(long.Parse(cells[12]) < 500, $"window {cells[1]}: {cells[12]} tokens dropped"));
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public sealed class SmokeTests : IDisposable
         Assert.Equal(0, code);
         var text = await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(_out, "*.md")), TestContext.Current.CancellationToken);
         // Хотя бы одна ступень пройдена: в строке число потока, а не «нет».
-        Assert.Matches(@"\| Максимальный устойчивый rate \| \d+/с", text);
+        Assert.Matches(@"\| Maximum sustained rate \| \d+/s", text);
         Assert.Matches(ExtraExecutionsCounted, text);
     }
 
@@ -89,22 +89,22 @@ public sealed class SmokeTests : IDisposable
         Assert.Equal([6, 7, 8, 9, 9],
             Regex.Matches(slo, @"(?m)^\| (\d+) \|").Select(m => int.Parse(m.Groups[1].Value)));
         // Фаза 1 короче 3 мин: последняя минута перекрылась бы с отрезком 60–120 с.
-        Assert.Matches(@"(?m)^\| 7 \|.*\| нет данных \| нет данных \|", slo);
+        Assert.Matches(@"(?m)^\| 7 \|.*\| no data \| no data \|", slo);
         Assert.Matches(@"(?m)^\| reloptions queue \| [^|]*autovacuum_vacuum_cost_delay=0", text);
         var expected = slo.Split('\n').Any(line => Regex.IsMatch(line, @"^\| [789] \|") && line.Contains("| FAIL |"))
-            ? "нет" : "нет данных";
-        Assert.Matches($@"(?m)^\| {expected} \| \d+\.\d \| \d+\.\d \|$", Section(text, "Входы выбора параметров autovacuum"));
+            ? "no" : "no data";
+        Assert.Matches($@"(?m)^\| {expected} \| \d+\.\d \| \d+\.\d \|$", Section(text, "Autovacuum selection inputs"));
         Assert.Matches(ExtraExecutionsCounted, text);
-        Assert.Matches(@"(?m)^\| Размер БД в конце прогона, МБ \| \d+\.\d \|$", text);
+        Assert.Matches(@"(?m)^\| Database size at end of run, MiB \| \d+\.\d \|$", text);
     }
 
     /// <summary>Сценарий без дренажа считает лишние выполнения: в строке число, а не «нет данных».</summary>
-    private const string ExtraExecutionsCounted = @"(?m)^\| Повторные \(лишние\) выполнения \| \d+ \|$";
+    private const string ExtraExecutionsCounted = @"(?m)^\| Duplicate \(extra\) executions \| \d+ \|$";
 
     private static string Section(string text, string title)
     {
         var start = text.IndexOf($"## {title}\n", StringComparison.Ordinal);
-        Assert.True(start >= 0, $"нет раздела {title}");
+        Assert.True(start >= 0, $"missing section {title}");
         var end = text.IndexOf("\n## ", start, StringComparison.Ordinal);
         return text[start..(end < 0 ? text.Length : end)];
     }
@@ -124,13 +124,13 @@ public sealed class SmokeTests : IDisposable
         var ordinary = await File.ReadAllTextAsync(combinations[0], ct);
         Assert.Matches(ExtraExecutionsCounted, ordinary);
         Assert.Matches(@"(?m)^\| dequeue \| [1-9]\d* \|", ordinary);
-        Assert.Matches(@"(?m)^\| direct \| \d+ \| current \| [1-9]\d* \| \d+ \| [1-9]\d* \| 0 \| [\d.]+ \| 0 \| нет данных \| [1-9]\d* \|", ordinary);
+        Assert.Matches(@"(?m)^\| direct \| \d+ \| current \| [1-9]\d* \| \d+ \| [1-9]\d* \| 0 \| [\d.]+ \| 0 \| no data \| [1-9]\d* \|", ordinary);
         if (Postgres.Schema.PgBoltMigrations.All.Any(m => m.Name == "read_jobs"))
         {
             Assert.Matches(@"(?m)^\| read_jobs \| [1-9]\d* \|", ordinary);
         }
         var summary = await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(_out, "*-partitions-summary.md")), ct);
-        Assert.Matches(@"\| Ёмкость таблицы блокировок \| \d+ \|", summary);
+        Assert.Matches(@"\| Lock table capacity \| \d+ \|", summary);
         Assert.Matches(@"(?m)^\| direct \| current \| 15 \|", summary);
         Assert.Matches(@"(?m)^\| direct \| current \| 20 \|", summary);
     }

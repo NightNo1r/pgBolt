@@ -1,53 +1,53 @@
 namespace PgBolt;
 
-/// <summary>Обработка срабатываний, пропущенных за простой или паузу (часть 4 §5.3). Значения хранятся в recurring_jobs.misfire.</summary>
+/// <summary>Handles occurrences missed during downtime or a pause (Part 4 §5.3). Values are stored in recurring_jobs.misfire.</summary>
 public enum MisfirePolicy
 {
-    /// <summary>Одно срабатывание за все пропущенные; ScheduledAt — последнее из них.</summary>
+    /// <summary>Fires once for all missed occurrences. ScheduledAt is the latest missed occurrence.</summary>
     FireOnce = 0,
 
-    /// <summary>Только если последнее пропущенное не старше MisfireThreshold; иначе ничего.</summary>
+    /// <summary>Fires only if the latest missed occurrence is no older than MisfireThreshold.</summary>
     Skip = 1,
 
-    /// <summary>Каждое пропущенное срабатывание не старше CatchUpWindow.</summary>
+    /// <summary>Fires for each missed occurrence within CatchUpWindow.</summary>
     CatchUp = 2,
 }
 
-/// <summary>Поведение при живом предыдущем запуске (часть 4 §5.3). Значения хранятся в recurring_jobs.overlap.</summary>
+/// <summary>Handles an occurrence while the previous run is still active (Part 4 §5.3). Values are stored in recurring_jobs.overlap.</summary>
 public enum OverlapPolicy
 {
-    /// <summary>Не ставить, пока жив предыдущий запуск (ключ pgbolt:recurring:{id}); при CatchUp — ждать.</summary>
+    /// <summary>Skips enqueue while the previous run is active (key pgbolt:recurring:{id}). CatchUp waits for that run.</summary>
     Skip = 0,
 
-    /// <summary>Ставить всегда.</summary>
+    /// <summary>Enqueues every occurrence.</summary>
     Allow = 1,
 }
 
 public sealed record RecurringJobOptions
 {
-    /// <summary>Таймзона cron; null — UTC. Хранится как IANA id.</summary>
+    /// <summary>Cron time zone, stored as an IANA ID. Null selects UTC.</summary>
     /// <remarks>
     /// <para>
-    /// Переходы DST — семантика Cronos (часть 4 §5.4): весной время, попавшее в пропуск, срабатывает в момент перехода
-    /// (<c>30 2 * * *</c> в America/New_York 2026-03-08 — в 03:00 EDT); осенью выражение с фиксированными часом и минутой
-    /// срабатывает один раз, интервальное (<c>*/15</c> в часах или минутах) — в обоих проходах повторяющегося часа.
+    /// Daylight saving transitions follow Cronos semantics (Part 4 §5.4). A time in the spring gap fires at the transition: <c>30 2 * * *</c> fires
+    /// at 03:00 EDT in America/New_York on 2026-03-08. In the fall, a fixed hour and minute fire once. An interval expression such as <c>*/15</c> in
+    /// the hour or minute field fires in both passes through the repeated hour.
     /// </para>
     /// <para>
-    /// Исторические смены базового смещения зоны (не DST: Europe/Moscow 2011 и 2014, Pacific/Apia 2011) эту семантику не
-    /// гарантируют: повторяющийся час срабатывает один раз, время в пропуске может сработать раньше перехода. Срабатывания
-    /// не повторяются; если ошибку Cronos на таком участке исправить не удалось, тик пишет ошибку строки (last_error).
+    /// Historical changes to a zone's base offset, such as Europe/Moscow in 2011 and 2014 or Pacific/Apia in 2011, behave differently. A repeated
+    /// hour fires once, and a time in a gap can fire before the transition. Occurrences are never duplicated. If a Cronos error at such a transition
+    /// cannot be corrected, the scheduler tick records it in last_error.
     /// </para>
     /// </remarks>
     public TimeZoneInfo? TimeZone { get; init; }
 
     public MisfirePolicy Misfire { get; init; } = MisfirePolicy.FireOnce;
 
-    /// <summary>CatchUp догоняет срабатывания не старше окна; (0, 366 суток].</summary>
+    /// <summary>CatchUp runs missed occurrences within this window. The window must be positive and at most 366 days.</summary>
     public TimeSpan CatchUpWindow { get; init; } = TimeSpan.FromDays(1);
 
     public OverlapPolicy Overlap { get; init; } = OverlapPolicy.Skip;
 
-    /// <summary>null — умолчание задачи из job_types на момент срабатывания (как и остальные поля ниже).</summary>
+    /// <summary>When null, uses the job_types default at the time of firing. The same applies to the following properties.</summary>
     public string? Queue { get; init; }
 
     public short? Priority { get; init; }

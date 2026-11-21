@@ -1,6 +1,6 @@
 namespace PgBolt.Postgres.Storage;
 
-/// <summary>Пакет задач одного типа (§5.1): поэлементные массивы + общие скаляры.</summary>
+/// <summary>Batch of jobs of one type (§5.1), with per-row arrays and shared scalar values.</summary>
 public sealed record EnqueueBatch(
     string Type,
     string Queue,
@@ -14,28 +14,30 @@ public sealed record EnqueueBatch(
     DateTime?[] RunAtUtc,
     string?[] UniqueKeys)
 {
-    /// <summary>Часть 4: момент срабатывания по строкам (только вместе с RecurringIds); null — now() БД.</summary>
+    /// <summary>Scheduled occurrence time per row, supplied with RecurringIds (Part 4). Null uses the database's now().</summary>
     public DateTime?[]? ScheduledAtUtc { get; init; }
 
     /// <summary>
-    /// Часть 4: id расписания по строкам. null — задачи не из расписания (прежний SQL клиента); иначе — внутренний вариант
-    /// enqueue с колонками recurring_id / scheduled_at (тик, Trigger; §8).
+    /// Schedule IDs per row (Part 4). Null selects ordinary client enqueue SQL. Otherwise ticks and Trigger use the internal enqueue variant with
+    /// recurring_id and scheduled_at (§8).
     /// </summary>
     public string[]? RecurringIds { get; init; }
 
     // Поля графа (часть 5) задаёт только планировщик workflow (internal init): Awaiting-строка без подписки, notify и учёта
     // total нарушила бы инварианты §4.
 
-    /// <summary>Часть 5 §6.1 п. 2: родитель (задача или batch; у кода 5 — свой batch) по строкам. Только вместе с остальными массивами графа.</summary>
+    /// <summary>
+    /// Parent job or batch per row (Part 5 §6.1, step 2). Code 5 refers to the member's own batch. Supply with the other graph arrays.
+    /// </summary>
     public Guid?[]? ParentIds { get; internal init; }
 
-    /// <summary>Часть 5: jobs.continuation = queue.await_condition (1–5) по строкам; не NULL — строка пишется Awaiting.</summary>
+    /// <summary>Per-row jobs.continuation = queue.await_condition, codes 1–5 (Part 5). Non-NULL rows start Awaiting.</summary>
     public short?[]? Continuations { get; internal init; }
 
-    /// <summary>Часть 5: queue.notify = jobs.notify по строкам (член batch или есть дети в графе).</summary>
+    /// <summary>Per-row queue.notify = jobs.notify, true for batch members and jobs with children in the graph (Part 5).</summary>
     public bool[]? Notify { get; internal init; }
 
-    /// <summary>Часть 5: batch члена по строкам (в queue и jobs).</summary>
+    /// <summary>Containing batch per member row in both queue and jobs (Part 5).</summary>
     public Guid?[]? BatchIds { get; internal init; }
 
     internal void Validate()
@@ -94,19 +96,19 @@ public sealed record LeasedJob(
     short? Continuation = null,
     double WaitSeconds = 0);
 
-/// <summary>Результат dequeue очереди с кластерным лимитом: LimitReached — мест в лимите после него не осталось.</summary>
+/// <summary>Dequeue result for a queue with a cluster-wide limit. LimitReached means no capacity remains after dequeue.</summary>
 public sealed record LimitedDequeueResult(IReadOnlyList<LeasedJob> Jobs, bool LimitReached);
 
 public readonly record struct LeaseRef(Guid JobId, Guid LeaseId);
 
 public readonly record struct HeartbeatLease(Guid JobId, Guid LeaseId, bool CancelRequested);
 
-/// <summary>Ответ heartbeat (часть 2 §9.2): обновлена ли строка servers и живые lease из списка.</summary>
+/// <summary>Heartbeat response (Part 2 §9.2) indicating whether the server row was updated and which listed leases remain live.</summary>
 public sealed record HeartbeatResult(bool ServerPresent, IReadOnlyList<HeartbeatLease> Leases);
 
 public enum FailOutcome { LeaseLost, Retried, Cancelled, Failed }
 
-/// <summary>Исход release (часть 3 §7.1): возврат без траты попытки, финализация отмены или потерянный lease.</summary>
+/// <summary>Release outcome (Part 3 §7.1): returned without consuming an attempt, finalized as cancelled, or lease lost.</summary>
 public enum ReleaseOutcome { LeaseLost, Released, Cancelled }
 
 public sealed record PromoteResult(int Promoted, IReadOnlyCollection<string> Queues);
@@ -119,5 +121,5 @@ public sealed record JobTypeRecord(
     short DefaultPriority,
     int[]? DefaultRetryDelaysSeconds);
 
-/// <summary>Строка сброса счётчиков исходов (часть 6 §4.1): бакет — начало минуты UTC.</summary>
+/// <summary>One row of outcome counters to flush (Part 6 §4.1). The bucket is the start of a UTC minute.</summary>
 internal readonly record struct OutcomeStatsRow(DateTime BucketUtc, Guid ServerId, string Queue, int Succeeded, int Failed, int Retried);

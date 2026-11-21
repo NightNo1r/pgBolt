@@ -17,7 +17,7 @@ public sealed class ThroughputChartTests
         var html = await DashboardView.RenderAsync(new DefaultHttpContext { RequestServices = services }, typeof(ThroughputChart),
             new Dictionary<string, object?> { [nameof(ThroughputChart.Points)] = new[] { new ThroughputPoint(at, 0, 0, 3) } });
 
-        Assert.Contains("нет данных", html, StringComparison.Ordinal);
+        Assert.Contains("No data", html, StringComparison.Ordinal);
         Assert.DoesNotContain("<svg", html, StringComparison.Ordinal);
     }
 }

@@ -7,8 +7,9 @@ using PgBolt.Postgres;
 namespace PgBolt.Dashboard.Data;
 
 /// <summary>
-/// Чтение dashboard (§6): каждый statement — своя транзакция READ COMMITTED, READ ONLY, с SET LOCAL statement_timeout;
-/// PrepareAsync — только при UsePreparedStatements. Один partial-файл на экран.
+/// Dashboard reads (§6). Each statement uses its own READ COMMITTED, READ ONLY transaction with SET LOCAL
+/// statement_timeout. Calls PrepareAsync only when UsePreparedStatements is enabled. Each screen has its own partial
+/// file.
 /// </summary>
 internal sealed partial class DashboardStore(NpgsqlDataSource dataSource, string schema, bool usePreparedStatements,
     PgBoltDashboardOptions options, TimeProvider time)
@@ -19,7 +20,7 @@ internal sealed partial class DashboardStore(NpgsqlDataSource dataSource, string
     private readonly string _timeoutSql = string.Create(CultureInfo.InvariantCulture,
         $"SET LOCAL statement_timeout = {(long)Math.Ceiling(options.QueryTimeout.TotalMilliseconds)}");
 
-    /// <summary>Только тесты: вызывается перед каждым statement'ом с его SQL и привязкой параметров (EXPLAIN экранов).</summary>
+    /// <summary>Test hook invoked before each statement with the SQL and parameter binding, so tests can EXPLAIN screen queries.</summary>
     internal Func<string, Action<NpgsqlParameterCollection>, CancellationToken, Task>? OnStatement { get; set; }
 
     private string Render(string template) => template.Replace("{schema}", _schema, StringComparison.Ordinal);
@@ -45,17 +46,17 @@ internal sealed partial class DashboardStore(NpgsqlDataSource dataSource, string
         return result;
     }
 
-    /// <summary>Обход порциями (§6.3) от курсора after с бюджетом ScanBudget — страница списка.</summary>
+    /// <summary>Scans from the after cursor in chunks within ScanBudget to produce a list page (§6.3).</summary>
     private async Task<Page<T>> ScanPageAsync<T>(string? after, CursorShape shape, Func<ListKey?, int, CancellationToken, Task<Portion<T>>> next,
         Func<T, ListKey> keyOf, CancellationToken ct) =>
         ToPage(await ChunkedScan.RunAsync(Cursor.Decode(after, shape), PageSize, next, keyOf, options.ScanBudget, time, ct), shape);
 
-    /// <summary>Страница обхода порциями: ScannedTo — время ключа продолжения, только если исчерпан бюджет.</summary>
+    /// <summary>A chunked scan page. ScannedTo gives the continuation key timestamp only when the budget runs out.</summary>
     internal static Page<T> ToPage<T>(ScanResult<T> result, CursorShape shape) =>
         new(result.Rows, result.Next is { } next ? Cursor.Encode(next, shape) : null,
             result is { Incomplete: true, Next: { } key } ? KeyTime(key, shape) : null);
 
-    /// <summary>Простой список: fetched — до PageSize + 1 строк; лишняя строка — данные есть, Next — ключ последней выданной.</summary>
+    /// <summary>Builds a page from up to PageSize + 1 fetched rows. An extra row indicates more data. Next is the last key returned to the caller.</summary>
     internal static Page<T> LimitPage<T>(List<T> fetched, Func<T, ListKey> keyOf, CursorShape shape)
     {
         if (fetched.Count <= PageSize)

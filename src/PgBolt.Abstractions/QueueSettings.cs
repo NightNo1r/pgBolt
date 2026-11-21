@@ -1,7 +1,8 @@
 namespace PgBolt;
 
 /// <summary>
-/// Настройки очереди: значения из кода и переопределения лимита и веса. Строки в БД нет — эффективных лимита и веса тоже нет.
+/// Code-defined settings and overrides for a queue's concurrency limit and weight. A queue without a database record has neither an effective
+/// limit nor a weight.
 /// </summary>
 public sealed record QueueSettings(
     string Queue,
@@ -17,12 +18,17 @@ public sealed record QueueSettings(
     string? OverrideWeightUpdatedBy,
     DateTimeOffset? OverrideWeightUpdatedAt)
 {
-    /// <summary>Переопределение, если оно задано (в том числе «без лимита»), иначе значение из кода; null — без лимита.</summary>
+    /// <summary>
+    /// The concurrency override if set, including an explicit unlimited override. Otherwise uses the code-defined limit. Null means unlimited.
+    /// </summary>
     public int? EffectiveMaxConcurrency => OverrideConcurrencySet ? OverrideMaxConcurrency : DefaultMaxConcurrency;
 
-    /// <summary>Эффективный лимит равен 0.</summary>
+    /// <summary>True when the effective concurrency limit is zero.</summary>
     public bool Paused => EffectiveMaxConcurrency == 0;
 
-    /// <summary>Переопределение, если оно задано (в том числе «без веса»), иначе значение из кода; null — без веса.</summary>
+    /// <summary>
+    /// The weight override if set, including an explicit override that removes the weight. Otherwise uses the code-defined weight. Null means no
+    /// weight.
+    /// </summary>
     public int? EffectiveWeight => OverrideWeightSet ? OverrideWeight : DefaultWeight;
 }

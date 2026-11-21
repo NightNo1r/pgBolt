@@ -15,7 +15,7 @@ public sealed class PgBoltOptions
     public string Schema { get; set; } = "pgbolt";
     public bool AutoMigrate { get; set; } = true;
     public bool UsePreparedStatements { get; set; }
-    /// <summary>fillfactor партиций jobs (контракт HOT, §4.2).</summary>
+    /// <summary>Fillfactor for jobs partitions (HOT update contract, §4.2).</summary>
     public int JobsFillFactor { get; set; } = 80;
     public int PartitionDaysAhead { get; set; } = 7;
     public TimeSpan PartitionLockTimeout { get; set; } = TimeSpan.FromSeconds(2);
@@ -23,50 +23,50 @@ public sealed class PgBoltOptions
     internal static readonly TimeSpan MaxRetention = TimeSpan.FromDays(3650);
 
     /// <summary>
-    /// Срок хранения завершённых задач (Succeeded, Failed, Cancelled) — от суток их создания (UTC), на уровне суточных партиций
-    /// (часть 2 §5.1–§5.3); округляется вверх до суток. Незавершённые задачи не удаляются никогда. Задача, созданная в сутки D
-    /// и завершившаяся в D + k, хранится после завершения Rd − k + 1 суток (при k &gt; Rd — до ближайшего запуска retention).
-    /// Первый запуск retention после обновления удаляет все партиции старше срока. Партиция, закреплённая живыми задачами,
-    /// после компактирования занимает объём живых строк, а при их числе больше <see cref="RetentionCompactionMaxLiveJobs"/> —
-    /// диск целиком до их ухода. null — хранить вечно (задаётся только кодом: отсутствие ключа в конфигурации — значение
-    /// по умолчанию); число партиций тогда растёт на одну в сутки. Значение должно совпадать на всех подах и приложениях
-    /// схемы: действует самый короткий срок среди процессов, выполняющих обслуживание.
-    /// Таблицы с именами партиций (jobs_YYYYMMDD, jobs_YYYYMMDD_rN, job_events_YYYYMMDD) в схеме создаёт только PgBolt:
-    /// отсоединённая таблица с таким именем удаляется при любом сроке, включая null. Для архивирования партицию нужно
-    /// переименовать или перенести в другую схему (часть 2 §5.2).
+    /// Retention for completed jobs (Succeeded, Failed, Cancelled), measured from their UTC creation day in daily partitions and rounded up to whole
+    /// days (Part 2 §5.1–§5.3). Unfinished jobs are always retained. A job created on day D and completed on D + k is retained for Rd − k + 1 days
+    /// after completion, or until the next retention run if k &gt; Rd. The first retention run after an upgrade removes all expired partitions.
+    /// After compaction, a partition pinned by live jobs occupies space for its live rows. With more than
+    /// <see cref="RetentionCompactionMaxLiveJobs"/> live jobs, the full partition remains on disk until the count falls. Set null in code to retain
+    /// jobs indefinitely, adding one partition per day. Omitting the configuration key selects the default. Use the same setting on all pods and
+    /// applications sharing the schema. The shortest retention among processes running maintenance takes effect. PgBolt owns partition names
+    /// (jobs_YYYYMMDD, jobs_YYYYMMDD_rN, job_events_YYYYMMDD). Retention drops detached tables with these names even when set to null. Rename
+    /// archived partitions or move them to another schema (Part 2 §5.2).
     /// </summary>
     public TimeSpan? JobsRetention { get; set; } = TimeSpan.FromDays(7);
 
     /// <summary>
-    /// Срок хранения job_events — от суток события (UTC), на уровне суточных партиций; округляется вверх до суток. null — хранить
-    /// вечно (только кодом). Первый запуск retention после обновления удаляет все партиции старше срока. Должен совпадать на всех
-    /// подах схемы. Архивирование партиций — см. <see cref="JobsRetention"/>: переименовать или перенести в другую схему.
+    /// Retention for job_events, measured from the event's UTC day in daily partitions and rounded up to whole days. Set null in code for indefinite
+    /// retention. The first run after an upgrade drops all expired partitions. Use the same setting on every pod sharing the schema. To archive
+    /// partitions, rename them or move them to another schema as described in <see cref="JobsRetention"/>.
     /// </summary>
     public TimeSpan? EventsRetention { get; set; } = TimeSpan.FromDays(7);
 
-    /// <summary>lock_timeout попыток retention взять блокировку родителя или партиции (часть 2 §5.3): на столько горячий путь
-    /// может встать в очередь за одной попыткой.</summary>
+    /// <summary>
+    /// lock_timeout for each retention attempt to lock a parent or partition (Part 2 §5.3). Hot-path operations may queue behind an attempt for this
+    /// long.
+    /// </summary>
     public TimeSpan RetentionLockTimeout { get; set; } = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
-    /// Наибольшее число живых задач, при котором закреплённая партиция jobs компактируется (часть 2 §5.3); 0 — компактирование
-    /// выключено. Компактирование, как TRUNCATE, не MVCC-безопасно для снимков REPEATABLE READ/SERIALIZABLE, взятых до него:
-    /// если отчёты или выгрузки читают jobs в REPEATABLE READ, выставьте 0. При публикации jobs в логической репликации
-    /// компактирование пропускается. Должно совпадать на всех подах схемы.
+    /// Maximum number of live jobs in a pinned jobs partition eligible for compaction (Part 2 §5.3). Set to 0 to disable compaction. Like TRUNCATE,
+    /// compaction is unsafe for earlier REPEATABLE READ or SERIALIZABLE snapshots. Set to 0 if reports or exports read jobs in REPEATABLE READ
+    /// transactions. PgBolt skips compaction when jobs belongs to a logical replication publication. Use the same setting on every pod sharing the
+    /// schema.
     /// </summary>
     public int RetentionCompactionMaxLiveJobs { get; set; } = 1000;
     public TimeSpan JobTypesCacheTtl { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// TTL кэша чтения <see cref="IQueueSettingsManager"/> в этом процессе; null — без кэша (каждое чтение идёт в БД). Кэш
-    /// сбрасывают запись менеджера этого процесса и <see cref="IQueueSettingsManager.InvalidateCache"/>; изменения из других
-    /// процессов видны по истечении TTL. Dequeue и серверы этот кэш не используют. Если задан — больше 0 и не больше суток.
+    /// Lifetime of this process's <see cref="IQueueSettingsManager"/> read cache. Null sends every read to the database. Local manager writes and
+    /// <see cref="IQueueSettingsManager.InvalidateCache"/> clear the cache. Other processes' changes appear after the TTL expires. Servers and
+    /// dequeue operations bypass this cache. An explicit TTL must be positive and at most one day.
     /// </summary>
     public TimeSpan? QueueSettingsCacheDuration { get; set; }
 
     internal IReadOnlyList<Action<IPgBoltJobsBuilder>> JobRegistrations => _jobRegistrations;
 
-    /// <summary>Регистрирует исполнителей сборки: o.AddJobs(My.Jobs.PgBoltJobRegistry.Register).</summary>
+    /// <summary>Registers an assembly's executors, e.g. o.AddJobs(My.Jobs.PgBoltJobRegistry.Register).</summary>
     public PgBoltOptions AddJobs(Action<IPgBoltJobsBuilder> register)
     {
         ArgumentNullException.ThrowIfNull(register);
@@ -75,25 +75,23 @@ public sealed class PgBoltOptions
     }
 
     /// <summary>
-    /// Владелец code-first расписаний (часть 4 §4.3): все процессы одного владельца объявляют одинаковый набор. По умолчанию —
-    /// IHostEnvironment.ApplicationName. Только имя: синхронизацию включают AddRecurring или ClearRecurring().
+    /// Owner of code-defined schedules (Part 4 §4.3). Every process with the same owner declares the same set. Defaults to
+    /// IHostEnvironment.ApplicationName. Set the owner name here and enable synchronization with AddRecurring or ClearRecurring().
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Синхронизация (§6) приводит строки владельца к объявленному набору: на старте и, если в процессе есть сервер
-    /// (AddPgBoltServer), периодически — раз в PgBoltProcessingOptions.RecurringSyncInterval. В процессе без сервера
-    /// периодической синхронизации нет, только на старте; защиты от отката набора старым подом тогда тоже нет.
+    /// Synchronization reconciles the owner's rows with the declared set at startup (§6). Processes with AddPgBoltServer also reconcile every
+    /// PgBoltProcessingOptions.RecurringSyncInterval. A process without a server synchronizes only at startup, so an older pod can revert the set.
     /// </para>
     /// <para>
-    /// Rolling deploy: пока живы старые поды, старый и новый наборы чередуются, затем сходятся к новому. Удалённая и снова
-    /// вставленная строка теряет курсор и paused: рядом со сменой версии срабатывание может выпасть или повториться, а пауза
-    /// расписания, удаляемого новой версией, — сброситься при возврате его старым подом.
+    /// During a rolling deployment, old and new pods can alternate between their sets until the old pods exit. Deleting and reinserting a row loses
+    /// its cursor and paused state. An occurrence near the version change can be missed or repeated. An old pod restoring a schedule removed by the
+    /// new version can also clear its pause.
     /// </para>
     /// <para>
-    /// Выведенный из эксплуатации владелец: его строки срабатывают дальше (или раз в минуту пишут ошибку строки), а
-    /// IRecurringJobManager их не удаляет. Снять их — последним деплоем сервиса с ClearRecurring() или SQL
-    /// <c>DELETE FROM {schema}.recurring_jobs WHERE owner = '&lt;owner&gt;';</c> (если процесс владельца всё же жив,
-    /// следующая синхронизация вставит строки заново).
+    /// When an owner is retired, its schedules keep firing or record a row error every minute. IRecurringJobManager cannot remove them. Deploy the
+    /// service one last time with ClearRecurring(), or run <c>DELETE FROM {schema}.recurring_jobs WHERE owner = '&lt;owner&gt;';</c>. Any surviving
+    /// owner process will reinsert the rows at its next synchronization.
     /// </para>
     /// </remarks>
     public string? RecurringOwner { get; set; }
@@ -101,11 +99,14 @@ public sealed class PgBoltOptions
     internal IReadOnlyList<RecurringDeclaration> Recurring => _recurring;
     internal bool RecurringCleared { get; private set; }
 
-    /// <summary>Code-first расписание; синхронизируется на старте и периодически (часть 4 §6). Проверки — сразу, кроме аргументов.</summary>
+    /// <summary>
+    /// Declares a recurring schedule synchronized at startup and periodically (Part 4 §6). All values except job arguments are validated
+    /// immediately.
+    /// </summary>
     /// <remarks>
-    /// Метаданные TArgs генератор регистрирует по месту этого вызова; аргументы сериализуются при первой синхронизации.
-    /// Удаление последнего AddRecurring без ClearRecurring() строки владельца не удаляет: процесс без объявлений не
-    /// синхронизирует. Жизненный цикл набора (rolling deploy, процесс без сервера, вывод владельца) — <see cref="RecurringOwner"/>.
+    /// The generator registers TArgs metadata at the call site. Arguments are serialized at the first synchronization. Removing the last
+    /// AddRecurring without calling ClearRecurring() leaves the owner's rows in place because a process without declarations skips synchronization.
+    /// See <see cref="RecurringOwner"/> for rolling deployments, processes without servers, and retiring owners.
     /// </remarks>
     public PgBoltOptions AddRecurring<TArgs>(string id, string cron, TArgs args, RecurringJobOptions? options = null)
     {
@@ -118,8 +119,8 @@ public sealed class PgBoltOptions
         return this;
     }
 
-    /// <summary>Динамическое code-first расписание по имени задачи; тип по job_types не проверяется (часть 4 §4.3).</summary>
-    /// <remarks>Удаление последнего AddRecurring и жизненный цикл набора — как у <see cref="AddRecurring{TArgs}"/>.</remarks>
+    /// <summary>Declares a recurring schedule by job name. The type is not checked against job_types (Part 4 §4.3).</summary>
+    /// <remarks>Removing the last AddRecurring call and managing the set follow the rules for <see cref="AddRecurring{TArgs}"/>.</remarks>
     public PgBoltOptions AddRecurring(string id, string jobName, string cron, JsonElement args, RecurringJobOptions? options = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(jobName);
@@ -129,10 +130,10 @@ public sealed class PgBoltOptions
         return this;
     }
 
-    /// <summary>Явно пустой набор: строки владельца удаляются. Несовместим с AddRecurring (часть 4 §4.3).</summary>
+    /// <summary>Declares an empty set and removes the owner's rows. Mutually exclusive with AddRecurring (Part 4 §4.3).</summary>
     /// <remarks>
-    /// Так убирают последнее AddRecurring и выводят владельца из эксплуатации (<see cref="RecurringOwner"/>). Когда выкатка
-    /// с ClearRecurring() завершена и строк владельца нет, вызов можно убрать следующей версией.
+    /// Use this to remove the final AddRecurring declaration or retire an owner (<see cref="RecurringOwner"/>). After the ClearRecurring()
+    /// deployment finishes and the owner's rows are gone, the next version can omit the call.
     /// </remarks>
     public PgBoltOptions ClearRecurring()
     {

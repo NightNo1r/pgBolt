@@ -11,8 +11,8 @@ using PgBolt.LoadTest.Slo;
 namespace PgBolt.LoadTest.Scenarios;
 
 /// <summary>
-/// Нагрузка B на постоянном потоке: на каждый режим новая схема, прогрев, окно замера, остановка продюсера, дренаж,
-/// проверка корректности и отчёт. Код — наибольший по режимам.
+/// Runs profile B at a constant rate. Each mode gets a fresh schema, warmup, measurement window, producer shutdown, drain, correctness check,
+/// and report. Returns the highest exit code across modes.
 /// </summary>
 internal sealed class Sustained : IScenario
 {
@@ -59,8 +59,8 @@ internal sealed class Sustained : IScenario
     }
 
     /// <summary>
-    /// Ждёт пустую <c>queue</c> не дольше 2 мин после остановки продюсера, продолжая сетку окон 10 с от
-    /// <paramref name="from"/> (конца окна замера); окна дренажа полные. <c>false</c> — не дождался.
+    /// Waits up to two minutes after producer shutdown for <c>queue</c> to empty. Continues collecting full 10-second drain windows from
+    /// <paramref name="from"/>, the end of measurement. Returns <c>false</c> on timeout.
     /// </summary>
     private static async Task<bool> DrainAsync(WindowCollector collector, List<WindowStats> windows, TimeSpan from,
         string connectionString, string schema, CancellationToken ct)
@@ -93,15 +93,15 @@ internal sealed class Sustained : IScenario
 }
 
 /// <summary>
-/// Нагрузка B на постоянном потоке на одной схеме: прогрев, окно замера и всё, что нужно и полному, и частичному
-/// отчёту, — окна, срезы, гистограммы и границы окна замера.
+/// Runs profile B at a fixed rate on one schema with warmup and measurement. Collects windows, samples, histograms, and measurement bounds for
+/// both complete and partial reports.
 /// </summary>
 internal sealed class SteadyRun : IDisposable
 {
-    /// <summary>Срез потерял соединение стенда.</summary>
-    internal const string SamplerLost = "30 попыток подряд без удачного запроса, соединение стенда потеряно";
+    /// <summary>The sampler lost its connection to the harness database.</summary>
+    internal const string SamplerLost = "30 consecutive attempts without a successful query, connection lost";
 
-    internal const string SamplerLostWarning = $"Срез: {SamplerLost}.";
+    internal const string SamplerLostWarning = $"Sampler: {SamplerLost}.";
 
     private readonly LoadEnvironment _env;
     private readonly LoadTestOptions _options;
@@ -136,12 +136,12 @@ internal sealed class SteadyRun : IDisposable
     public TimeSpan MeasureStart { get; private set; }
     public TimeSpan MeasureEnd { get; private set; }
 
-    /// <summary>Выдано задач продюсером к концу окна замера и действий после него.</summary>
+    /// <summary>Jobs issued by the producer through the end of measurement and subsequent actions.</summary>
     public long Issued { get; private set; }
 
     /// <summary>
-    /// Схема с <paramref name="partitions"/> партициями и набором индексов, reloptions <c>queue</c> из
-    /// <c>--queue-reloptions</c>, затем параметры окружения.
+    /// Prepares a schema with <paramref name="partitions"/> partitions and the chosen index set, applies <c>queue</c> reloptions from
+    /// <c>--queue-reloptions</c>, then captures environment settings.
     /// </summary>
     public async Task PrepareAsync(int partitions, IndexSet indexes, CancellationToken ct)
     {
@@ -159,9 +159,9 @@ internal sealed class SteadyRun : IDisposable
     }
 
     /// <summary>
-    /// Часы прогона с нуля, хосты, продюсер и срезы; прогрев, затем окно замера с чистыми <c>pg_stat_statements</c> и
-    /// общими гистограммами. <paramref name="measure"/> закрывает окна замера по-своему (по фазам) вместо сплошной сетки окон 10 с;
-    /// <paramref name="afterMeasure"/> идёт после окна замера, пока хосты и срезы работают.
+    /// Starts the run clock from zero, starts hosts, producer, and sampling, then warms up. Measurement starts with reset <c>pg_stat_statements</c>
+    /// and overall histograms. <paramref name="measure"/> can close windows by phase instead of using a continuous 10-second grid.
+    /// <paramref name="afterMeasure"/> runs after measurement while hosts and sampling are still active.
     /// </summary>
     public async Task<(LatencySummary Immediate, LatencySummary Delayed, StatementsSummary Summary)> WarmupAndMeasureAsync(
         Func<WindowCollector, Task>? measure, Func<WindowCollector, Producer, Task>? afterMeasure, CancellationToken ct)
@@ -204,10 +204,10 @@ internal sealed class SteadyRun : IDisposable
     public RunData Data(LatencySummary immediate, LatencySummary delayed, CorrectnessData? correctness) =>
         new(_options.Rate, Windows, Sampler.Samples, immediate, delayed, correctness, _mode, null, MeasureStart, MeasureEnd);
 
-    /// <summary>Данные прерванного прогона: гистограммы на момент сбоя, без проверки корректности.</summary>
+    /// <summary>Partial run data with histograms at failure and no correctness check.</summary>
     public RunData Partial() => Data(Ctx.Immediate.Total(), Ctx.Delayed.Total(), null);
 
-    /// <summary>Модель отчёта; при потере соединения среза к <paramref name="warnings"/> добавляется предупреждение.</summary>
+    /// <summary>Builds the report model and adds to <paramref name="warnings"/> if the sampler lost its connection.</summary>
     public ReportModel Model(RunData data, IReadOnlyList<SloVerdict> verdicts, StatementsSummary summary,
         IReadOnlyList<string> warnings, bool aborted, CombinationResult? combination = null) =>
         new(_options, _mode, _startedAt, _schema, _environment, verdicts, data, summary,

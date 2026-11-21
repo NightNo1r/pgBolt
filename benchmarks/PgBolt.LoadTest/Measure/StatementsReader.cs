@@ -3,11 +3,11 @@ using PgBolt.LoadTest.Env;
 
 namespace PgBolt.LoadTest.Measure;
 
-/// <summary>Итоги класса statement'ов, времена — в миллисекундах; <c>null</c> — нет данных.</summary>
+/// <summary>Totals per statement class, with times in milliseconds. <c>null</c> denotes missing data.</summary>
 internal sealed record StatementClassStats(
     long Calls, double? MeanPlanTime, double? MeanExecTime, double? TotalPlanTime, double TotalExecTime);
 
-/// <summary>Сводка <c>pg_stat_statements</c> по классам; <see cref="Classes"/> = <c>null</c> — расширение недоступно.</summary>
+/// <summary>Summary of <c>pg_stat_statements</c> by class. <see cref="Classes"/> is <c>null</c> if the extension is unavailable.</summary>
 internal sealed record StatementsSummary(IReadOnlyDictionary<string, StatementClassStats>? Classes)
 {
     // Ноль планирований допустим для готового generic plan; выключенный track_planning даёт null.
@@ -18,10 +18,9 @@ internal sealed record StatementsSummary(IReadOnlyDictionary<string, StatementCl
 }
 
 /// <summary>
-/// Сброс и чтение <c>pg_stat_statements</c> базы прогона. Без расширения сводка — «нет данных»; время
-/// планирования копится только при <c>pg_stat_statements.track_planning = on</c>, иначе его колонки — «нет данных».
-/// Если сброс не удался (у пользователя внешней БД нет права на <c>pg_stat_statements_reset</c>), статистика
-/// включала бы время до окна замера, поэтому сводка — тоже «нет данных».
+/// Resets and reads <c>pg_stat_statements</c> for the run database. Missing extensions produce no data. Planning time is available only when
+/// <c>pg_stat_statements.track_planning = on</c>. If reset fails, e.g. an external DB user lacks permission for <c>pg_stat_statements_reset</c>,
+/// omit the summary because it would include statistics from before the measurement window.
 /// </summary>
 internal sealed class StatementsReader(string connectionString)
 {
@@ -81,8 +80,8 @@ internal sealed class StatementsReader(string connectionString)
     }
 
     /// <summary>
-    /// Итоги класса. Среднее планирования — на число планирований (<c>plans</c>): у generic plan их намного
-    /// меньше, чем выполнений. При нуле делителя среднего нет (деление дало бы NaN).
+    /// Class totals. Mean planning time uses the number of plans (<c>plans</c>), which can be much lower than executions for a generic plan. A zero
+    /// denominator yields no mean instead of NaN.
     /// </summary>
     internal static StatementClassStats Stats(long calls, long plans, double totalPlan, double totalExec,
         bool trackPlanning) =>

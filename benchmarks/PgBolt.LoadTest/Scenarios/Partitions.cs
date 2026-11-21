@@ -9,10 +9,10 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.LoadTest.Scenarios;
 
 /// <summary>
-/// Матрица «режим × набор индексов × число партиций <c>jobs</c>»: на каждую комбинацию новая схема, блокировки
-/// statement'ов горячего пути до нагрузки, прогрев и окно замера нагрузки B без дренажа, отчёт; в конце — сводка.
-/// Нарушения SLO и упор в CPU влияют на код возврата только у конфигурации по умолчанию (P = 15, текущие индексы),
-/// сбой стенда в любой комбинации — код 2, см. <see cref="PartitionsVerdict"/>.
+/// Tests mode, index set, and <c>jobs</c> partition count in a matrix. Each combination gets a new schema, hot-path statement lock probes before
+/// load, warmup, a profile B measurement window without draining, and a report. Writes a final summary. SLO violations and CPU saturation affect
+/// the exit code only for the default configuration (P = 15, current indexes). A harness failure in any combination returns 2. See
+/// <see cref="PartitionsVerdict"/>.
 /// </summary>
 internal sealed class Partitions : IScenario
 {
@@ -46,36 +46,34 @@ internal sealed class Partitions : IScenario
         {
             // Сводка по готовым комбинациям нужна и при прерванном прогоне: матрица идёт часами.
             var path = await ReportWriter.WriteSummaryAsync(options.Out, startedAt, options, results, capacity, warnings);
-            Console.WriteLine($"Сводка: {path}");
+            Console.WriteLine($"Summary: {path}");
         }
 
         return PartitionsVerdict.ExitCode(results);
     }
 
     /// <summary>
-    /// Без <c>max_prepared_statements</c> PgBouncer не переносит подготовленные statement'ы между серверными
-    /// соединениями и режим <c>bouncer-prepared</c> падает на <c>prepared statement "…" does not exist</c>: 0 — сбой стенда.
-    /// У внешнего PgBouncer канала к админ-консоли нет, а нераспознанный вывод <c>SHOW CONFIG</c> значения не даёт —
-    /// в обоих случаях только предупреждение.
+    /// Without <c>max_prepared_statements</c>, PgBouncer cannot transfer prepared statements between server connections. The <c>bouncer-prepared</c>
+    /// mode fails with <c>prepared statement "…" does not exist</c>, so a zero setting means harness failure. An external PgBouncer has no admin
+    /// channel. If unavailable or <c>SHOW CONFIG</c> output is unrecognized, emit only a warning.
     /// </summary>
     private static async Task<IReadOnlyList<string>> CheckPreparedStatementsAsync(LoadEnvironment env,
         LoadTestOptions options, CancellationToken ct)
     {
         if (!options.Modes.Contains(LoadMode.BouncerPrepared)) return [];
         if (env.Console is null)
-            return ["max_prepared_statements внешнего PgBouncer не проверен: канала к админ-консоли нет."];
+            return ["Could not check max_prepared_statements on external PgBouncer. The admin console is unavailable."];
         return await env.Console.MaxPreparedStatementsAsync(ct) switch
         {
-            0 => throw new InvalidOperationException("У PgBouncer max_prepared_statements = 0: режим bouncer-prepared невозможен."),
-            null => ["max_prepared_statements PgBouncer не проверен: в выводе SHOW CONFIG значения нет."],
+            0 => throw new InvalidOperationException("PgBouncer max_prepared_statements = 0 prevents bouncer-prepared mode."),
+            null => ["Could not check PgBouncer max_prepared_statements. SHOW CONFIG did not return a value."],
             _ => [],
         };
     }
 
     /// <summary>
-    /// Одна комбинация на своей схеме. Сбой стенда в ней (исключение, потеря соединения среза, сбой создания или
-    /// удаления схемы) не обрывает матрицу: комбинация получает <see cref="CombinationResult.Failure"/>; отмена
-    /// прогона пробрасывается.
+    /// Runs one combination in its own schema. A harness exception, lost sampler connection, or failure creating or dropping the schema records a
+    /// <see cref="CombinationResult.Failure"/> without aborting the matrix. Run cancellation propagates.
     /// </summary>
     private static async Task<CombinationResult> RunCombinationAsync(LoadEnvironment env,
         LoadTestOptions options, LoadMode mode, IndexSet indexes, int partitions, IReadOnlyList<string> warnings,
@@ -90,7 +88,7 @@ internal sealed class Partitions : IScenario
         }
         catch (Exception e) when (!ct.IsCancellationRequested)
         {
-            Console.Error.WriteLine($"Сбой комбинации {mode}, P = {partitions}, {indexes}: {e}");
+            Console.Error.WriteLine($"Combination failed ({mode}, P = {partitions}, {indexes}): {e}");
             result = new CombinationResult(partitions, indexes, mode, Verdict.NoData, Verdict.NoData, false,
                 Failure: FailureText(e));
         }
@@ -104,7 +102,7 @@ internal sealed class Partitions : IScenario
                 }
                 catch (Exception e)
                 {
-                    Console.Error.WriteLine($"Схема {schema} не удалена: {e}");
+                    Console.Error.WriteLine($"Failed to drop schema {schema}: {e}");
                     if (result is { Failure: null }) result = result with { Failure = FailureText(e) };
                 }
             }
@@ -113,11 +111,11 @@ internal sealed class Partitions : IScenario
         return result!;
     }
 
-    /// <summary>Текст ошибки для ячейки таблицы сводки: без переводов строк и разделителей колонок.</summary>
+    /// <summary>Formats an error for a summary table cell without line breaks or column separators.</summary>
     private static string FailureText(Exception e) =>
         $"{e.GetType().Name}: {e.Message}".ReplaceLineEndings(" ").Replace('|', '/');
 
-    /// <summary>Прогон комбинации на подготовленной пустой схеме; при исключении пишет частичный отчёт.</summary>
+    /// <summary>Runs a combination on a prepared empty schema. Writes a partial report on exception.</summary>
     private static async Task<CombinationResult> MeasureAsync(LoadEnvironment env, LoadTestOptions options,
         LoadMode mode, IndexSet indexes, int partitions, string schema, IReadOnlyList<string> warnings,
         CancellationToken ct)
@@ -135,10 +133,10 @@ internal sealed class Partitions : IScenario
             var measured = SloEvaluator.SamplesIn(data.Samples, data.MeasureStart, data.MeasureEnd);
             var statements = probes.ToDictionary(p => p.Key, p => p.Value with { Stats = summary.Classes?.GetValueOrDefault(p.Key) });
             var missing = summary.MissingStats(statements.Keys);
-            var failure = missing.Count > 0 ? $"Нет статистики SQL: {string.Join(", ", missing)}." : null;
+            var failure = missing.Count > 0 ? $"Missing SQL statistics: {string.Join(", ", missing)}." : null;
             if (run.Sampler.Exhausted)
             {
-                failure = $"Срез: {SteadyRun.SamplerLost}. {failure}".TrimEnd();
+                failure = $"Sampler: {SteadyRun.SamplerLost}. {failure}".TrimEnd();
             }
             var result = new CombinationResult(partitions, indexes, mode,
                 verdicts.Single(v => v.Number == 1).Result, verdicts.Single(v => v.Number == 2).Result,
@@ -160,15 +158,15 @@ internal sealed class Partitions : IScenario
             await IScenario.ReportAsync(options.Out,
                 run.Model(run.Partial(), [], StatementsSummary.NoData, warnings, aborted: true, combination));
             if (ct.IsCancellationRequested) throw;
-            Console.Error.WriteLine($"Сбой комбинации {mode}, P = {partitions}, {indexes}: {e}");
+            Console.Error.WriteLine($"Combination failed ({mode}, P = {partitions}, {indexes}): {e}");
             return combination;
         }
     }
 
     /// <summary>
-    /// Блокировки dequeue, ack и enqueue до нагрузки. Без prepare Npgsql шлёт безымянный statement — custom plan,
-    /// блокировки измеряются. В режимах <c>*-prepared</c> сначала определяется план: custom — измерение, generic —
-    /// нижняя оценка для ack/enqueue. У dequeue учитываются также блокировки внутреннего чтения реальных задач.
+    /// Probes dequeue, ack, and enqueue locks before load. Without preparation Npgsql sends an unnamed statement with a custom plan, whose locks are
+    /// measured. For <c>*-prepared</c> modes, determines the plan first. Measures custom plans and estimates a lower bound for generic ack/enqueue
+    /// plans. Dequeue includes locks from reading real jobs.
     /// </summary>
     private static async Task ProbeLocksAsync(string directConnectionString, string schema, LoadMode mode,
         QueueProfile queues, int partitions, Dictionary<string, StatementResult> probes, CancellationToken ct)

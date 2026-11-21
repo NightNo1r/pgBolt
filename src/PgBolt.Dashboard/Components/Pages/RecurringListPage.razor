@@ -2,7 +2,7 @@
 <div class="pgbolt-table-wrap">
     <table>
         <thead>
-            <tr><th>Id</th><th>Тип</th><th>Cron</th><th>Часовой пояс</th><th>Владелец</th><th>Следующий запуск</th><th>Последний запуск</th><th>Ошибка</th>@if (Context.CanAct) { <th>Действия</th> }</tr>
+            <tr><th>Id</th><th>Type</th><th>Cron</th><th>Time zone</th><th>Owner</th><th>Next run</th><th>Last run</th><th>Error</th>@if (Context.CanAct) { <th>Actions</th> }</tr>
         </thead>
         <tbody>
             @foreach (var r in Page.Rows)
@@ -14,12 +14,12 @@
 </div>
 @if (Page.Rows.Count == 0)
 {
-    <p class="muted">расписаний нет</p>
+    <p class="muted">No schedules</p>
 }
 <Pager Next="@Page.Next" ScannedTo="Page.ScannedTo" BaseUrl="recurring" />
 
 @code {
-    /// <summary>Число колонок таблицы при CanAct (с «Действия»): заглушка удалённой строки занимает их все.</summary>
+    /// <summary>Number of columns when actions are enabled. The placeholder for a deleted row spans them all.</summary>
     internal const int ActColumns = 9;
 
     [Parameter] public Page<RecurringRow> Page { get; set; } = null!;

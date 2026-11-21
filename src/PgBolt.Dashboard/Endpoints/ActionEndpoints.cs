@@ -12,16 +12,16 @@ using PgBolt.Postgres.Client;
 namespace PgBolt.Dashboard.Endpoints;
 
 /// <summary>
-/// Действия над задачами, batch, расписаниями и настройками очередей через API core; доступ и CSRF проверяет фильтр группы.
-/// Ответ — фрагмент строки / карточки после действия (без &lt;title&gt;) и уведомление в HX-Trigger; неприменимое действие —
-/// тоже 200 с уведомлением.
+/// Executes job, batch, schedule and queue actions through the core API. The route group filter checks access and
+/// CSRF. Returns an updated row or card without &lt;title&gt; and a notification in HX-Trigger. An inapplicable action
+/// also returns 200 with a notification.
 /// </summary>
 internal static class ActionEndpoints
 {
     private const int MaxSelected = 100;
     internal const string LogCategory = "PgBolt.Dashboard.Actions";
 
-    /// <summary>Итог действия; Job — карточка, если действие её уже прочитало (неприменимый trigger).</summary>
+    /// <summary>Action result. Job holds the card if the action already read it, as when a job cannot be triggered.</summary>
     private readonly record struct JobOutcome(bool Found, bool Done, string Message, JobInfo? Job = null);
 
     public static void Map(RouteGroupBuilder g)
@@ -85,7 +85,7 @@ internal static class ActionEndpoints
             var logger = loggers.CreateLogger(LogCategory);
             DashboardNotFoundException NotFound()
             {
-                Log(logger, http, "cancel", $"batch {id}", "batch не найден");
+                Log(logger, http, "cancel", $"batch {id}", "batch not found");
                 return new($"batch {id} not found");
             }
             var before = await client.GetBatchAsync(new BatchId(id), ct) ?? throw NotFound();
@@ -93,8 +93,8 @@ internal static class ActionEndpoints
             var message = await client.CancelBatchAsync(new BatchId(id), ct) switch
             {
                 BatchCancelResult.NotFound => throw NotFound(),
-                BatchCancelResult.AlreadyFinished => "batch уже завершён",
-                _ => before.CancellationRequested ? "отмена уже запрошена" : "отмена запрошена",
+                BatchCancelResult.AlreadyFinished => "batch already finished",
+                _ => before.CancellationRequested ? "cancellation already requested" : "cancellation requested",
             };
             Log(logger, http, "cancel", $"batch {id}", message);
             var batch = await BatchEndpoints.GetBatchAsync(client, id, ct);
@@ -117,7 +117,7 @@ internal static class ActionEndpoints
             var logger = loggers.CreateLogger(LogCategory);
             DashboardNotFoundException NotFound()
             {
-                Log(logger, http, action, $"recurring {id}", "расписание не найдено");
+                Log(logger, http, action, $"recurring {id}", "schedule not found");
                 return new($"recurring job {id} not found");
             }
             var recurring = await manager.GetAsync(id, ct) ?? throw NotFound();
@@ -126,19 +126,19 @@ internal static class ActionEndpoints
             switch (action)
             {
                 case "pause":
-                    message = await manager.PauseAsync(id, ct) ? "пауза" : throw NotFound();
+                    message = await manager.PauseAsync(id, ct) ? "paused" : throw NotFound();
                     break;
                 case "resume":
-                    message = await manager.ResumeAsync(id, ct) ? "возобновлено" : throw NotFound();
+                    message = await manager.ResumeAsync(id, ct) ? "resumed" : throw NotFound();
                     break;
                 case "trigger":
                     message = await TriggerRecurringAsync(manager, id, ct) ?? throw NotFound();
                     break;
                 default:
                     if (recurring.Owner is { } owner)
-                        message = $"расписание объявлено в коде (owner {owner}), удаление недоступно";
+                        message = $"schedule defined in code (owner {owner}), cannot delete";
                     else if (await manager.RemoveAsync(id, ct))
-                        (removed, message) = (true, "расписание удалено");
+                        (removed, message) = (true, "schedule deleted");
                     else
                         throw NotFound();
                     break;
@@ -184,13 +184,13 @@ internal static class ActionEndpoints
             var by = $"dashboard: {User(http)}";
             var (write, message) = (setting, op) switch
             {
-                ("limit", "set") => (settings.SetConcurrencyOverrideAsync(queue, value, by, ct), $"лимит {value}"),
-                ("limit", "unlimited") => (settings.SetConcurrencyOverrideAsync(queue, null, by, ct), "без лимита"),
-                ("limit", "pause") => (settings.SetConcurrencyOverrideAsync(queue, 0, by, ct), "пауза"),
-                ("limit", "reset") => (settings.ResetConcurrencyOverrideAsync(queue, ct), "лимит из кода"),
-                ("weight", "set") => (settings.SetWeightOverrideAsync(queue, value, by, ct), $"вес {value}"),
-                ("weight", "none") => (settings.SetWeightOverrideAsync(queue, null, by, ct), "без веса"),
-                ("weight", "reset") => (settings.ResetWeightOverrideAsync(queue, ct), "вес из кода"),
+                ("limit", "set") => (settings.SetConcurrencyOverrideAsync(queue, value, by, ct), $"limit {value}"),
+                ("limit", "unlimited") => (settings.SetConcurrencyOverrideAsync(queue, null, by, ct), "unlimited"),
+                ("limit", "pause") => (settings.SetConcurrencyOverrideAsync(queue, 0, by, ct), "paused"),
+                ("limit", "reset") => (settings.ResetConcurrencyOverrideAsync(queue, ct), "configured limit"),
+                ("weight", "set") => (settings.SetWeightOverrideAsync(queue, value, by, ct), $"weight {value}"),
+                ("weight", "none") => (settings.SetWeightOverrideAsync(queue, null, by, ct), "unweighted"),
+                ("weight", "reset") => (settings.ResetWeightOverrideAsync(queue, ct), "configured weight"),
                 _ => throw new DashboardNotFoundException($"unknown op: {op}"),
             };
             await write;
@@ -211,50 +211,50 @@ internal static class ActionEndpoints
         {
             settings.InvalidateCache();
             http.RequestServices.GetService<IQueueSettingsRefresher>()?.RefreshNow();
-            const string Message = "кэш настроек сброшен";
+            const string Message = "settings cache reset";
             Log(loggers.CreateLogger(LogCategory), http, "reset", "queue settings cache", Message);
             Notify(http, Message);
             return Results.Content("", "text/html; charset=utf-8");
         });
     }
 
-    /// <summary>Целое из поля value формы в 1…max; иначе 400.</summary>
+    /// <summary>Reads an integer in the range 1 through max from the value form field. Invalid input returns 400.</summary>
     private static int Value(IFormCollection form, int max) =>
         int.TryParse(form["value"], NumberStyles.None, CultureInfo.InvariantCulture, out var value) && value >= 1 && value <= max
             ? value
             : throw new DashboardBadRequestException($"value must be an integer between 1 and {max}");
 
-    /// <summary>Одно действие над задачей с записью в лог; Found = false — задачи нет.</summary>
+    /// <summary>Runs and logs one job action. Found is false if the job does not exist.</summary>
     private static async Task<JobOutcome> RunJobAsync(IJobClient client, string action, Guid id, HttpContext http, ILogger logger)
     {
         var ct = http.RequestAborted;
         var job = new JobId(id);
-        var notFound = new JobOutcome(false, false, "задача не найдена");
+        var notFound = new JobOutcome(false, false, "job not found");
         JobOutcome outcome = action switch
         {
             "cancel" => await client.CancelAsync(job, $"dashboard: {User(http)}", ct) switch
             {
                 CancelResult.NotFound => notFound,
-                CancelResult.AlreadyFinished => new(true, false, "задача уже завершена"),
-                CancelResult.Cancelled => new(true, true, "отменена"),
-                _ => new(true, true, "отмена запрошена"),
+                CancelResult.AlreadyFinished => new(true, false, "job already finished"),
+                CancelResult.Cancelled => new(true, true, "cancelled"),
+                _ => new(true, true, "cancellation requested"),
             },
-            "trigger" => await client.TriggerAsync(job, ct) ? new(true, true, "запущена")
-                : await client.GetAsync(job, ct) is { } info ? new(true, false, "неприменимо: задача не Scheduled", info)
+            "trigger" => await client.TriggerAsync(job, ct) ? new(true, true, "triggered")
+                : await client.GetAsync(job, ct) is { } info ? new(true, false, "not applicable: job is not Scheduled", info)
                 : notFound,
             _ => await client.RequeueAsync(job, ct) switch
             {
                 RequeueResult.NotFound => notFound,
-                RequeueResult.NotTerminal => new(true, false, "неприменимо: задача не завершена"),
-                RequeueResult.Conflict => new(true, false, "конфликт unique_key: есть активная задача с тем же ключом"),
-                _ => new(true, true, "поставлена заново"),
+                RequeueResult.NotTerminal => new(true, false, "not applicable: job has not finished"),
+                RequeueResult.Conflict => new(true, false, "unique_key conflict: an active job already uses this key"),
+                _ => new(true, true, "requeued"),
             },
         };
         Log(logger, http, action, $"job {id}", outcome.Message);
         return outcome;
     }
 
-    /// <summary>Сообщение о ручном запуске; null — расписания нет; тип, исчезнувший из job_types, — сообщение (отклонение 15).</summary>
+    /// <summary>Returns the manual trigger message, or null if the schedule is missing. Reports a type removed from job_types as a message (deviation 15).</summary>
     private static async Task<string?> TriggerRecurringAsync(IRecurringJobManager manager, string id, CancellationToken ct)
     {
         try
@@ -262,14 +262,14 @@ internal static class ActionEndpoints
             return await manager.TriggerAsync(id, ct) switch
             {
                 null => null,
-                { Created: true, Id: var job } => $"поставлена задача {job?.Value}",
-                { Id: { } job } => $"не поставлена: есть активная задача {job.Value}",
-                _ => "не поставлена",
+                { Created: true, Id: var job } => $"enqueued job {job?.Value}",
+                { Id: { } job } => $"not enqueued: active job {job.Value}",
+                _ => "not enqueued",
             };
         }
         catch (UnknownJobException e)
         {
-            return $"тип задачи {e.JobName} не опубликован";
+            return $"job type {e.JobName} is not published";
         }
     }
 
@@ -279,7 +279,7 @@ internal static class ActionEndpoints
             throw new DashboardNotFoundException($"unknown action: {action}");
     }
 
-    /// <summary>view: row (по умолчанию) или card.</summary>
+    /// <summary>Accepts row (default) or card as the view.</summary>
     private static bool IsCard(string? view) => view switch
     {
         null or "row" => false,
@@ -287,7 +287,7 @@ internal static class ActionEndpoints
         _ => throw new DashboardBadRequestException($"invalid view: {view}"),
     };
 
-    /// <summary>Строка списка из карточки; событие и сообщение — последнего события (GetAsync отдаёт новые первыми).</summary>
+    /// <summary>Builds a list row from the card using its latest event and message. GetAsync returns newest events first.</summary>
     private static JobListRow RowOf(JobInfo job)
     {
         var last = job.Events.FirstOrDefault();

@@ -1,9 +1,9 @@
 using BenchmarkDotNet.Running;
 using PgBolt.Benchmarks.Verification;
 
-// --verify [область] — только стресс-проверки инвариантов (event|sink|slots|table|deadlines; код возврата 1 при провале).
-// --latency  — перцентили задержки ping-pong AsyncAutoResetEvent → results/pingpong-latency.md (или путь после флага).
-// иначе      — проверки, затем BenchmarkDotNet с остальными аргументами (--filter '*' и т. п.); --skip-verify пропускает проверки.
+// --verify [group] runs only invariant checks (event|sink|slots|table|deadlines). Failure returns exit code 1.
+// --latency [path] writes AsyncAutoResetEvent ping-pong round-trip percentiles to the specified or default path.
+// Otherwise, run the checks followed by BenchmarkDotNet with the remaining arguments. --skip-verify skips the checks.
 if (Array.IndexOf(args, "--verify") is var verify and >= 0)
     return Verifier.Run(verify + 1 < args.Length ? args[verify + 1] : null) ? 0 : 1;
 

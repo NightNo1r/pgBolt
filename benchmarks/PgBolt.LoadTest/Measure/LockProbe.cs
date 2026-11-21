@@ -6,25 +6,23 @@ using PgBolt.Postgres.Storage;
 
 namespace PgBolt.LoadTest.Measure;
 
-/// <summary>Блокировки отношений одного statement'а: вне fast-path (в общей таблице блокировок) и всего.</summary>
+/// <summary>Relation locks for one statement, both outside the fast path (shared lock table) and in total.</summary>
 internal sealed record LockCount(long NonFastPath, long Total);
 
-/// <summary>План, который PostgreSQL выбрал для подготовленного statement'а.</summary>
+/// <summary>Plan PostgreSQL chose for a prepared statement.</summary>
 internal enum PlanKind { Custom, Generic }
 
 /// <summary>
-/// Блокировки statement'ов горячего пути без нагрузки, на отдельном прямом соединении. Планировщик блокирует
-/// отношения, оставшиеся после отсечения партиций, и их индексы до конца транзакции, поэтому <c>EXPLAIN</c> в
-/// транзакции показывает блокировки планирования ack/enqueue. Dequeue исполняется с реальной пачкой до отката.
+/// Probes hot-path statement locks without load on a separate direct connection. The planner holds locks on relations surviving partition
+/// pruning and their indexes until transaction end. <c>EXPLAIN</c> in a transaction therefore exposes ack and enqueue planning locks. Dequeue
+/// runs with a real batch before rollback.
 /// </summary>
 internal sealed class LockProbe(string directConnectionString)
 {
-    /// <summary>
-    /// Fast-path слотов блокировок у backend'а PostgreSQL 17: слабые блокировки отношений сверх них идут в общую таблицу.
-    /// </summary>
+    /// <summary>Fast-path lock slots per PostgreSQL 17 backend. Additional weak relation locks go into the shared lock table.</summary>
     public const int FastPathSlots = 16;
 
-    /// <summary>Назначение служебного соединения пробы в <see cref="StandConnection.For"/>.</summary>
+    /// <summary>Purpose passed to <see cref="StandConnection.For"/> for the probe connection.</summary>
     public const string ConnectionPurpose = "locks";
 
     private const string PreparedName = "pgbolt_lock_probe";
@@ -34,8 +32,8 @@ internal sealed class LockProbe(string directConnectionString)
     private static readonly Regex NamedParameter = new(@"(?<![@\w])@(\w+)", RegexOptions.CultureInvariant);
 
     /// <summary>
-    /// Dequeue, ack и enqueue схемы <paramref name="store"/> с параметрами горячего пути: очередь <c>default</c>,
-    /// 32 задачи с id текущих суток. Параметры связывает продуктовый код.
+    /// Dequeue, ack, and enqueue in the <paramref name="store"/> schema with hot-path parameters: the <c>default</c> queue and 32 job IDs from the
+    /// current UTC day. Production code binds the parameters.
     /// </summary>
     public static IReadOnlyList<(string Statement, string Sql, Action<NpgsqlParameterCollection> Bind)> HotPath(
         PgBoltStore store, QueueProfile queues = QueueProfile.Standard)
@@ -56,9 +54,8 @@ internal sealed class LockProbe(string directConnectionString)
     }
 
     /// <summary>
-    /// Блокировки custom plan: <c>EXPLAIN</c> безымянного statement'а с параметрами и счёт <c>pg_locks</c> своего
-    /// backend'а в той же транзакции. Блокировка самого <c>pg_locks</c> при занятых fast-path слотах попала бы в счёт
-    /// «вне fast-path», поэтому исключена.
+    /// Measures custom-plan locks with <c>EXPLAIN</c> on an unnamed parameterized statement, then counts the backend's <c>pg_locks</c> in the same
+    /// transaction. Excludes the lock on <c>pg_locks</c> itself, which would count as a non-fast-path lock if all fast-path slots were occupied.
     /// </summary>
     public async Task<LockCount> MeasureAsync(string sql, Action<NpgsqlParameterCollection> bind, CancellationToken ct)
     {
@@ -115,7 +112,7 @@ internal sealed class LockProbe(string directConnectionString)
                 }
                 if (rows != BatchSize)
                 {
-                    throw new InvalidOperationException($"Проба выдала {rows} задач из {BatchSize}.");
+                    throw new InvalidOperationException($"Probe returned {rows} of {BatchSize} jobs.");
                 }
                 if (!plan.HasValue || pass > 0)
                 {
@@ -150,10 +147,9 @@ internal sealed class LockProbe(string directConnectionString)
     }
 
     /// <summary>
-    /// План подготовленного statement'а: <c>PREPARE</c> с позиционными параметрами и шесть <c>EXPLAIN EXECUTE</c> —
-    /// после пяти custom plan PostgreSQL при <c>plan_cache_mode = auto</c> выбирает план по стоимости; затем
-    /// <c>pg_prepared_statements</c> и <c>DEALLOCATE</c>. Аргументы <c>EXECUTE</c> — литералы: параметры протокола
-    /// в них PostgreSQL не принимает. Литералы строит сам сервер из значений, связанных продуктовым кодом.
+    /// Uses <c>PREPARE</c> with positional parameters and six <c>EXPLAIN EXECUTE</c> calls. After five custom plans PostgreSQL chooses by cost when
+    /// <c>plan_cache_mode = auto</c>. Reads <c>pg_prepared_statements</c> and runs <c>DEALLOCATE</c>. PostgreSQL requires literals in <c>EXECUTE</c>
+    /// arguments, so the server constructs them from the values bound by production code.
     /// </summary>
     public async Task<PlanKind> DetectPlanAsync(string sql, Action<NpgsqlParameterCollection> bind, CancellationToken ct)
     {
@@ -188,14 +184,13 @@ internal sealed class LockProbe(string directConnectionString)
         }
     }
 
-    /// <summary>Для ack и enqueue generic plan открывает все дочерние таблицы и PK переживших отсечение.</summary>
+    /// <summary>For ack and enqueue, a generic plan opens all child tables and the primary keys of those surviving pruning.</summary>
     public static long GenericLowerBound(int partitions, int otherRelations, int survivingPartitions) =>
         partitions + otherRelations + survivingPartitions;
 
     /// <summary>
-    /// Ёмкость общей таблицы блокировок по параметрам сервера:
-    /// <c>max_locks_per_transaction × (MaxBackends + max_prepared_transactions)</c>, где MaxBackends —
-    /// <c>max_connections + autovacuum_max_workers + 1 + max_worker_processes + max_wal_senders</c>.
+    /// Shared lock table capacity from server settings: <c>max_locks_per_transaction × (MaxBackends + max_prepared_transactions)</c>, where
+    /// MaxBackends is <c>max_connections + autovacuum_max_workers + 1 + max_worker_processes + max_wal_senders</c>.
     /// </summary>
     public async Task<long> LockTableCapacityAsync(CancellationToken ct)
     {

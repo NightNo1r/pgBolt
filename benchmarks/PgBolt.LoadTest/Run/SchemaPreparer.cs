@@ -8,8 +8,8 @@ using PgBolt.Postgres.Hosting;
 namespace PgBolt.LoadTest.Run;
 
 /// <summary>
-/// Подготовка схемы прогона до старта хостов: миграция стартом короткоживущего хоста PgBolt, индексы набора
-/// <c>extra</c> на родителе <c>jobs</c> и партиции. Партиции создаёт продуктовый код.
+/// Prepares a run schema before hosts start. A short-lived PgBolt host applies migrations, the <c>extra</c> index set goes on the <c>jobs</c>
+/// parent, and production code creates the partitions.
 /// </summary>
 internal static class SchemaPreparer
 {
@@ -17,7 +17,7 @@ internal static class SchemaPreparer
     // с ёмкостью общей таблицы блокировок, поэтому горизонт растёт шагами.
     private const int DaysStep = 50;
 
-    /// <param name="partitions">Число партиций <c>jobs</c>: от сегодня до сегодня + partitions − 1.</param>
+    /// <param name="partitions">Number of daily <c>jobs</c> partitions, from today through today + partitions − 1.</param>
     public static async Task PrepareAsync(string connectionString, string schema, int partitions, IndexSet indexes,
         CancellationToken ct)
     {
@@ -49,7 +49,7 @@ internal static class SchemaPreparer
             {
                 days = Math.Min(days + DaysStep, partitions - 1);
                 if ((await maintenance.EnsurePartitionsAsync(days, ct)).TimedOut)
-                    throw new InvalidOperationException($"Партиции {schema}.jobs на {days} суток вперёд не созданы: lock_timeout.");
+                    throw new InvalidOperationException($"Failed to create {schema}.jobs partitions for the next {days} days: lock_timeout.");
             }
         }
         finally

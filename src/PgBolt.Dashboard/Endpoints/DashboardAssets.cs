@@ -5,7 +5,7 @@ namespace PgBolt.Dashboard.Endpoints;
 
 internal sealed record DashboardAsset(string Hash, string ContentType, byte[] Content);
 
-/// <summary>Embedded-ресурсы Assets/, адресуемые хешем содержимого.</summary>
+/// <summary>Embedded resources from Assets/, addressed by content hash.</summary>
 // htmx.min.js — htmx 2.0.4, sha256 e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447
 internal sealed class DashboardAssets
 {

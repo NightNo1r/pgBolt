@@ -2,10 +2,13 @@ using PgBolt.Postgres.Storage;
 
 namespace PgBolt.Server.Runtime;
 
-/// <summary>Значения очередей из кода по всем серверам процесса: что публиковать в хранилище при старте.</summary>
+/// <summary>Queue defaults from code across all servers in the process, published to the store at startup.</summary>
 internal static class QueueDefaults
 {
-    /// <summary>Одна запись на очередь, ordinal. Разные значения одной очереди на разных серверах — ошибка старта.</summary>
+    /// <summary>
+    /// One entry per queue using ordinal comparison. Different values for the same queue across servers cause startup to
+    /// fail.
+    /// </summary>
     public static IReadOnlyList<QueueDefault> Collect(IReadOnlyList<ServerDefinition> servers)
     {
         var byQueue = new SortedDictionary<string, (string Server, QueueOptions Options)>(StringComparer.Ordinal);

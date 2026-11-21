@@ -4,9 +4,9 @@ using static PgBolt.Postgres.Diagnostics.PgBoltTelemetry;
 namespace PgBolt.Postgres.Diagnostics;
 
 /// <summary>
-/// Producer-span одного вызова клиентского API. Слушатели <see cref="ActivitySource"/> вызываются синхронно и могут бросать,
-/// поэтому каждое обращение к <see cref="Activity"/> под защитой: сбой уходит в <see cref="PgBoltInstrumentation.ReportFailure"/>,
-/// исход вызова не меняется, а прежний <see cref="Activity.Current"/> восстанавливается.
+/// Producer span for one client API call. <see cref="ActivitySource"/> listeners run synchronously and can throw. Guards each
+/// <see cref="Activity"/> access, reports failures through <see cref="PgBoltInstrumentation.ReportFailure"/>, and restores the previous
+/// <see cref="Activity.Current"/> without changing the outcome of the call.
 /// </summary>
 internal readonly struct ProducerSpan : IDisposable
 {
@@ -23,8 +23,8 @@ internal readonly struct ProducerSpan : IDisposable
     }
 
     /// <summary>
-    /// Значение для колонки <c>trace_parent</c>: id этого span'а при W3C, иначе id текущей <see cref="Activity"/>
-    /// (после восстановления) при W3C, иначе <c>null</c>.
+    /// Value for <c>trace_parent</c>. Uses this span's W3C ID if available, then the restored current <see cref="Activity"/>'s W3C ID, otherwise
+    /// <c>null</c>.
     /// </summary>
     public string? TraceParent { get; }
 
@@ -68,7 +68,7 @@ internal readonly struct ProducerSpan : IDisposable
         return new ProducerSpan(instrumentation, activity, saved, traceParent);
     }
 
-    /// <summary>Очередь становится известна после старта; <c>null</c> тег не ставит.</summary>
+    /// <summary>The queue is known after the span starts. A <c>null</c> queue leaves the tag unset.</summary>
     public void SetQueue(string? queue)
     {
         if (queue is null || _activity is null)

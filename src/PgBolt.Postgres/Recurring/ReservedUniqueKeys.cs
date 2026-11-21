@@ -1,6 +1,6 @@
 namespace PgBolt.Postgres.Recurring;
 
-/// <summary>Часть 4 §4.4: префикс pgbolt: зарезервирован для внутренних ключей (наложение recurring).</summary>
+/// <summary>Reserves the pgbolt: prefix for internal keys, including recurring overlap protection (Part 4 §4.4).</summary>
 internal static class ReservedUniqueKeys
 {
     public const string Prefix = "pgbolt:";

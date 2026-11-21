@@ -5,8 +5,8 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Scope логов одной попытки задачи: структурные поля видны логам runtime и кода задачи (провайдеры с
-/// <c>IExternalScopeProvider</c>), текстовым провайдерам — <see cref="ToString"/>.
+/// Logging scope for one job attempt. Providers using <c>IExternalScopeProvider</c> expose structured fields to runtime
+/// and job logs. Text providers use <see cref="ToString"/>.
 /// </summary>
 internal sealed class JobLogScope(LeasedJob job, string queue) : IReadOnlyList<KeyValuePair<string, object?>>
 {

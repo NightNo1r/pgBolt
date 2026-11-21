@@ -8,10 +8,10 @@ using PgBolt.Dashboard.Endpoints;
 namespace PgBolt.Dashboard.Security;
 
 /// <summary>
-/// §5.3: conventions группы применяются после MapPgBoltDashboard, поэтому авторизация проверяется по ApplicationStarted обходом
-/// EndpointDataSource — только endpoint'ов своей группы (метка marker). Не больше одного предупреждения за вызов. ActionsPolicy —
-/// опция хоста, а не группы: незарегистрированную (иначе каждый запрос dashboard падает в фильтре доступа) сообщает одна группа —
-/// та, чей endpoint первый в EndpointDataSource. Статического состояния нет (несколько хостов в одном процессе).
+/// Checks authorization at ApplicationStarted because route group conventions apply after MapPgBoltDashboard (§5.3).
+/// Scans only this group's marked endpoints and logs at most one warning per call. The group with the first endpoint
+/// in EndpointDataSource reports an unregistered host-wide ActionsPolicy, which would otherwise fail every dashboard
+/// request. Uses no static state so hosts can share a process.
 /// </summary>
 internal static partial class DashboardStartupCheck
 {

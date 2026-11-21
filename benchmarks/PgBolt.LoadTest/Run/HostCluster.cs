@@ -6,7 +6,7 @@ using PgBolt.LoadTest.Cli;
 
 namespace PgBolt.LoadTest.Run;
 
-/// <summary>Два хоста PgBolt с одним виртуальным сервером на 32 воркера, очереди <c>default</c> и <c>critical</c>.</summary>
+/// <summary>Two PgBolt hosts, each with one virtual server and 32 workers serving <c>default</c> and <c>critical</c>.</summary>
 internal sealed class HostCluster : IAsyncDisposable
 {
     public static readonly IReadOnlyList<string> ApplicationNames = ["pgbolt-load-host-1", "pgbolt-load-host-2"];
@@ -17,7 +17,7 @@ internal sealed class HostCluster : IAsyncDisposable
     {
     }
 
-    /// <param name="connectionString">Строка режима: напрямую или через PgBouncer.</param>
+    /// <param name="connectionString">Connection string for the run mode, direct or through PgBouncer.</param>
     public static async Task<HostCluster> StartAsync(string connectionString, string schema, LoadMode mode,
         RunContext ctx, CancellationToken ct)
     {
@@ -72,8 +72,8 @@ internal sealed class HostCluster : IAsyncDisposable
     }
 
     /// <summary>
-    /// Пул задаётся строкой подключения, а не своим <c>NpgsqlDataSource</c>: тогда PgBolt сам выставляет значения
-    /// для PgBouncer. В режимах <c>*-prepared</c> statement'ы подготавливаются.
+    /// Configures pooling through the connection string so PgBolt sets the PgBouncer-compatible defaults itself instead of receiving a custom
+    /// <c>NpgsqlDataSource</c>. Modes ending in <c>*-prepared</c> prepare statements.
     /// </summary>
     internal static void Configure(Postgres.PgBoltOptions o, string connectionString, int maxPoolSize,
         string applicationName, string schema, LoadMode mode)
@@ -89,8 +89,8 @@ internal sealed class HostCluster : IAsyncDisposable
     }
 
     /// <summary>
-    /// Останавливает хосты; пулы соединений закрываются вместе с их контейнерами DI. Сбой одного хоста не мешает
-    /// остановить остальные: первое исключение бросается после всех.
+    /// Stops the hosts and closes connection pools when their DI containers are disposed. A host failure never prevents stopping the rest. Rethrows
+    /// the first exception after all have stopped.
     /// </summary>
     public async ValueTask DisposeAsync()
     {

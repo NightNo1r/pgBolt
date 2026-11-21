@@ -8,8 +8,8 @@ using Testcontainers.PostgreSql;
 namespace PgBolt.LoadTest.Env;
 
 /// <summary>
-/// БД и PgBouncer прогона: свои контейнеры в общей Docker-сети или внешние строки подключения из
-/// <c>--connection</c>/<c>--bouncer-connection</c>. У внешнего PgBouncer канала к админ-консоли нет.
+/// Run database and PgBouncer in containers on a shared Docker network, or use external <c>--connection</c> and <c>--bouncer-connection</c>
+/// strings. An external PgBouncer provides no admin console channel.
 /// </summary>
 internal sealed class LoadEnvironment : IAsyncDisposable
 {
@@ -108,7 +108,7 @@ internal sealed class LoadEnvironment : IAsyncDisposable
         await ExecuteAsync("CREATE EXTENSION IF NOT EXISTS pg_stat_statements WITH SCHEMA public", ct);
     }
 
-    /// <summary>Создаёт пустую схему с уникальным именем для одного прогона.</summary>
+    /// <summary>Creates an empty schema with a unique name for one run.</summary>
     public async Task<string> CreateSchemaNameAsync()
     {
         var schema = $"load_{Guid.NewGuid():N}"[..17];

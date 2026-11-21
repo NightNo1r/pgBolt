@@ -74,7 +74,7 @@ public sealed class EnqueueTests(PostgresFixture pg)
         foreach (var option in new[] { "priority", "delay", "runAt", "uniqueKey", "maxAttempts" })
             Assert.Contains($"name=\"{option}\"", html, StringComparison.Ordinal);
         Assert.Contains($"href=\"types/enqueue?name={Order}&amp;mode=json\"", html, StringComparison.Ordinal);
-        Assert.Contains(">Форма<", html, StringComparison.Ordinal);
+        Assert.Contains(">Form<", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public sealed class EnqueueTests(PostgresFixture pg)
 
         Assert.Single(Regex.Matches(Label(html, "args.Name"), "pgbolt-field-error"));
         Assert.Single(Regex.Matches(Label(html, "args.Count"), "pgbolt-field-error"));
-        Assert.Contains("значение не из списка", Label(html, "args.Tint"), StringComparison.Ordinal);
+        Assert.Contains("value is not in the list", Label(html, "args.Tint"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -155,8 +155,8 @@ public sealed class EnqueueTests(PostgresFixture pg)
         var malformed = await BadRequestAsync(host.PostAsync(EnqueuePath, [new("json", "{")]));
 
         Assert.Contains("<textarea name=\"json\"", wrong, StringComparison.Ordinal);
-        Assert.Contains("Count: ожидается целое число", wrong, StringComparison.Ordinal);
-        Assert.Contains("некорректный JSON", malformed, StringComparison.Ordinal);
+        Assert.Contains("Count: expected an integer", wrong, StringComparison.Ordinal);
+        Assert.Contains("invalid JSON", malformed, StringComparison.Ordinal);
         Assert.Equal(0, await JobCountAsync(db));
     }
 
@@ -189,7 +189,7 @@ public sealed class EnqueueTests(PostgresFixture pg)
 
         var html = await OkAsync(host.PostAsync(EnqueuePath, TestSchemas.OrderForm().With("uniqueKey", "k")));
 
-        Assert.Contains("уже есть активная задача", html, StringComparison.Ordinal);
+        Assert.Contains("an active job already exists", html, StringComparison.Ordinal);
         Assert.Equal(first, JobLink(html));
         Assert.Equal(1, await JobCountAsync(db));
     }
@@ -204,7 +204,7 @@ public sealed class EnqueueTests(PostgresFixture pg)
 
         var html = await OkAsync(host.PostAsync(EnqueuePath, TestSchemas.OrderForm().With("uniqueKey", "k")));
 
-        Assert.Contains("задача с этим ключом только что завершилась", html, StringComparison.Ordinal);
+        Assert.Contains("a job with this key just finished", html, StringComparison.Ordinal);
         Assert.DoesNotContain("href=\"jobs/", html, StringComparison.Ordinal);
     }
 
@@ -219,7 +219,7 @@ public sealed class EnqueueTests(PostgresFixture pg)
 
         var html = await OkAsync(host.PostAsync(EnqueuePath, TestSchemas.OrderForm()));
 
-        Assert.Contains($"тип задачи {Order} не опубликован", html, StringComparison.Ordinal);
+        Assert.Contains($"job type {Order} is not published", html, StringComparison.Ordinal);
         Assert.Equal(0, await JobCountAsync(db));
     }
 
@@ -233,7 +233,7 @@ public sealed class EnqueueTests(PostgresFixture pg)
 
         var html = await OkAsync(host.PostAsync(EnqueuePath, TestSchemas.OrderForm()));
 
-        Assert.Contains($"тип задачи {Order} не опубликован", html, StringComparison.Ordinal);
+        Assert.Contains($"job type {Order} is not published", html, StringComparison.Ordinal);
         Assert.DoesNotContain("href=\"jobs/", html, StringComparison.Ordinal);
     }
 

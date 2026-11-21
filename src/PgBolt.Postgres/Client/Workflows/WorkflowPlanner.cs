@@ -3,9 +3,10 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.Postgres.Client.Workflows;
 
 /// <summary>
-/// Граф → план записи (§6.1): batches с состоянием и total; задачи с кодом continuation (5 — член ждущего batch без родителя,
-/// parent_id = его batch), notify (член batch или есть дети), группы enqueue по (type, queue, priority, max_attempts,
-/// retry_delays, delay) по 10 000 строк; внешние родители — различные, в порядке id (Guid.CompareTo совпадает с порядком uuid).
+/// Builds a write plan from the graph (§6.1). Batches carry state and total. Jobs carry a continuation code (5 for a member of a waiting batch
+/// with no parent of its own, with parent_id set to its batch) and notify for batch members or jobs with children. Enqueue groups contain up to
+/// 10,000 rows per (type, queue, priority, max_attempts, retry_delays, delay). External parents are distinct and ordered by ID, since
+/// Guid.CompareTo matches PostgreSQL uuid order.
 /// </summary>
 internal static class WorkflowPlanner
 {

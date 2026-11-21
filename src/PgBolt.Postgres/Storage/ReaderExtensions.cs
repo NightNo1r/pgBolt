@@ -20,8 +20,8 @@ internal static class ReaderExtensions
         reader.IsDBNull(ordinal) ? null : reader.GetFieldValue<T>(ordinal);
 
     /// <summary>
-    /// interval → TimeSpan так же, как чтение TimeSpan в Npgsql (день — 24 ч), но без исключения: null, если в interval есть
-    /// месяцы (длительность неоднозначна) или значение не помещается в TimeSpan. Для строк, записанных в обход API (часть 4 §5.2).
+    /// Converts interval to TimeSpan like Npgsql, using 24-hour days. Returns null for ambiguous intervals containing months or values outside the
+    /// TimeSpan range. Handles rows written outside the API (Part 4 §5.2).
     /// </summary>
     public static TimeSpan? ToTimeSpanOrNull(this NpgsqlInterval value)
     {

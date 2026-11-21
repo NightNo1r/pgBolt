@@ -1,8 +1,8 @@
 namespace PgBolt.Benchmarks.Infrastructure;
 
 /// <summary>
-/// Часы-заглушка для LeaseKeeper: GetTimestamp = 0, частота = TimeSpan.TicksPerSecond, поэтому MonoClock.Until(d) = d тиков,
-/// и таймер-заглушка, запоминающий последний рубеж (Change не срабатывает).
+/// Stub clock for LeaseKeeper. GetTimestamp returns 0 and frequency is TimeSpan.TicksPerSecond, so MonoClock.Until(d) equals d ticks. The stub
+/// timer remembers the most recent deadline without firing on Change.
 /// </summary>
 internal sealed class StubTimeProvider : TimeProvider
 {
@@ -16,12 +16,12 @@ internal sealed class StubTimeProvider : TimeProvider
         Timer = new StubTimer(dueTime);
 }
 
-/// <summary>Таймер-заглушка: Change — Interlocked.Exchange рубежа (полный барьер, как lock внутри настоящего таймера).</summary>
+/// <summary>Stub timer. Change updates the deadline with Interlocked.Exchange for a full barrier, like the real timer's internal lock.</summary>
 internal sealed class StubTimer(TimeSpan dueTime) : ITimer
 {
     private long _dueTicks = dueTime.Ticks;
 
-    /// <summary>Рубеж в тиках при нулевом «сейчас»; long.MaxValue — таймер выключен.</summary>
+    /// <summary>Deadline in ticks relative to a current time of zero. long.MaxValue means the timer is disabled.</summary>
     public long Target
     {
         get

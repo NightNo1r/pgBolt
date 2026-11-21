@@ -8,10 +8,10 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Promoter, sweeper и обслуживание хранилища процесса. Promoter и sweeper выполняют все поды (SKIP LOCKED); задачи
-/// обслуживания — только под, захвативший их в maintenance_tasks. Тикер recurring, синхронизация code-first и resolver
-/// workflow. Цикл stats работает на любом поде с серверами: задача stats только на захватившем её поде, затем чтение
-/// кластерного снимка для gauges.
+/// Runs the process's promoter, sweeper, store maintenance, recurring ticker, code-first synchronization and workflow
+/// resolver. Every pod runs the promoter and sweeper using SKIP LOCKED. Only the pod that claims a task in
+/// maintenance_tasks runs it. The stats loop runs on every pod with servers: the claiming pod runs the stats task, then
+/// each pod reads the cluster snapshot for its gauges.
 /// </summary>
 internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupSignal wakeup, PgBoltProcessingOptions options,
     IPgBoltMaintenance maintenance, PgBoltOptions core, MonoClock clock, ILogger logger, PgBoltMetrics metrics, ClusterQueueStats cluster,
@@ -41,10 +41,10 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
     private Task _loops = Task.CompletedTask;
     private int _idleWaits;
 
-    /// <summary>Источник U[0, 1) для jitter интервалов (±20 %); тесты подменяют.</summary>
+    /// <summary>Uniform random source on [0, 1) for ±20% interval jitter. Tests can replace it.</summary>
     internal Func<double> NextRandom { get; set; } = Random.Shared.NextDouble;
 
-    /// <summary>Для тестов: сколько раз циклы встали на паузу (таймер паузы уже взведён).</summary>
+    /// <summary>For tests, counts loop pauses that have started with their timers armed.</summary>
     internal int IdleWaits => Volatile.Read(ref _idleWaits);
 
     internal const int SchedulerBatchSize = 100;
@@ -77,7 +77,9 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
         return _loops;
     }
 
-    /// <summary>Хранилище обрабатывает пачки до неполной. Каждая очередь с новыми задачами получает один сигнал.</summary>
+    /// <summary>
+    /// The store processes batches until it returns a partial batch. Each queue with new jobs receives one signal.
+    /// </summary>
     internal async Task<int> PromoteOnceAsync(CancellationToken ct)
     {
         var result = await store.PromoteDueAsync(BatchSize, ct);
@@ -89,7 +91,7 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
         return result.Promoted;
     }
 
-    /// <summary>SweepExpiredLeasesAsync(1000), пока пакет полный.</summary>
+    /// <summary>Calls SweepExpiredLeasesAsync(1000) until a batch is smaller than the limit.</summary>
     internal async Task<int> SweepOnceAsync(CancellationToken ct)
     {
         var total = 0;
@@ -103,13 +105,13 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
     }
 
     /// <summary>
-    /// Итерация (первая и по сигналу; по таймеру — после проверки ResolveOnTimerAsync) — учёт (CountCompletionsAsync), обход (ResolveAsync),
-    /// CancelMembers; следующая — сразу, если захвачен полный пакет, созданы новые сигналы, исчерпан бюджет строк или выполнена
-    /// порция отмены: многошаговый путь не добавляет интервалов.
-    /// Этап без работы пропускается: обход — если учёт не передал сигналов и в его снимке нет готовых к обходу; CancelMembers — если
-    /// в снимке учёта нет готовых kind = 6 и обход не создал сигналов. Сигналы, закоммиченные другими подами после снимка учёта, берут
-    /// их собственные обход / CancelMembers (финализация будит resolver своего процесса) или следующая итерация — по таймеру, не
-    /// позже ResolverInterval.
+    /// On the first iteration or a signal (after ResolveOnTimerAsync checks for work on a timer tick), runs accounting
+    /// (CountCompletionsAsync), traversal (ResolveAsync) and CancelMembers. Repeats immediately on a full claimed batch,
+    /// new signals, an exhausted row budget or a completed cancellation chunk, avoiding interval delays between steps.
+    /// Skips traversal when accounting forwarded no signals and its snapshot contained none ready for traversal. Skips
+    /// CancelMembers when the snapshot had no ready kind = 6 signals and traversal created none. Signals committed by
+    /// other pods after the snapshot are handled by their traversal or CancelMembers (finalization wakes the local
+    /// resolver) or by the next timer iteration within ResolverInterval.
     /// </summary>
     internal async Task<int> ResolveOnceAsync(CancellationToken ct)
     {
@@ -140,9 +142,10 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
     }
 
     /// <summary>
-    /// Итерация, разбуженная таймером (не сигналом ICompletionSignal): сначала один запрос — есть ли сигнал, который взял бы
-    /// захват; нет — без транзакций учёта, обхода и CancelMembers (в простое — один запрос на ResolverInterval). Проверка лага
-    /// выполняется и тогда: отложенные (retry_after) сигналы — её случай. Сигнал и немедленный повтор знают о работе и не проверяют.
+    /// On a timer wakeup without an ICompletionSignal, checks for a claimable signal with one query. If none exists,
+    /// skips the accounting, traversal and CancelMembers transactions, leaving one query per idle ResolverInterval. Still
+    /// checks lag to cover deferred retry_after signals. Signal wakeups and immediate retries already know work is
+    /// available and skip the query.
     /// </summary>
     internal async Task<int> ResolveOnTimerAsync(CancellationToken ct)
     {
@@ -152,7 +155,7 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
         return 0;
     }
 
-    /// <summary>Warning, если старейший сигнал старше 10 × ResolverInterval; проверка — не чаще раза в минуту на под.</summary>
+    /// <summary>Warns when the oldest signal exceeds 10 × ResolverInterval. Checks at most once per minute per pod.</summary>
     private async Task CheckResolverLagAsync(CancellationToken ct)
     {
         if (!_lagCheck.TryEnter())
@@ -161,7 +164,7 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
             Log.ResolverLagging(logger, age, options.ResolverInterval);
     }
 
-    /// <summary>Транзакции тика подряд, пока пакет полный; очереди поставленных задач получают сигнал.</summary>
+    /// <summary>Runs consecutive tick transactions while the batch is full. Signals queues that received jobs.</summary>
     internal async Task<int> TickOnceAsync(CancellationToken ct)
     {
         var total = 0;
@@ -178,7 +181,7 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
         }
     }
 
-    /// <summary>Периодическая синхронизация набора владельца (сходимость после rolling deploy).</summary>
+    /// <summary>Periodically synchronizes the owner's set so it converges after a rolling deployment.</summary>
     internal async Task<int> SyncOnceAsync(CancellationToken ct)
     {
         var declarations = recurring ?? throw new InvalidOperationException("PgBolt: recurring declarations are not registered.");
@@ -187,7 +190,10 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
         return result.Writes;
     }
 
-    /// <summary>Ошибка строки — Error (не чаще раза в минуту: wake_at), пропуск misfire и конец срабатываний — Warning, наложение и ожидание — Debug.</summary>
+    /// <summary>
+    /// Logs row errors at Error (at most once per minute via wake_at), skipped misfires and exhausted schedules at
+    /// Warning, and overlaps and waits at Debug.
+    /// </summary>
     private void LogTick(RecurringTickResult result)
     {
         foreach (var error in result.Errors)
@@ -203,8 +209,8 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
     }
 
     /// <summary>
-    /// Задачи partitions, servers, retention по порядку; выполняются только захваченные. Исключение захвата или Complete
-    /// прерывает итерацию (его логирует цикл). Возвращает число выполненных задач.
+    /// Processes partitions, servers and retention in order, running only claimed tasks. Exceptions during claim or
+    /// Complete end the iteration and are logged by the loop. Returns the number of tasks run.
     /// </summary>
     internal async Task<int> HousekeepingOnceAsync(CancellationToken ct)
     {
@@ -219,11 +225,11 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
     }
 
     /// <summary>
-    /// При RunMaintenance — захват на 0,8 × StatsSnapshotInterval (проход раз в 0,8–1,2 интервала при любом числе
-    /// подов), снимок queue_stats, затем retention stats_minutes порциями. Ошибка — в лог не чаще раза в минуту.
-    /// Затем на любом поде — чтение снимка очередей и статистики таблиц для кластерных gauges: владелец публикует тем же путём,
-    /// что и остальные поды.
-    /// Исключение захвата или Complete чтение не пропускает и уходит в цикл после него; отмена остановкой — без чтения.
+    /// With RunMaintenance enabled, claims the stats task for 0.8 × StatsSnapshotInterval. The pass runs every 0.8–1.2
+    /// intervals regardless of pod count. Captures queue_stats, then applies stats_minutes retention in chunks. Logs
+    /// errors at most once per minute. Every pod then reads the queue snapshot and table statistics for cluster gauges,
+    /// including the owner. Claim or Complete exceptions propagate to the loop after the read. Shutdown cancellation
+    /// skips the read.
     /// </summary>
     internal async Task<int> StatsOnceAsync(CancellationToken ct)
     {
@@ -245,19 +251,19 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
         return ran;
     }
 
-    /// <summary>Ошибка чтения оставляет прежний снимок: он стареет по своему моменту и скрывается, а не застывает.</summary>
+    /// <summary>A failed read preserves the previous snapshot. Its original timestamp lets it expire and disappear.</summary>
     private Task PublishQueueStatsAsync(CancellationToken ct) =>
         ReadStatsAsync("queue", StorageOperations.StatsRead, Log.QueueStatsReadFailed,
             async () => cluster.Publish(await store.ReadQueueStatsAsync(ct)), ct);
 
-    /// <summary>Ошибка чтения оставляет прежние значения: они стареют и скрываются, а не застывают.</summary>
+    /// <summary>A failed read preserves the previous values until they expire and disappear.</summary>
     private Task PublishTableStatsAsync(CancellationToken ct) =>
         ReadStatsAsync("table", StorageOperations.TableStatsRead, Log.TableStatsReadFailed,
             async () => tables.Update(await store.ReadTableStatsAsync(ct)), ct);
 
     /// <summary>
-    /// Чтение для gauges: отмена остановкой — <see cref="OperationCanceledException"/> без метрики и лога, любая другая ошибка —
-    /// метрика и (не чаще раза в минуту) запись в лог.
+    /// Reads gauge data. Shutdown cancellation propagates <see cref="OperationCanceledException"/> without recording a
+    /// metric or log. Other failures record a metric and log at most once per minute.
     /// </summary>
     private async Task ReadStatsAsync(string what, string operation, Action<ILogger, Exception> logFailure, Func<Task> read,
         CancellationToken ct)
@@ -287,8 +293,14 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
         return TaskOutcome.Ok;
     }
 
-    /// <param name="errorRetryDelay">Ускоренный повтор после исключения; null — не раньше следующего интервала (retention).</param>
-    /// <param name="errorLog">Ограничитель записи ошибки в лог; null — каждая.</param>
+    /// <param name="name">Name of the maintenance task to claim.</param>
+    /// <param name="interval">Interval passed to the store when claiming the task.</param>
+    /// <param name="run">Operation to execute after a successful claim.</param>
+    /// <param name="errorRetryDelay">
+    /// Delay for an earlier retry after an exception. Null waits until the next interval (retention).
+    /// </param>
+    /// <param name="ct">Cancels the claim, execution and completion during shutdown.</param>
+    /// <param name="errorLog">Error log rate limiter. Null logs every error.</param>
     private async Task<bool> RunTaskAsync(string name, TimeSpan interval,
         Func<CancellationToken, Task<TaskOutcome>> run, TimeSpan? errorRetryDelay, CancellationToken ct, LogThrottle? errorLog = null)
     {
@@ -341,15 +353,24 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
         return TaskOutcome.Ok;
     }
 
-    /// <summary>LockTimeout/HoldTimeout и прочие Deferred — не ошибка задачи: только логи и счётчик отложенных партиций.</summary>
+    /// <summary>
+    /// LockTimeout, HoldTimeout and other Deferred results are expected maintenance outcomes. They produce logs and
+    /// increment the deferred partition count.
+    /// </summary>
     private async Task<TaskOutcome> ApplyRetentionAsync(CancellationToken ct)
     {
         RetentionReport.Write(logger, await maintenance.ApplyRetentionAsync(ct), core, metrics);
         return TaskOutcome.Ok;
     }
 
-    /// <param name="onTimer">Итерация после паузы, закончившейся таймаутом (не wake); null — once. Первая итерация — once.</param>
-    /// <param name="errorLog">Ограничитель записи ошибки итерации в лог; null — каждая.</param>
+    /// <param name="name">Loop name used for logging and storage error metrics.</param>
+    /// <param name="once">Operation run on startup or a wake signal.</param>
+    /// <param name="interval">Base delay between iterations before jitter.</param>
+    /// <param name="wake">Optional signal that wakes the loop before the next timer tick.</param>
+    /// <param name="onTimer">
+    /// Iteration to run after a timeout rather than a wake signal. Null uses once. The first iteration always uses once.
+    /// </param>
+    /// <param name="errorLog">Iteration error log rate limiter. Null logs every error.</param>
     private async Task LoopAsync(string name, Func<CancellationToken, Task<int>> once, TimeSpan interval,
         AsyncAutoResetEvent? wake = null, Func<CancellationToken, Task<int>>? onTimer = null, LogThrottle? errorLog = null)
     {
@@ -387,7 +408,7 @@ internal sealed partial class ProcessingMaintenance(IServerStore store, IWakeupS
         }
     }
 
-    /// <summary>Результат задачи обслуживания для CompleteMaintenanceAsync: null/null — успех.</summary>
+    /// <summary>Maintenance task result for CompleteMaintenanceAsync. A null/null pair indicates success.</summary>
     private readonly record struct TaskOutcome(string? Error, TimeSpan? RetryDelay)
     {
         public static TaskOutcome Ok => default;

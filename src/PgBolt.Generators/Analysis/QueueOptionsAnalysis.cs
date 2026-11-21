@@ -11,18 +11,18 @@ using Microsoft.CodeAnalysis.Operations;
 namespace PgBolt.Generators.Analysis
 {
     /// <summary>
-    /// BOLT010 — разные константные ClusterMaxConcurrency / Weight одной очереди в вызовах PgBoltServerOptions.Queue одной
-    /// компиляции; BOLT011 — недопустимое константное значение опции очереди или PgBoltOptions.QueueSettingsCacheDuration.
-    /// Ранняя проверка только констант: неконстантные значения, неконстантные имена и вызовы в разных сборках проверяет
-    /// валидация при старте. Не зависит от PgBolt.Abstractions: без PgBolt.Server правила очередей молчат, а BOLT011 по
-    /// PgBoltOptions работает.
+    /// BOLT010 detects conflicting constant ClusterMaxConcurrency or Weight values for the same queue in
+    /// PgBoltServerOptions.Queue calls within one compilation. BOLT011 detects invalid constant queue options or
+    /// PgBoltOptions.QueueSettingsCacheDuration. Startup validation also covers nonconstant values and names and
+    /// cross-assembly calls. The analyzer has no dependency on PgBolt.Abstractions. Without PgBolt.Server it skips queue
+    /// rules but still checks PgBoltOptions.
     /// </summary>
     internal sealed class QueueOptionsAnalysis
     {
-        /// <summary>Опции очереди на весь кластер: одно имя очереди — одно значение по умолчанию во всех вызовах Queue.</summary>
+        /// <summary>Cluster-wide queue options. A queue must have the same default value in all Queue calls.</summary>
         private static readonly string[] ClusterOptions = ["ClusterMaxConcurrency", "Weight"];
 
-        /// <summary>Тиков в единице: имя параметра конструктора и фабрик TimeSpan (days, hours, …) → длительность единицы.</summary>
+        /// <summary>Maps TimeSpan constructor and factory parameter names (days, hours, etc.) to ticks per unit.</summary>
         private static readonly Dictionary<string, double> TicksPerUnit = new()
         {
             ["days"] = 864_000_000_000,
@@ -102,7 +102,7 @@ namespace PgBolt.Generators.Analysis
             };
         }
 
-        /// <summary>Последняя константа, присвоенная Reserved в той же лямбде, что и assignment; иначе null.</summary>
+        /// <summary>Returns the last constant assigned to Reserved in the same lambda as assignment, or null.</summary>
         private double? ReservedInSameLambda(IOperation assignment)
         {
             var lambda = assignment.Parent;
@@ -114,7 +114,7 @@ namespace PgBolt.Generators.Analysis
             return reserved is null ? null : Number(reserved.Value);
         }
 
-        /// <summary>Значения ClusterMaxConcurrency и Weight вызова Queue с константным именем; неизвестные значения не собираются.</summary>
+        /// <summary>Collects known ClusterMaxConcurrency and Weight values from a Queue call with a constant name.</summary>
         private void AnalyzeQueueCall(OperationAnalysisContext ctx)
         {
             var call = (IInvocationOperation)ctx.Operation;
@@ -136,8 +136,9 @@ namespace PgBolt.Generators.Analysis
         }
 
         /// <summary>
-        /// Присваивания configure: пусто — configure не передан, null или default; null — значение неизвестно (не лямбда или
-        /// лямбда не только из присваиваний свойствам своего параметра с правой частью без этого параметра).
+        /// Reads assignments from configure. An omitted, null or default configure yields an empty set. Returns null for an
+        /// unknown value, including lambdas that do more than assign properties on their parameter or read the parameter on
+        /// the right-hand side.
         /// </summary>
         private static List<ISimpleAssignmentOperation>? SimpleAssignments(IOperation configure)
         {
@@ -182,7 +183,7 @@ namespace PgBolt.Generators.Analysis
             }
         }
 
-        /// <summary>Длительность константного TimeSpan в тиках; null — значение не распознано (в том числе литерал null).</summary>
+        /// <summary>Duration of a constant TimeSpan in ticks. Returns null for unrecognized values, including the null literal.</summary>
         private double? Ticks(IOperation value)
             => Unwrap(value) switch
             {
@@ -195,8 +196,8 @@ namespace PgBolt.Generators.Analysis
             };
 
         /// <summary>
-        /// Сумма аргументов в тиках по именам параметров (days, hours, …); у фабрик с параметром value (FromSeconds(double value))
-        /// единица — из имени метода.
+        /// Sums arguments in ticks by parameter name (days, hours, etc.). For a factory such as FromSeconds(double value), the
+        /// method name determines the unit.
         /// </summary>
         private static double? SumTicks(ImmutableArray<IArgumentOperation> arguments, string? unitOfValue)
         {
@@ -213,7 +214,7 @@ namespace PgBolt.Generators.Analysis
 
         private bool IsTimeSpan(ITypeSymbol? type) => SymbolEqualityComparer.Default.Equals(type, _timeSpan);
 
-        /// <summary>Числовая константа или литерал null (number = null) после неявных преобразований (int → int?); иначе false.</summary>
+        /// <summary>Reads a numeric constant or null literal (number = null) after implicit conversions such as int to nullable int. Returns false otherwise.</summary>
         private static bool TryGetNumber(IOperation value, out double? number)
         {
             var constant = Unwrap(value).ConstantValue;
@@ -227,7 +228,7 @@ namespace PgBolt.Generators.Analysis
             return constant.HasValue && (number is not null || constant.Value is null);
         }
 
-        /// <summary>Числовая константа; null — значение не числовая константа (в том числе литерал null).</summary>
+        /// <summary>Reads a numeric constant. Returns null for other values, including the null literal.</summary>
         private static double? Number(IOperation value) => TryGetNumber(value, out var number) ? number : null;
 
         private static IOperation Unwrap(IOperation op)

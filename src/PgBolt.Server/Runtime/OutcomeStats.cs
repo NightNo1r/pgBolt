@@ -3,10 +3,10 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.Server.Runtime;
 
 /// <summary>
-/// Счётчики исходов, подтверждённых БД (часть 6 §4.1): один экземпляр на процесс, общий для виртуальных серверов.
-/// Ключ — (начало минуты UTC по <see cref="TimeProvider"/> в момент подтверждения, server_id, очередь).
-/// <see cref="OutcomeStatsFlusher"/> забирает словарь (<see cref="Take"/>) и пишет его одним statement'ом; при ошибке
-/// значения возвращаются (<see cref="Restore"/>) слиянием с накопленными за это время.
+/// Counts database-confirmed outcomes (part 6 §4.1). All virtual servers share one instance per process. Keys contain the
+/// UTC minute from <see cref="TimeProvider"/> at confirmation, server_id and queue. <see cref="OutcomeStatsFlusher"/>
+/// takes the dictionary with <see cref="Take"/> and writes it in one statement. On failure, <see cref="Restore"/> merges
+/// its counts back with those accumulated since.
 /// </summary>
 internal sealed class OutcomeStats(TimeProvider time)
 {
@@ -21,7 +21,7 @@ internal sealed class OutcomeStats(TimeProvider time)
             AddLocked((bucket, serverId, queue), succeeded, failed, retried);
     }
 
-    /// <summary>Забирает накопленное; строки упорядочены по (bucket, server, queue) — детерминированный порядок блокировок upsert.</summary>
+    /// <summary>Takes the accumulated rows in (bucket, server, queue) order for deterministic upsert lock acquisition.</summary>
     public IReadOnlyList<OutcomeStatsRow> Take()
     {
         Dictionary<(DateTime Bucket, Guid Server, string Queue), (int S, int F, int R)> taken;

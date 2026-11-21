@@ -6,8 +6,8 @@ using PgBolt.Benchmarks.Copies;
 namespace PgBolt.Benchmarks.Verification;
 
 /// <summary>
-/// Перцентили задержки ping-pong по отдельным кругам (BDN даёт статистику только по средним итераций): для каждого
-/// варианта 3 прогона по 200 000 кругов после 20 000 прогревочных, варианты чередуются. Результат — markdown-таблица.
+/// Computes ping-pong latency percentiles from individual round trips because BenchmarkDotNet reports statistics over iteration means.
+/// Alternates variants across three runs of 200,000 trips each after 20,000 warmup trips. Outputs a Markdown table.
 /// </summary>
 internal static class LatencyProbe
 {
@@ -25,11 +25,11 @@ internal static class LatencyProbe
                 static (e, t) => e.WaitAsync(t, TimeProvider.System, CancellationToken.None), static e => e.Set())));
         }
         var md = new StringBuilder()
-            .AppendLine("# Ping-pong AsyncAutoResetEvent: задержка круга (Set → пробуждение → Set → пробуждение)")
+            .AppendLine("# AsyncAutoResetEvent ping-pong round-trip latency (Set → wake → Set → wake)")
             .AppendLine()
-            .AppendLine(CultureInfo.InvariantCulture, $"{Environment.ProcessorCount} логических ядер, {RuntimeInfo()}; {Runs} прогона × {RoundTrips:N0} кругов после {Warmup:N0} прогревочных; варианты чередуются. Время — мкс.")
+            .AppendLine(CultureInfo.InvariantCulture, $"{Environment.ProcessorCount} logical cores, {RuntimeInfo()}. Each variant ran {Runs} times for {RoundTrips:N0} round trips after {Warmup:N0} warmup round trips. The variants alternate. Times are in µs.")
             .AppendLine()
-            .AppendLine("| Вариант | Прогон | Среднее | p50 | p90 | p99 | p99.9 | Макс |")
+            .AppendLine("| Variant | Run | Mean | p50 | p90 | p99 | p99.9 | Max |")
             .AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|");
         foreach (var row in rows)
             md.AppendLine(row);

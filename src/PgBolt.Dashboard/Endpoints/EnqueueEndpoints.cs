@@ -13,8 +13,9 @@ using PgBolt.Dashboard.Views;
 namespace PgBolt.Dashboard.Endpoints;
 
 /// <summary>
-/// «Поставить» задачу по имени (§8): форма из схемы args или JSON, проверка подмножеством схемы, IJobClient.EnqueueAsync.
-/// Ответы POST — фрагменты без &lt;title&gt; (отклонение 23); тип, исчезнувший из job_types, — 200 с сообщением (отклонение 15).
+/// Enqueues a job by name (§8) using a schema-based form or JSON, schema subset validation and
+/// IJobClient.EnqueueAsync. POST returns a fragment without &lt;title&gt; (deviation 23). If the type has disappeared
+/// from job_types, returns 200 with a message (deviation 15).
 /// </summary>
 internal static class EnqueueEndpoints
 {
@@ -66,9 +67,9 @@ internal static class EnqueueEndpoints
                 var result = await client.EnqueueAsync(type.Name, args, options, ct);
                 (message, jobId) = result switch
                 {
-                    { Created: true, Id: { } id } => ("задача поставлена", id.Value),
-                    { Id: { } id } => ("уже есть активная задача", id.Value),
-                    _ => ("задача с этим ключом только что завершилась", (Guid?)null),
+                    { Created: true, Id: { } id } => ("job enqueued", id.Value),
+                    { Id: { } id } => ("an active job already exists", id.Value),
+                    _ => ("a job with this key just finished", (Guid?)null),
                 };
             }
             catch (UnknownJobException e)
@@ -91,9 +92,9 @@ internal static class EnqueueEndpoints
 
     private static DashboardNotFoundException NotFound(string? name) => new($"job type {name} not found");
 
-    private static string Unknown(string name) => $"тип задачи {name} не опубликован";
+    private static string Unknown(string name) => $"job type {name} is not published";
 
-    /// <summary>args из JSON (json не null) или из полей формы; ошибки — по имени поля формы (json, args.{Path}).</summary>
+    /// <summary>Reads arguments from JSON when json is supplied, otherwise from form fields. Errors use field names (json or args.{Path}).</summary>
     private static (JsonElement Args, List<FieldError> Errors) ReadArgs(IReadOnlyList<FormField>? fields, IFormCollection form, string? json)
     {
         if (json is null)
@@ -111,13 +112,13 @@ internal static class EnqueueEndpoints
         }
         catch (JsonException)
         {
-            return (default, [new("json", "некорректный JSON")]);
+            return (default, [new("json", "invalid JSON")]);
         }
         var errors = fields is null ? [] : ArgsValidator.Validate(fields, parsed);
         return (parsed, errors.Select(e => new FieldError("json", e.Path.Length == 0 ? e.Message : $"{e.Path}: {e.Message}")).ToList());
     }
 
-    /// <summary>Опции постановки; пустое поле — умолчание типа. Ошибки — по имени поля опции.</summary>
+    /// <summary>Reads enqueue options. Empty fields use the job type defaults. Errors use the option field names.</summary>
     private static EnqueueOptions ReadOptions(IFormCollection form, List<FieldError> errors)
     {
         string? Text(string key) => form[key].ToString() is { Length: > 0 } s ? s : null;
@@ -132,19 +133,19 @@ internal static class EnqueueEndpoints
             return null;
         }
 
-        var priority = Number("priority", short.MinValue, "ожидается целое число от -32768 до 32767");
-        var delay = Number("delay", 0, "ожидается целое число секунд ≥ 0");
-        var maxAttempts = Number("maxAttempts", 1, "ожидается целое число ≥ 1");
+        var priority = Number("priority", short.MinValue, "expected an integer from -32768 to 32767");
+        var delay = Number("delay", 0, "expected a whole number of seconds ≥ 0");
+        var maxAttempts = Number("maxAttempts", 1, "expected an integer ≥ 1");
         DateTimeOffset? runAt = null;
         if (Text("runAt") is { } r)
         {
             if (DateTimeOffset.TryParse(r, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at))
                 runAt = at;
             else
-                errors.Add(new("runAt", "ожидается дата-время ISO 8601"));
+                errors.Add(new("runAt", "expected an ISO 8601 timestamp"));
         }
         if (delay is not null && runAt is not null)
-            errors.Add(new("runAt", "задержка и время запуска взаимоисключимы"));
+            errors.Add(new("runAt", "specify either a delay or a run time"));
         return new EnqueueOptions
         {
             Queue = Text("queue"),
@@ -158,7 +159,7 @@ internal static class EnqueueEndpoints
 
     private static Task<IResult> RenderAsync(HttpContext http, string part, JobTypeRow type, IReadOnlyList<FormField>? fields, string? json,
         IFormCollection? values = null, IReadOnlyList<FieldError>? errors = null, string? message = null, Guid? jobId = null, int status = 200) =>
-        DashboardView.PageAsync<EnqueuePage>(http, $"Поставить {type.Name}", new Dictionary<string, object?>
+        DashboardView.PageAsync<EnqueuePage>(http, $"Enqueue {type.Name}", new Dictionary<string, object?>
         {
             [nameof(EnqueuePage.Type)] = type,
             [nameof(EnqueuePage.Fields)] = fields,

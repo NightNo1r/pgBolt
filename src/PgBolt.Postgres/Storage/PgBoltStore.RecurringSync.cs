@@ -6,19 +6,18 @@ using PgBolt.Postgres.Recurring;
 namespace PgBolt.Postgres.Storage;
 
 /// <summary>
-/// Синхронизация code-first набора владельца (часть 4 §6.2): advisory xact lock владельца, чтение, дифф в .NET, запись одним
-/// NpgsqlBatch только при разнице. args сравниваются в SQL как jsonb (форматирование JSON не даёт записей), остальные поля —
-/// в нормализованной форме (§4.2). Вставки — в порядке id (Ordinal) с ON CONFLICT DO NOTHING: разные владельцы с
-/// пересекающимися id ждут друг друга в одном порядке; невставленный id — коллизия. Отклонение от текста §6.2 (один
-/// INSERT … ORDER BY d.id с collation базы): порядок задаёт ordinal-сортировка в .NET, statement'ы идут в batch по одному —
-/// для отсутствия deadlock это эквивалентно, так как все процессы используют один компаратор. 40P01 (двойная коллизия, §6.2) —
-/// повтор транзакции до 3 раз с Warning (§7), не молча через RunAsync/DbRetry.
+/// Synchronizes one owner's code-defined schedules (Part 4 §6.2). Takes the owner's transaction-level advisory lock, reads rows, computes
+/// changes in .NET, and writes one NpgsqlBatch only when needed. SQL compares args as jsonb so JSON formatting alone causes no writes. Other
+/// fields use normalized values (§4.2). Inserts use ordinal ID order with ON CONFLICT DO NOTHING. Owners with overlapping IDs wait in the same
+/// order, and a skipped ID is a collision. Unlike the single INSERT … ORDER BY d.id using database collation in §6.2, the batch sends separate
+/// statements using the same .NET ordinal comparer in every process, preserving deadlock avoidance. A 40P01 from a double collision triggers up
+/// to three transaction retries with a warning (§7) instead of silent RunAsync/DbRetry handling.
 /// </summary>
 public sealed partial class PgBoltStore
 {
     /// <summary>
-    /// §6.2, §7: 40P01 синхронизации — повтор всей транзакции, не больше maxAttempts попыток, Warning на каждый повтор.
-    /// Исчерпание и любые другие ошибки — исключение наружу (на старте — падение, в цикле — Error и следующий интервал).
+    /// Retries the entire synchronization transaction on 40P01 for at most maxAttempts attempts, logging a warning per retry (§6.2, §7). Exhaustion
+    /// and other errors propagate. Startup fails, while the periodic loop logs an error and waits for the next interval.
     /// </summary>
     internal static async Task<T> RetrySyncDeadlockAsync<T>(Func<CancellationToken, Task<T>> op, int maxAttempts, ILogger logger,
         string owner, CancellationToken ct)
@@ -60,9 +59,9 @@ public sealed partial class PgBoltStore
     private string SyncDeleteSql => field ??= Render(SyncDeleteTemplate);
 
     /// <summary>
-    /// Хранимая строка для диффа. catch_up_window и retry_delays читаются без исключений (interval с месяцами, NULL в массиве —
-    /// строка, записанная SQL'ем в обход API): нечитаемое значение (null окна) отличается от объявленного и перезаписывается
-    /// им (§6.2), а чужая или API-строка с таким значением не роняет синхронизацию.
+    /// Stored row used for comparison. Reads catch_up_window and retry_delays defensively because direct SQL can store months or NULL array
+    /// elements. An unrepresentable value, e.g. a null window, differs from the declaration and is overwritten (§6.2). Such values in rows owned by
+    /// the API or another owner do not interrupt synchronization.
     /// </summary>
     private sealed record SyncRow(string? Owner, string Type, bool ArgsEqual, string Cron, string TimeZone, MisfirePolicy Misfire,
         TimeSpan? CatchUpWindow, OverlapPolicy Overlap, string? Queue, short? Priority, int? MaxAttempts, int?[]? RetryDelaysSeconds);

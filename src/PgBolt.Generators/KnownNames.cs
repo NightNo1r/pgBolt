@@ -28,8 +28,8 @@ namespace PgBolt.Generators
                 || method.ContainingType.AllInterfaces.Contains(client, SymbolEqualityComparer.Default));
 
         /// <summary>
-        /// Часть 4: типизированные AddOrUpdateAsync&lt;TArgs&gt; / AddRecurring&lt;TArgs&gt; берут JsonTypeInfo из JobMetadata&lt;TArgs&gt;,
-        /// как EnqueueAsync, — места их вызова тоже регистрируют метаданные (продюсер без исполнителя).
+        /// Typed AddOrUpdateAsync&lt;TArgs&gt; and AddRecurring&lt;TArgs&gt; use JsonTypeInfo from JobMetadata&lt;TArgs&gt;
+        /// like EnqueueAsync. Their call sites therefore register metadata even in a producer without a handler (part 4).
         /// </summary>
         public static bool IsRecurringMethod(IMethodSymbol method, INamedTypeSymbol? manager, INamedTypeSymbol? options) =>
             method.IsGenericMethod
@@ -40,9 +40,9 @@ namespace PgBolt.Generators
                     && SymbolEqualityComparer.Default.Equals(method.ContainingType, options)));
 
         /// <summary>
-        /// Часть 5 §5.4: типизированные шаги workflow (Enqueue&lt;TArgs&gt;, ContinueWith&lt;TArgs&gt;, EnqueueMany&lt;TArgs&gt;) берут
-        /// JsonTypeInfo из JobMetadata&lt;TArgs&gt;, как EnqueueAsync, — места их вызова тоже регистрируют метаданные.
-        /// Методы, унаследованные IWorkflow от IWorkflowScope, распознаются по объявляющему интерфейсу (ContainingType = IWorkflowScope), поэтому отдельная проверка IWorkflow не нужна.
+        /// Typed workflow steps Enqueue&lt;TArgs&gt;, ContinueWith&lt;TArgs&gt; and EnqueueMany&lt;TArgs&gt; obtain
+        /// JsonTypeInfo from JobMetadata&lt;TArgs&gt; like EnqueueAsync. Their call sites register metadata (part 5, §5.4).
+        /// Methods inherited by IWorkflow from IWorkflowScope are identified by ContainingType = IWorkflowScope.
         /// </summary>
         public static bool IsWorkflowMethod(IMethodSymbol method, INamedTypeSymbol? scope, INamedTypeSymbol? node, INamedTypeSymbol? batchBuilder) =>
             method.IsGenericMethod
@@ -58,7 +58,7 @@ namespace PgBolt.Generators
             contract is not null
             && (SymbolEqualityComparer.Default.Equals(type, contract) || type.AllInterfaces.Contains(contract, SymbolEqualityComparer.Default));
 
-        /// <summary>Имя для Compilation.GetTypeByMetadataName: Ns.Outer+Inner`1.</summary>
+        /// <summary>Name used by Compilation.GetTypeByMetadataName, for example Ns.Outer+Inner`1.</summary>
         public static string MetadataName(INamedTypeSymbol type)
         {
             var name = type.MetadataName;

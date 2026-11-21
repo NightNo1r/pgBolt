@@ -5,10 +5,10 @@ using PgBolt.LoadTest.Cli;
 
 namespace PgBolt.LoadTest.Env;
 
-/// <summary>Сведения об окружении прогона для отчёта: хост, Docker, версии, параметры PostgreSQL, коммит.</summary>
+/// <summary>Run environment for the report, including host, Docker, versions, PostgreSQL settings, and commit.</summary>
 internal static class EnvironmentInfo
 {
-    public const string NoData = "нет данных";
+    public const string NoData = "no data";
 
     private static readonly string[] Settings =
     [
@@ -17,15 +17,15 @@ internal static class EnvironmentInfo
         "shared_preload_libraries", "track_io_timing", "fsync", "full_page_writes", "synchronous_commit",
     ];
 
-    /// <param name="console">Админ-консоль своего PgBouncer; <c>null</c> — версии PgBouncer нет.</param>
-    /// <param name="schema">Схема прогона: из неё читаются reloptions <c>queue</c> и <c>completions</c>.</param>
+    /// <param name="console">Admin console for the run's PgBouncer instance. <c>null</c> omits the PgBouncer version.</param>
+    /// <param name="schema">Run schema used to read the <c>queue</c> and <c>completions</c> reloptions.</param>
     public static async Task<IReadOnlyList<(string Key, string Value)>> CollectAsync(string connectionString,
         PgBouncerConsole? console, LoadTestOptions options, string schema, CancellationToken ct)
     {
         var info = new List<(string, string)>
         {
-            ("CPU", $"{await CpuModelAsync(ct)}, {Environment.ProcessorCount} ядер"),
-            ("Docker", await RunAsync("docker", ["info", "--format", "{{.NCPU}} CPU, {{.MemTotal}} байт"], ct) ?? NoData),
+            ("CPU", $"{await CpuModelAsync(ct)}, {Environment.ProcessorCount} cores"),
+            ("Docker", await RunAsync("docker", ["info", "--format", "{{.NCPU}} CPU, {{.MemTotal}} bytes"], ct) ?? NoData),
         };
 
         await using var conn = await StandConnection.OpenAsync(connectionString, "environment", ct);
@@ -62,7 +62,7 @@ internal static class EnvironmentInfo
         }
 
         info.Add((".NET", Environment.Version.ToString()));
-        info.Add(("Коммит", await RunAsync("git", ["rev-parse", "--short", "HEAD"], ct) ?? NoData));
+        info.Add(("Commit", await RunAsync("git", ["rev-parse", "--short", "HEAD"], ct) ?? NoData));
         return info;
     }
 
@@ -80,7 +80,7 @@ internal static class EnvironmentInfo
         return NoData;
     }
 
-    /// <summary>Вывод команды без завершающих пробелов; <c>null</c> — команды нет или она завершилась с ошибкой.</summary>
+    /// <summary>Returns command output without trailing whitespace, or <c>null</c> if unavailable or unsuccessful.</summary>
     private static async Task<string?> RunAsync(string file, string[] args, CancellationToken ct)
     {
         try

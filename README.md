@@ -1,65 +1,60 @@
 # PgBolt
 
-PgBolt — библиотека фоновых задач для .NET 10 с очередью в PostgreSQL. Например, API может сохранить заказ и в той же транзакции поставить задачу на подготовку отчёта. После коммита воркер заберёт задачу, вызовет C#-обработчик и запишет результат в PostgreSQL. Клиент и воркер могут работать в одном приложении или в разных процессах.
+[English](README.md) · [Русский](README.ru.md)
 
-## Содержание
+PgBolt runs .NET 10 background jobs on PostgreSQL. An API can save an order and enqueue a report in the same transaction. After commit, a worker picks up the job, calls its C# handler and records the result in PostgreSQL. The client and worker can share a process or run as separate applications.
 
-- [Подключение и выбор пакетов](#packages)
-- [Быстрый старт с PostgreSQL](#quickstart)
-- [Отдельные приложения для клиента и воркера](#services)
-- [Постановка, дедупликация и транзакции](#enqueue)
-- [Выполнение, повторы и отмена](#execution)
-- [Очереди и параллелизм](#queues)
-- [Расписания cron](#cron)
-- [Цепочки и группы задач](#workflows)
-- [Панель управления и наблюдаемость](#dashboard)
-- [PostgreSQL, PgBouncer и ограничения](#operations)
-- [Сборка, тесты и нагрузочный стенд](#development)
+## Contents
+
+- [Choosing packages](#packages)
+- [Quick start with PostgreSQL](#quickstart)
+- [Separate client and worker applications](#services)
+- [Enqueueing, deduplication and transactions](#enqueue)
+- [Execution, retries and cancellation](#execution)
+- [Queues and concurrency](#queues)
+- [Cron schedules](#cron)
+- [Job continuations and batches](#workflows)
+- [Dashboard and observability](#dashboard)
+- [PostgreSQL, PgBouncer and limitations](#operations)
+- [Build, tests and load testing](#development)
 
 <a id="packages"></a>
 
-## Подключение и выбор пакетов
+## Choosing packages
 
-| Что делает приложение | Что подключить |
+| What your application does | Package to reference |
 | --- | --- |
-| Объявляет типы аргументов или вызывает типизированный API | `PgBolt.Abstractions` напрямую. Пакет включает атрибуты, интерфейсы, генератор кода и анализаторы. |
-| Только ставит задачи из API, CLI или сервиса | `PgBolt.Postgres` для `AddPgBolt` и реализации `IJobClient`. |
-| Выполняет задачи | `PgBolt.Server` для `AddPgBoltServer`. Пакет также подключает `PgBolt.Postgres`. |
-| Показывает задачи в ASP.NET Core | `PgBolt.Dashboard` в веб-приложении. |
-| Экспортирует метрики и трассировки через OpenTelemetry | `PgBolt.OpenTelemetry` вместе с провайдером и экспортёром приложения. |
+| Declares job arguments or calls the typed API | Reference `PgBolt.Abstractions` directly for attributes, interfaces, the source generator and analyzers. |
+| Enqueues jobs from an API, CLI or service | `PgBolt.Postgres` provides `AddPgBolt` and the `IJobClient` implementation. |
+| Executes jobs | `PgBolt.Server` provides `AddPgBoltServer` and brings in `PgBolt.Postgres`. |
+| Displays jobs in ASP.NET Core | Add `PgBolt.Dashboard` to the web application. |
+| Exports metrics and traces through OpenTelemetry | Add `PgBolt.OpenTelemetry` alongside your provider and exporter. |
 
-Для проекта с типизированными задачами и воркером команды установки версии 0.1.0 из NuGet выглядят так:
+For a worker that uses typed jobs, install these packages from NuGet:
 
 ```sh
 dotnet add package PgBolt.Abstractions --version 0.1.0
 dotnet add package PgBolt.Server --version 0.1.0
 ```
 
-Берите пакеты одной версии. Ниже показана установка из локальной папки NuGet. Если в команде уже есть внутренний NuGet-источник с пакетами PgBolt, подключите его обычным способом и используйте опубликованную там версию.
+Use the same version for all PgBolt packages.
 
 <a id="quickstart"></a>
 
-## Быстрый старт с PostgreSQL
+## Quick start with PostgreSQL
 
-Пример создаёт консольное приложение `PgBoltDemo`. При каждом запуске оно ставит одну задачу в очередь `reports`. Воркер печатает строку с номером отчёта. Нужны .NET SDK из [global.json](global.json), Docker и оболочка Bash или Zsh.
+This console app enqueues one job on the `reports` queue every time it starts. A worker prints the report number. You need the .NET 10 SDK, Docker and a Bash or Zsh shell.
 
-**1. Соберите пакеты и создайте приложение.** Выполните команды из корня клона PgBolt в одном терминале. Проект и пакеты появятся во временном каталоге. `0.1.0-local` — версия для этого примера.
+**1. Create the app and install the packages from NuGet.** Run these commands in the directory where you want to create the project.
 
 ```sh
-demo_dir=$(mktemp -d)
-for name in Abstractions Postgres Server; do
-  dotnet pack "src/PgBolt.$name/PgBolt.$name.csproj" -c Release \
-    -p:PackageVersion=0.1.0-local -o "$demo_dir/packages" || break
-done
-
-dotnet new console -n PgBoltDemo -f net10.0 -o "$demo_dir/PgBoltDemo"
-cd "$demo_dir/PgBoltDemo"
-dotnet add package PgBolt.Abstractions --version 0.1.0-local --no-restore
-dotnet add package PgBolt.Server --version 0.1.0-local --no-restore
-dotnet restore --source "$demo_dir/packages" --source https://api.nuget.org/v3/index.json
+dotnet new console -n PgBoltDemo -f net10.0
+cd PgBoltDemo
+dotnet add package PgBolt.Abstractions --version 0.1.0
+dotnet add package PgBolt.Server --version 0.1.0
 ```
 
-**2. Запустите базу для примера.** Контейнер слушает только локальный интерфейс. Уже есть своя тестовая база? Задайте её строку в `PGBOLT_CONNECTION` и переходите к шагу 3. Пользователю нужны права на создание схемы, таблиц и партиций.
+**2. Start PostgreSQL.** The container listens on localhost. To use an existing test database, set `PGBOLT_CONNECTION` to its connection string and go to step 3. The database user needs permission to create the schema, tables and partitions.
 
 ```sh
 docker run --rm -d --name pgbolt-guide-db -p 127.0.0.1:55432:5432 \
@@ -67,7 +62,7 @@ docker run --rm -d --name pgbolt-guide-db -p 127.0.0.1:55432:5432 \
 export PGBOLT_CONNECTION='Host=127.0.0.1;Port=55432;Database=pgbolt_demo;Username=postgres;Password=pgbolt_demo'
 ```
 
-**3. Создайте `ReportJob.cs` рядом с `Program.cs`.** Атрибут `[Job]` задаёт имя задачи, которое хранится в БД, и очередь по умолчанию. `JsonSerializerContext` описывает сериализацию аргументов. Класс обработчика получает зависимости через DI.
+**3. Create `ReportJob.cs` next to `Program.cs`.** The `[Job]` attribute sets the persisted job name and default queue. The JSON context describes how to serialize the arguments. The handler can receive dependencies through constructor injection.
 
 ```csharp
 using System.Text.Json.Serialization;
@@ -84,7 +79,7 @@ public sealed class ReportJob : IJob<ReportArgs>
 {
     public Task ExecuteAsync(ReportArgs args, JobContext context, CancellationToken cancellationToken)
     {
-        Console.WriteLine($"Обработка отчёта {args.ReportId}, попытка {context.Attempt}");
+        Console.WriteLine($"Processing report {args.ReportId}, attempt {context.Attempt}");
         return Task.CompletedTask;
     }
 }
@@ -93,7 +88,7 @@ public sealed class ReportJob : IJob<ReportArgs>
 internal sealed partial class ReportJson : JsonSerializerContext;
 ```
 
-**4. Замените `Program.cs`.** `AddPgBolt` регистрирует клиент и инициализацию схемы. `AddJobs` подключает обработчики этой сборки через сгенерированный реестр. `AddPgBoltServer` запускает воркеры для выбранных очередей.
+**4. Replace `Program.cs`.** `AddPgBolt` registers the client and schema initialization. `AddJobs` registers this assembly’s handlers through its generated registry. `AddPgBoltServer` starts workers for the selected queues.
 
 ```csharp
 using Microsoft.Extensions.DependencyInjection;
@@ -105,7 +100,7 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddPgBolt(options =>
 {
     options.ConnectionString = Environment.GetEnvironmentVariable("PGBOLT_CONNECTION")
-        ?? throw new InvalidOperationException("Задайте PGBOLT_CONNECTION");
+        ?? throw new InvalidOperationException("Set PGBOLT_CONNECTION");
     options.AddJobs(PgBoltJobRegistry.Register);
 });
 builder.Services.AddPgBoltServer("reports-worker", server => server.Queue("reports"));
@@ -114,37 +109,37 @@ using var host = builder.Build();
 await host.StartAsync();
 var client = host.Services.GetRequiredService<IJobClient>();
 var result = await client.EnqueueAsync(new ReportArgs(42));
-Console.WriteLine($"Задача {result.Id} поставлена в очередь");
+Console.WriteLine($"Enqueued job {result.Id}");
 await host.WaitForShutdownAsync();
 ```
 
-**5. Выполните задачу.** Дождитесь готовности PostgreSQL и запустите приложение в том же терминале.
+**5. Run the job.** Once PostgreSQL is ready, run the app in the same terminal.
 
 ```sh
 dotnet run --no-restore
 ```
 
-В выводе появятся идентификатор задачи и строка `Обработка отчёта 42, попытка 1`. Хост продолжит слушать очередь. Остановите его с помощью Ctrl+C. По окончании локального примера команда `docker stop pgbolt-guide-db` удалит временный контейнер вместе с демонстрационной БД.
+The app prints a job ID and `Processing report 42, attempt 1`. The host keeps listening. Press Ctrl+C to stop it. If you used the example container, run `docker stop pgbolt-guide-db` to remove it and its demo database.
 
 <a id="services"></a>
 
-## Отдельные приложения для клиента и воркера
+## Separate client and worker applications
 
-| Сборка | Что находится в ней |
+| Assembly | Responsibilities |
 | --- | --- |
-| Контракты | Публичный тип `ReportArgs` с `[Job("reports.generate", Queue = "reports")]`. На эту сборку ссылаются API и воркер. |
-| API | `AddPgBolt` с общей БД и схемой. Внедрите `IJobClient` в endpoint или сервис и вызовите `EnqueueAsync`. Для типизированного вызова подключите генератор и JSON-контекст, охватывающий аргументы. |
-| Воркер | `ReportJob`, JSON-контекст и регистрация `AddJobs(...Register)` для каждой сборки обработчиков. Подключите `AddPgBoltServer` и перечислите очереди, которые процесс обслуживает. |
+| Contracts | Declares the public `ReportArgs` type with `[Job("reports.generate", Queue = "reports")]`. Both the API and worker reference this assembly. |
+| API | Calls `AddPgBolt` with the shared database and schema. Inject `IJobClient` into an endpoint or service and call `EnqueueAsync`. Typed calls require the generator and a JSON context that includes the argument type. |
+| Worker | Contains `ReportJob` and a JSON context. Call `AddJobs(...Register)` for each handler assembly, then `AddPgBoltServer` with the queues this process serves. |
 
-`PgBoltJobRegistry` генерируется в корневом пространстве имён сборки обработчиков. Если таких сборок несколько, передайте каждый реестр с полным именем. При проблеме с типизированной постановкой проверьте прямую ссылку на `PgBolt.Abstractions`, атрибут сборки `PgBoltJsonContext` и `[JsonSerializable(typeof(ReportArgs))]` в проекте, где компилируется вызов. [Контракты примера](tests/E2E/PgBolt.E2E.Contracts/Contracts.cs) · [Обработчик и JSON-контекст](tests/E2E/PgBolt.E2E.JobsA/PingJob.cs) · [Регистрация нескольких сборок](tests/E2E/PgBolt.E2E.Tests/EndToEndTests.cs)
+PgBolt generates `PgBoltJobRegistry` in the root namespace of each handler assembly. Use fully qualified registry names when registering multiple assemblies. If a typed enqueue call fails to compile, check the project containing the call for a direct reference to `PgBolt.Abstractions`, the `PgBoltJsonContext` assembly attribute and `[JsonSerializable(typeof(ReportArgs))]`. [Example contracts](tests/E2E/PgBolt.E2E.Contracts/Contracts.cs) · [Handler and JSON context](tests/E2E/PgBolt.E2E.JobsA/PingJob.cs) · [Multiple handler assemblies](tests/E2E/PgBolt.E2E.Tests/EndToEndTests.cs)
 
-Клиент также может передать строковое имя и `JsonElement` в `EnqueueAsync`. Такому клиенту достаточно знать имя и форму JSON. Сначала запустите воркер хотя бы раз, чтобы он опубликовал описание типа в `job_types`. Для неизвестного имени клиент вернёт `UnknownJobException`. При изменении контракта учитывайте задачи со старыми аргументами, которые уже лежат в очереди.
+A client can also pass a job name and a `JsonElement` to `EnqueueAsync`. It only needs the name and JSON shape. Start a worker at least once so it can publish the type to `job_types`. An unknown name raises `UnknownJobException`. When changing the contract, account for jobs already queued with older arguments.
 
 <a id="enqueue"></a>
 
-## Постановка, дедупликация и транзакции
+## Enqueueing, deduplication and transactions
 
-По умолчанию задача доступна сразу. Среди готовых задач одной очереди воркер сначала выбирает больший приоритет, затем более ранний срок запуска. При параллельной обработке порядок завершения может отличаться. Значения из `EnqueueOptions` переопределяют очередь, приоритет и настройки попыток отдельного вызова. `Delay` отсчитывается по часам PostgreSQL. Для конкретного момента задайте `RunAt` вместо `Delay`.
+By default, a job is eligible to run immediately. Within a queue, workers pick ready jobs by highest priority, then earliest run time. Concurrent jobs can finish in a different order. Use `EnqueueOptions` to override the queue, priority and retry settings for one call. `Delay` uses the PostgreSQL clock. Use `RunAt` to specify a timestamp.
 
 ```csharp
 var result = await client.EnqueueAsync(new ReportArgs(42), new EnqueueOptions
@@ -154,39 +149,39 @@ var result = await client.EnqueueAsync(new ReportArgs(42), new EnqueueOptions
 });
 ```
 
-- **Дедупликация.** `UniqueKey` уникален среди активных задач схемы, включая другие очереди. При совпадении `result.Created` равен `false`. Если прежняя задача успела завершиться, `Id` может быть пустым. После удаления строки из очереди ключ снова свободен. Префикс `pgbolt:` зарезервирован.
-- **Пакетная постановка.** `EnqueueManyAsync` принимает список аргументов одного типа и возвращает результат для каждого элемента. Для ключей передайте `uniqueKeySelector`. Если задачи нужны сейчас, пакетная постановка не требует создания workflow.
-- **Управление по идентификатору.** `GetAsync(id)` возвращает состояние или `null`. `TriggerAsync(id)` позволяет приблизить запуск отложенной задачи. `RequeueAsync(id)` возвращает в очередь задачу в состоянии `Failed` или `Cancelled`. [Контракт клиента](src/PgBolt.Abstractions/IJobClient.cs)
+- **Deduplication.** `UniqueKey` is unique across active jobs in the schema, including other queues. A duplicate returns `result.Created == false`. If the original job has already finished, `Id` can be empty. Removing the queue row frees the key for reuse. The `pgbolt:` prefix is reserved.
+- **Bulk enqueue.** `EnqueueManyAsync` takes a list of arguments of the same type and returns one result per item. Supply a `uniqueKeySelector` for per-item keys. Use bulk enqueue for independent jobs that are ready to run together.
+- **Managing a job by ID.** `GetAsync(id)` returns the job state or `null`. Use `TriggerAsync(id)` to bring forward a delayed job and `RequeueAsync(id)` to requeue a `Failed` or `Cancelled` job. [Client contract](src/PgBolt.Abstractions/IJobClient.cs)
 
-**Поставить задачу вместе с изменением бизнес-данных.** Откройте `NpgsqlTransaction` с уровнем `ReadCommitted` в той же базе. Выполните прикладной SQL в этой транзакции и передайте её клиенту до коммита. Тогда откат отменит обе записи, а воркер увидит задачу только после коммита. В примере `connection` — уже открытое соединение Npgsql.
+**Enqueue a job alongside application data.** Open a `ReadCommitted` Npgsql transaction in the same database. Run the application SQL and pass the transaction to the client before committing. A rollback discards both writes. A worker can see the job only after commit. Here, `connection` is an open Npgsql connection.
 
 ```csharp
 await using var tx = await connection.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
-// Здесь приложение сохраняет изменения через connection и tx.
+// Save application data using connection and tx.
 await client.EnqueueAsync(new ReportArgs(42), new EnqueueOptions { Transaction = tx });
 await tx.CommitAsync();
 ```
 
 <a id="execution"></a>
 
-## Выполнение, повторы и отмена
+## Execution, retries and cancellation
 
-PgBolt выполняет задачи с семантикой **at-least-once**. Воркер берёт задачу в аренду и периодически продлевает её. Если процесс выполнил внешний вызов и упал до записи результата, другой воркер сможет получить ту же задачу. Для списания денег или отправки сообщения передайте внешней системе стабильный ключ операции либо сохраните отметку об обработке вместе с бизнес-изменением. `UniqueKey` защищает только от повторной постановки активной задачи.
+PgBolt provides **at-least-once execution**. A worker leases a job and renews the lease periodically. If it makes an external call and crashes before recording the result, another worker can pick up the same job. When charging a card or sending a message, use a stable idempotency key with the external system or record completion in the same transaction as your business change. `UniqueKey` deduplicates active enqueues only.
 
-| Событие | Как ведёт себя PgBolt |
+| Event | What happens |
 | --- | --- |
-| Обработчик успешно вернул `Task` | Воркер подтверждает выполнение. В `GetAsync` задача переходит в `Succeeded`. |
-| Обработчик выбросил исключение | Пока остались попытки, PgBolt планирует повтор. По умолчанию `MaxAttempts = 10`, включая первую попытку. Задержка растёт от 15 секунд до базового предела в час, со случайным отклонением ±20 %. |
-| Вызван `CancelAsync` | Задача в ожидании может быть отменена сразу. Для уже выполняющейся возвращается `CancellationRequested`. Обработчик получает сигнал через `CancellationToken`. Передавайте токен в запросы и долгие операции. |
-| Для задачи нужен таймаут | Укажите `TimeoutSeconds` в `[Job]` или `DefaultJobTimeout` на сервере. Обработчик должен реагировать на отмену. |
+| The handler completes successfully | The worker acknowledges the job. `GetAsync` reports `Succeeded`. |
+| The handler throws | PgBolt schedules a retry while attempts remain. The default `MaxAttempts = 10` includes the first attempt. The base delay grows from 15 seconds to a maximum of one hour, with ±20% jitter. |
+| A caller invokes `CancelAsync` | A pending job can be cancelled immediately. A running job returns `CancellationRequested`. The handler receives the request through its `CancellationToken`. Pass the token to queries and long-running operations. |
+| A job needs a timeout | Set `TimeoutSeconds` on `[Job]` or set the server’s `DefaultJobTimeout`. The handler must observe cancellation. |
 
-Доступны настройки `MaxAttempts` и `RetryDelaysSeconds` в контракте, `MaxAttempts` и `RetryDelays` при постановке, а также `RetryPolicy` сервера. Номер текущей попытки, идентификатор задачи и логгер доступны через `JobContext`. [Атрибут задачи](src/PgBolt.Abstractions/JobAttribute.cs) · [Политика повторов](src/PgBolt.Server/RetryPolicy.cs)
+Set `MaxAttempts` and `RetryDelaysSeconds` on the contract, override `MaxAttempts` and `RetryDelays` when enqueuing, or configure the server’s `RetryPolicy`. `JobContext` exposes the attempt number, job ID and logger. [Job attribute](src/PgBolt.Abstractions/JobAttribute.cs) · [Retry policy](src/PgBolt.Server/RetryPolicy.cs)
 
 <a id="queues"></a>
 
-## Очереди и параллелизм
+## Queues and concurrency
 
-`Workers` задаёт размер общего пула виртуального сервера. В примере у сервера восемь общих слотов и ещё два только для отчётов — десять всего. Все серверы вместе могут держать в работе до четырёх задач очереди `reports`.
+`Workers` sizes the virtual server’s shared pool. This example has eight shared slots and two reserved for reports, for ten slots in total. Across all servers, at most four jobs from the `reports` queue can run at once.
 
 ```csharp
 builder.Services.AddPgBoltServer("background", server =>
@@ -201,28 +196,28 @@ builder.Services.AddPgBoltServer("background", server =>
 });
 ```
 
-`MaxConcurrency` ограничивает очередь внутри одного виртуального сервера. `Weight` задаёт относительную долю общего пула для очередей с весом. Через `IQueueSettingsManager` можно менять кластерный лимит и вес во время работы. Лимит `0` в runtime-переопределении приостанавливает выдачу новых задач. Уже взятые задачи продолжают выполняться. Впервые установленный лимит другие процессы подхватывают при обновлении настроек, по умолчанию в пределах 10 секунд. [Настройки очередей](src/PgBolt.Server/QueueOptions.cs) · [Управление в runtime](src/PgBolt.Abstractions/IQueueSettingsManager.cs)
+`MaxConcurrency` limits a queue within one virtual server. `Weight` sets a weighted queue’s relative share of the common pool. Use `IQueueSettingsManager` to change the cluster limit and weight at runtime. A runtime limit of `0` pauses new dequeues while jobs already leased continue to run. Other processes pick up a newly introduced limit on their next settings refresh, within ten seconds by default. [Queue options](src/PgBolt.Server/QueueOptions.cs) · [Runtime settings](src/PgBolt.Abstractions/IQueueSettingsManager.cs)
 
 <a id="cron"></a>
 
-## Расписания cron
+## Cron schedules
 
-Для расписания, которое меняется вместе с приложением, добавьте объявление внутри `AddPgBolt`. Пример ставит задачу по будням в 08:00 UTC. `RecurringOwner` — стабильное имя приложения, общее для его реплик.
+Define schedules that ship with your application inside `AddPgBolt`. This example enqueues a job at 08:00 UTC on weekdays. Use a stable `RecurringOwner` name shared by all replicas of the application.
 
 ```csharp
 options.RecurringOwner = "reporting";
 options.AddRecurring("weekday-report", "0 8 * * 1-5", new ReportArgs(42));
 ```
 
-Cron поддерживает пять полей или шесть с секундами. По умолчанию используется UTC. Для местного времени передайте `RecurringJobOptions.TimeZone`. После простоя политика `FireOnce` создаёт одну задачу за пропущенные срабатывания. `CatchUp` догоняет срабатывания внутри заданного окна. По умолчанию `OverlapPolicy.Skip` пропускает новый запуск, пока предыдущий активен.
+Cron accepts five fields, or six including seconds. Schedules use UTC by default. For local time, set `RecurringJobOptions.TimeZone`. After downtime, `FireOnce` creates one job for missed occurrences. `CatchUp` replays occurrences within the configured window. The default `OverlapPolicy.Skip` skips an occurrence while the previous job is active.
 
-Расписания, которыми управляет пользователь, создавайте через `IRecurringJobManager.AddOrUpdateAsync`. Менеджер умеет приостановить, возобновить и запустить расписание вручную. Для расписания из кода состав и параметры задаёт приложение-владелец. Запуск по времени требует хотя бы одного сервера с `RunScheduler = true` (значение по умолчанию). [API расписаний](src/PgBolt.Abstractions/IRecurringJobManager.cs) · [Часовые пояса и политики](src/PgBolt.Abstractions/RecurringJobOptions.cs)
+Use `IRecurringJobManager.AddOrUpdateAsync` for user-managed schedules. The manager can pause, resume and trigger a schedule manually. For code-defined schedules, the owning application controls the definition and parameters. At least one server must have `RunScheduler = true` to fire scheduled jobs (the default). [Scheduling API](src/PgBolt.Abstractions/IRecurringJobManager.cs) · [Time zones and policies](src/PgBolt.Abstractions/RecurringJobOptions.cs)
 
 <a id="workflows"></a>
 
-## Цепочки и группы задач
+## Job continuations and batches
 
-`Workflow()` описывает зависимость между задачами, а `SubmitAsync()` записывает весь граф одной транзакцией. Здесь задача для отчёта 43 станет доступна после успешного завершения задачи для отчёта 42.
+`Workflow()` defines dependencies between jobs. `SubmitAsync()` writes the whole graph in one transaction. Here, report 43 becomes eligible after report 42 succeeds.
 
 ```csharp
 var first = client.Workflow().Enqueue(new ReportArgs(42));
@@ -230,15 +225,15 @@ var next = first.ContinueWith(new ReportArgs(43));
 await next.SubmitAsync();
 ```
 
-- `OnSuccess` используется по умолчанию. После ошибки родителя продолжение ждёт его повторной постановки, а отмена родителя отменяет зависимое продолжение. `OnAnyFinished` запускает продолжение после любого терминального исхода.
-- `Batch` объединяет задачи с общим состоянием и счётчиками. `ContinueWithBatch` создаёт группу после предыдущего шага. Такой сценарий подходит, например, для параллельной подготовки файлов с последующей сборкой архива.
-- Продолжения и группы обрабатывает сервер с `RunMaintenance = true`. При выключенном обслуживании на всех серверах сигналы завершения копятся, а продолжения остаются в ожидании. [Контракт workflow](src/PgBolt.Abstractions/Workflow.cs) · [Исполняемый пример цепочки с группой](tests/E2E/PgBolt.E2E.Tests/WorkflowEndToEndTests.cs)
+- `OnSuccess` is the default. If the parent fails, the continuation waits for the parent to be requeued. Cancelling the parent cancels the dependent continuation. `OnAnyFinished` runs the continuation after any terminal outcome.
+- `Batch` groups jobs under a shared state and counters. `ContinueWithBatch` creates a group after the preceding step. For example, prepare files in parallel and then assemble them into an archive.
+- A server with `RunMaintenance = true` processes continuations and batches. If all servers disable maintenance, completion signals accumulate and continuations stay pending. [Workflow contract](src/PgBolt.Abstractions/Workflow.cs) · [End-to-end batch example](tests/E2E/PgBolt.E2E.Tests/WorkflowEndToEndTests.cs)
 
 <a id="dashboard"></a>
 
-## Панель управления и наблюдаемость
+## Dashboard and observability
 
-В ASP.NET Core зарегистрируйте `AddPgBolt` и `AddPgBoltDashboard` до `Build()`, затем добавьте маршрут. В примере приложение уже настроило аутентификацию и политику `PgBoltReaders`. Панель доступна по адресу `/pgbolt` в режиме просмотра.
+In ASP.NET Core, call `AddPgBolt` and `AddPgBoltDashboard` before `Build()`, then map the route. This example assumes authentication and a `PgBoltReaders` policy are already configured. It exposes a read-only dashboard at `/pgbolt`.
 
 ```csharp
 builder.Services.AddPgBoltDashboard(options => options.ReadOnly = true);
@@ -246,38 +241,38 @@ var app = builder.Build();
 app.MapPgBoltDashboard().RequireAuthorization("PgBoltReaders");
 ```
 
-Панель показывает очереди, задачи, группы и расписания. Для операторов можно включить действия и задать отдельную `ActionsPolicy`. При выключенном `ReadOnly` и пустой `ActionsPolicy` действия разрешены всем, кто видит панель. Для удалённого доступа задайте политику просмотра на группе маршрутов. [Параметры панели](src/PgBolt.Dashboard/PgBoltDashboardOptions.cs)
+The dashboard displays queues, jobs, batches and schedules. To allow operator actions, enable writes and set a separate `ActionsPolicy`. When `ReadOnly` is off and `ActionsPolicy` is empty, anyone who can view the dashboard can perform actions. For remote access, apply a viewing policy to the route group. [Dashboard options](src/PgBolt.Dashboard/PgBoltDashboardOptions.cs)
 
-PgBolt связывает постановку и обработку задачи в одном трейсе. Для приложения с OpenTelemetry добавьте `AddPgBoltInstrumentation()` в настройки трассировки и метрик. Примеры настройки экспортёра, запросы PromQL и различия между метриками процесса и кластера собраны в [руководстве по наблюдаемости](docs/observability.md).
+PgBolt correlates enqueue and execution in a single trace. When using OpenTelemetry, add `AddPgBoltInstrumentation()` to the tracing and metrics builders. The [observability guide](docs/observability.md) covers exporters, PromQL queries and the difference between process and cluster metrics.
 
 <a id="operations"></a>
 
-## PostgreSQL, PgBouncer и ограничения
+## PostgreSQL, PgBouncer and limitations
 
-| Область | Что учитывать |
+| Area | Operational considerations |
 | --- | --- |
-| База и схема | Все участники одной очереди должны указывать одну БД и `Schema` (по умолчанию `pgbolt`). На старте PgBolt проверяет, что уровень изоляции по умолчанию — `READ COMMITTED`. |
-| Миграции | По умолчанию `AutoMigrate = true`. Если миграции применяет отдельный процесс, получите SQL через `PgBoltMigrations.GetScript(schema)`, примените его до старта и задайте `AutoMigrate = false`. Инициализация всё равно проверяет схему и готовит партиции. Для ранних экспериментальных схем автоматического обновления нет. [История изменений](CHANGELOG.md) |
-| Партиции и обслуживание | По умолчанию PgBolt готовит партиции на семь дней вперёд. Оставьте `RunMaintenance` включённым хотя бы на одном сервере. Если партиции перестанут создаваться, по исчерпании запаса постановка задач начнёт завершаться ошибкой. [Настройки обслуживания](src/PgBolt.Server/PgBoltProcessingOptions.cs) |
-| Хранение истории | `JobsRetention` и `EventsRetention` по умолчанию равны семи суткам. Для завершённых задач срок считается от суток **создания** по UTC, для событий — от суток события. Незавершённые задачи сохраняются. Задавайте одинаковые сроки во всех процессах одной схемы. Значение `null` в коде включает бессрочное хранение. |
-| PgBouncer | Проверенная конфигурация — PostgreSQL 17 и PgBouncer 1.24 в режиме `pool_mode=transaction`. Передайте адрес пула в `ConnectionString`. По умолчанию `UsePreparedStatements = false`. При включении проверьте поддержку подготовленных запросов и `max_prepared_statements` в пуле. |
-| Задержка и пропускная способность | В разных процессах воркеры обнаруживают новые задачи опросом БД. Ожидание зависит от интервала опроса, свободных слотов и нагрузки. На стенде 10 000 постановок/с выдержаны в течение десяти минут напрямую и через PgBouncer. Для длительной нагрузки и восстановления после удержания `xmin` показатели SLO 8 и 9 остаются открытыми. [Методика и результаты](docs/performance.md) |
+| Database and schema | Every participant sharing a queue must use the same database and `Schema` (default `pgbolt`). At startup, PgBolt checks that the database’s default isolation level is `READ COMMITTED`. |
+| Migrations | `AutoMigrate = true` by default. To run migrations separately, obtain SQL from `PgBoltMigrations.GetScript(schema)`, apply it before startup and set `AutoMigrate = false`. Initialization still checks the schema and prepares partitions. Early experimental schemas require manual recreation. [Changelog](CHANGELOG.md) |
+| Partitions and maintenance | By default PgBolt prepares partitions seven days ahead. Keep `RunMaintenance` enabled on at least one server. If partition creation stops, enqueueing starts to fail once the prepared partitions run out. [Processing options](src/PgBolt.Server/PgBoltProcessingOptions.cs) |
+| History retention | `JobsRetention` and `EventsRetention` both default to seven days. Finished jobs expire based on the UTC day they were **created**. Events expire based on the day they occurred. Unfinished jobs are retained. Use the same retention periods in every process sharing a schema. Set a retention period to `null` in code to keep that history indefinitely. |
+| PgBouncer | PgBolt has been tested with PostgreSQL 17 and PgBouncer 1.24 in `pool_mode=transaction`. Put the pool address in `ConnectionString`. The default is `UsePreparedStatements = false`. Before enabling prepared statements, check your pool’s support and its `max_prepared_statements` setting. |
+| Latency and throughput | Workers in separate processes discover new jobs by polling PostgreSQL. Latency depends on the polling interval, available slots and load. The benchmark sustained 10,000 enqueues/s for ten minutes both directly and through PgBouncer. SLOs 8 and 9 for sustained load and recovery after a held `xmin` remain open. [Methodology and results](docs/performance.md) |
 
 <a id="development"></a>
 
-## Сборка, тесты и нагрузочный стенд
+## Build, tests and load testing
 
-Из корня репозитория с запущенным Docker можно проверить постановку и выполнение напрямую и через PgBouncer. Ожидаемый результат команды — два прошедших теста.
+With Docker running, the following command checks enqueueing and execution both directly and through PgBouncer. Run it from the repository root. Expect two tests to pass.
 
 ```sh
 dotnet test tests/E2E/PgBolt.E2E.Tests/PgBolt.E2E.Tests.csproj --filter FullyQualifiedName~Jobs_from_three_executor_assemblies_run_end_to_end
 ```
 
-Собрать решение и запустить полный набор тестов можно из того же каталога.
+To build the solution and run the full test suite from the same directory:
 
 ```sh
 dotnet build PgBolt.slnx
 dotnet test PgBolt.slnx
 ```
 
-Для измерений на своей конфигурации используйте [инструкцию нагрузочного стенда](benchmarks/PgBolt.LoadTest/README.md). Параметры стенда и уже полученные результаты приведены в [отчёте о производительности](docs/performance.md).
+To measure your own configuration, follow the [load test guide](benchmarks/PgBolt.LoadTest/README.md). The [performance report](docs/performance.md) records the test environment and results.

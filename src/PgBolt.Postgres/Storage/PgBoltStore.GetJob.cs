@@ -83,8 +83,8 @@ public sealed partial class PgBoltStore
         }, ct);
 
     /// <summary>
-    /// Core §2 с частью 5: Awaiting — строка queue с await_condition (jobs.state = 0); Scheduled — без lease, не ready и не Awaiting.
-    /// Код 1 в jobs.state больше не используется.
+    /// Client state mapping (core §2, Part 5). Awaiting has a queue row with await_condition and jobs.state = 0. Scheduled has no lease, is not
+    /// ready, and is not Awaiting. jobs.state code 1 is unused.
     /// </summary>
     internal static JobState Derive(short stored, bool inQueue, bool ready, Guid? leaseOwner, bool awaiting) => stored switch
     {

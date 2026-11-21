@@ -2,13 +2,12 @@ using PgBolt.LoadTest.Cli;
 
 namespace PgBolt.LoadTest.Env;
 
-/// <summary>Команда запуска контейнера PostgreSQL стенда.</summary>
+/// <summary>PostgreSQL container startup command for the load harness.</summary>
 internal static class PostgresCommand
 {
     /// <summary>
-    /// Параметры сервера в виде <c>-c k=v</c>. Пара из <c>--pg-setting</c> с тем же ключом заменяет
-    /// значение по умолчанию. <c>track_planning</c> нужен только там, где читается время планирования:
-    /// иначе statement'ы одной структуры из многих соединений конкурируют за запись своей строки статистики.
+    /// Server settings as <c>-c k=v</c> pairs. A <c>--pg-setting</c> pair overrides the default for the same key. Enable <c>track_planning</c> only
+    /// when measuring planning time. Otherwise statements with the same structure on many connections compete to update one statistics row.
     /// </summary>
     public static IReadOnlyList<string> Build(LoadTestOptions options, bool trackPlanning)
     {

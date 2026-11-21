@@ -1,20 +1,24 @@
 namespace PgBolt.Server;
 
-/// <summary>Задержка до следующей попытки после ошибки задачи (§3.4).</summary>
+/// <summary>Determines how long to wait after a job fails before trying again (§3.4).</summary>
 public abstract class RetryPolicy
 {
-    /// <param name="attempt">Номер завершившейся попытки, 1-based (как <c>JobContext.Attempt</c>).</param>
-    /// <returns>Задержка до следующей попытки; null — не повторять.</returns>
+    /// <param name="attempt">One-based number of the completed attempt, as in <c>JobContext.Attempt</c>.</param>
+    /// <param name="error">Exception from the completed attempt.</param>
+    /// <returns>Delay before the next attempt, or null to stop retrying.</returns>
     public abstract TimeSpan? GetDelay(int attempt, Exception error);
 
-    /// <summary>По умолчанию: <c>Exponential(15 с, 1 ч, 0.2)</c>.</summary>
+    /// <summary>Default policy: <c>Exponential(15 seconds, 1 hour, 0.2)</c>.</summary>
     public static RetryPolicy Default { get; } = Exponential(TimeSpan.FromSeconds(15), TimeSpan.FromHours(1), 0.2);
 
     /// <summary><c>min(baseDelay × 2^(attempt−1), maxDelay) × (1 + U(−jitter, +jitter))</c>.</summary>
     public static RetryPolicy Exponential(TimeSpan baseDelay, TimeSpan maxDelay, double jitter) =>
         Exponential(baseDelay, maxDelay, jitter, static () => Random.Shared.NextDouble());
 
-    /// <param name="random">Источник U[0, 1) — для детерминированных тестов.</param>
+    /// <param name="baseDelay">Delay for the first retry before jitter.</param>
+    /// <param name="maxDelay">Upper bound on the exponential delay before jitter.</param>
+    /// <param name="jitter">Fractional random variation, from zero up to but excluding one.</param>
+    /// <param name="random">Source of uniform random values in [0, 1), replaceable for deterministic tests.</param>
     internal static RetryPolicy Exponential(TimeSpan baseDelay, TimeSpan maxDelay, double jitter, Func<double> random)
     {
         if (baseDelay <= TimeSpan.Zero)
@@ -27,7 +31,7 @@ public abstract class RetryPolicy
         return new ExponentialRetryPolicy(baseDelay, maxDelay, jitter, random);
     }
 
-    /// <summary>Политика на делегате; исключение делегата обрабатывается как null (§3.4).</summary>
+    /// <summary>Delegate-based policy. If the delegate throws, the result is treated as null (§3.4).</summary>
     public static RetryPolicy Custom(Func<int, Exception, TimeSpan?> getDelay)
     {
         ArgumentNullException.ThrowIfNull(getDelay);
@@ -49,7 +53,7 @@ public abstract class RetryPolicy
             return ticks >= TimeSpan.MaxValue.Ticks ? TimeSpan.MaxValue : TimeSpan.FromTicks((long)Math.Round(ticks));
         }
 
-        /// <summary>min(baseDelay × 2^exponent, maxDelay) в целых тиках, без переполнения при любом exponent.</summary>
+        /// <summary>Computes min(baseDelay × 2^exponent, maxDelay) in whole ticks without overflow for any exponent.</summary>
         private TimeSpan Capped(int exponent)
         {
             if (exponent >= 62)

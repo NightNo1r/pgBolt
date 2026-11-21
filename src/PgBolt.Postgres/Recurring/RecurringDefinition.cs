@@ -1,6 +1,6 @@
 namespace PgBolt.Postgres.Recurring;
 
-/// <summary>Определение расписания в хранимой (нормализованной) форме — строка recurring_jobs без курсора (часть 4 §3, §4.2).</summary>
+/// <summary>Normalized schedule definition stored in recurring_jobs, excluding the cursor (Part 4 §3, §4.2).</summary>
 internal sealed record RecurringDefinition(
     string Id,
     string Type,
@@ -19,7 +19,8 @@ internal sealed record RecurringDefinition(
     private static readonly TimeSpan MaxCatchUpWindow = TimeSpan.FromDays(366);
     private static readonly RecurringJobOptions Defaults = new();
 
-    /// <summary>§4.2: всё, кроме типа задачи и аргументов (code-first проверяет их при первой синхронизации).</summary>
+    /// <summary>Validates everything except the job type and arguments (§4.2). Code-defined schedules validate these on first
+    /// synchronization.</summary>
     public static void Validate(string id, string cron, RecurringJobOptions? options) => _ = Normalize(id, cron, options);
 
     public static RecurringDefinition Create(string id, string type, string argsJson, string cron, RecurringJobOptions? options)
@@ -75,7 +76,7 @@ internal sealed record RecurringDefinition(
     private readonly record struct Normalized(string TimeZone, MisfirePolicy Misfire, TimeSpan CatchUpWindow, OverlapPolicy Overlap,
         string? Queue, short? Priority, int? MaxAttempts, int[]? RetryDelaysSeconds);
 
-    /// <summary>Равенство по значению, включая содержимое RetryDelaysSeconds (массив в record сравнивается по ссылке).</summary>
+    /// <summary>Compares all fields by value, including RetryDelaysSeconds, because record array members otherwise compare by reference.</summary>
     public bool Equals(RecurringDefinition? other) =>
         other is not null && Id == other.Id && Type == other.Type && ArgsJson == other.ArgsJson && Cron == other.Cron
         && TimeZone == other.TimeZone && Misfire == other.Misfire && CatchUpWindow == other.CatchUpWindow && Overlap == other.Overlap

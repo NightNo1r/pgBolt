@@ -15,25 +15,26 @@ public interface IJobClient
     ValueTask<CancelResult> CancelAsync(JobId id, string? reason = null, CancellationToken ct = default);
     ValueTask<bool> TriggerAsync(JobId id, CancellationToken ct = default);
     /// <summary>
-    /// Failed/Cancelled → Pending (core §5.9). Член batch (часть 5 §6.6): batch и терминальные внешние синхронно возвращаются в
-    /// Active, исход вычисляется заново при следующем завершении; уже запущенные или отменённые продолжения не пересматриваются.
-    /// Requeue Cancelled-члена при идущей отмене batch: флаг отмены не сбрасывается, член выполняется или отменяется снова в
-    /// зависимости от позиции обхода отмены, ждущие члены его ветки не запускаются, а отменяются; детерминированно — requeue после
-    /// того, как batch стал терминальным. Requeue отменённого продолжения ставит его сразу в Pending.
+    /// Moves a Failed or Cancelled job to Pending (core §5.9). For a batch member, the batch and any terminal enclosing batches return to Active
+    /// synchronously. Their outcomes are recomputed on completion. Continuations already started or cancelled keep their state (Part 5 §6.6).
+    /// Requeuing a cancelled member during batch cancellation preserves the cancellation flag. The member may run or be cancelled again, depending
+    /// on how far cancellation has progressed. Waiting members of its branch are cancelled. For deterministic behavior, requeue after the batch
+    /// reaches a terminal state. Requeuing a cancelled continuation moves it directly to Pending.
     /// </summary>
     ValueTask<RequeueResult> RequeueAsync(JobId id, CancellationToken ct = default);
     ValueTask<JobInfo?> GetAsync(JobId id, CancellationToken ct = default);
 
-    /// <summary>Новый граф продолжений и batches (часть 5 §5); пишется SubmitAsync одной транзакцией.</summary>
+    /// <summary>Creates a graph of continuations and batches (Part 5 §5). SubmitAsync writes the graph in one transaction.</summary>
     IWorkflow Workflow(WorkflowOptions? options = null);
 
     /// <summary>
-    /// Отмена batch (часть 5 §6.5): невзятые члены отменяются сразу, выполняющимся отмена доставляется heartbeat'ом, вложенные
-    /// batches — рекурсивно; член, успевший завершиться успехом, учитывается как Succeeded. Ждущие члены ветки не запускаются.
-    /// Повторная отмена — CancellationRequested без нового сигнала. Требует resolver (сервер с RunMaintenance = true).
+    /// Cancels a batch (Part 5 §6.5). Unclaimed members are cancelled immediately. Running jobs receive cancellation through their heartbeat.
+    /// Cancellation propagates recursively to nested batches. A member that finishes successfully counts as Succeeded. Waiting members of a
+    /// cancelled branch never start. Repeated calls return CancellationRequested without sending another signal. Requires a resolver on a server
+    /// with RunMaintenance = true.
     /// </summary>
     ValueTask<BatchCancelResult> CancelBatchAsync(BatchId id, CancellationToken ct = default);
 
-    /// <summary>Строка batch; счётчики ≥ 0 и временно могут быть ниже факта после requeue члена (§6.6).</summary>
+    /// <summary>Returns the batch record. Its nonnegative counters can temporarily undercount after a member is requeued (§6.6).</summary>
     ValueTask<BatchInfo?> GetBatchAsync(BatchId id, CancellationToken ct = default);
 }

@@ -21,10 +21,10 @@ public static partial class PgBoltMigrations
 
     public static int LatestVersion => All[^1].Version;
 
-    /// <summary>§4: схема отсутствует (null) или старше кода; более новая схема не считается устаревшей.</summary>
+    /// <summary>True if the schema is missing (null) or older than the code (§4). A newer schema does not need an upgrade.</summary>
     internal static bool IsOutdated(int? version) => version is null || version < LatestVersion;
 
-    /// <summary>Скрипт для ручного применения (AutoMigrate = false): миграции с версией больше fromVersion.</summary>
+    /// <summary>Builds a script for manual application (AutoMigrate = false) containing migrations newer than fromVersion.</summary>
     public static string GetScript(string schema, int fromVersion = 0)
     {
         SchemaName.Validate(schema);

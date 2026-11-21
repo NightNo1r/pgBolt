@@ -8,14 +8,14 @@ using PgBolt.Benchmarks.Infrastructure;
 namespace PgBolt.Benchmarks.Verification;
 
 /// <summary>
-/// Стресс-проверки ключевых инвариантов каждого варианта (и текущих копий — для сравнения) до замеров: бенчмарк
-/// некорректного кода бессмыслен. Запуск: <c>--verify</c> (только проверка) или перед бенчмарками автоматически.
+/// Stress-tests each variant's invariants, including production copies for comparison, before measuring. Runs automatically before benchmarks or
+/// on its own with <c>--verify</c>.
 /// </summary>
 internal static class Verifier
 {
     private sealed record Outcome(string Area, string Variant, bool Passed, string Details, bool ExpectedToFail = false);
 
-    /// <param name="only">Подстрока области (event, sink, slots, table, deadlines) — проверить только её; null — все.</param>
+    /// <param name="only">Optional substring selecting one area: event, sink, slots, table, or deadlines. Null checks all areas.</param>
     public static bool Run(string? only = null)
     {
         var results = new List<Outcome>();
@@ -41,29 +41,29 @@ internal static class Verifier
         }
         if (Want("slots"))
         {
-            results.Add(Report(VerifySlots("Lock (копия)", static (w, q) => new LockSlotAllocator(w, q))));
+            results.Add(Report(VerifySlots("Lock (copy)", static (w, q) => new LockSlotAllocator(w, q))));
             results.Add(Report(VerifySlots("Interlocked", static (w, q) => new InterlockedSlotAllocator(w, q))));
         }
         if (Want("table"))
             results.Add(Report(VerifySnapshots()));
         if (Want("deadlines"))
         {
-            results.Add(Report(VerifyDeadlines("Lock (копия)", static (t, c, i) => new LockLeaseDeadlines(t, c, i), expectedToFail: false)));
+            results.Add(Report(VerifyDeadlines("Lock (copy)", static (t, c, i) => new LockLeaseDeadlines(t, c, i), expectedToFail: false)));
             results.Add(Report(VerifyDeadlines("Epoch (seqlock)", static (t, c, i) => new EpochLeaseDeadlines(t, c, i), expectedToFail: false)));
-            results.Add(Report(VerifyDeadlines("Naive CAS (заведомо некорректный)", static (t, c, i) => new NaiveLeaseDeadlines(t, c, i), expectedToFail: true)));
+            results.Add(Report(VerifyDeadlines("Naive CAS (known to be incorrect)", static (t, c, i) => new NaiveLeaseDeadlines(t, c, i), expectedToFail: true)));
         }
 
         var failed = results.Where(r => !r.Passed && !r.ExpectedToFail).ToList();
         Console.WriteLine();
-        Console.WriteLine($"verify: {results.Count - failed.Count}/{results.Count} ok за {total.Elapsed.TotalSeconds:F1} с" +
-                          (failed.Count == 0 ? "" : $"; ПРОВАЛ: {string.Join(", ", failed.Select(f => $"{f.Area}/{f.Variant}"))}"));
+        Console.WriteLine($"verify: {results.Count - failed.Count}/{results.Count} passed in {total.Elapsed.TotalSeconds:F1} s" +
+                          (failed.Count == 0 ? "" : $"; FAILED: {string.Join(", ", failed.Select(f => $"{f.Area}/{f.Variant}"))}"));
         return failed.Count == 0;
     }
 
     private static Outcome Report(Outcome outcome)
     {
         var status = outcome.ExpectedToFail
-            ? (outcome.Passed ? "НЕ ПОЙМАН" : "ПОЙМАН (ожидаемо)")
+            ? (outcome.Passed ? "MISSED" : "DETECTED (expected)")
             : (outcome.Passed ? "OK" : "FAIL");
         Console.WriteLine($"[{status,-17}] {outcome.Area,-34} {outcome.Variant,-36} {outcome.Details}");
         return outcome;
@@ -103,10 +103,9 @@ internal static class Verifier
     ];
 
     /// <summary>
-    /// Нет потерянных пробуждений: раунды, в которых 4 потока делают по 1–3 (produced++, Set), а ожидающий крутит
-    /// WaitAsync со случайными таймаутом 0 / 1 мс / 20 мс и отменой через 0–200 мкс (границы таймаута и отмены). После
-    /// раунда, если ожидающий не видел всех produced, следующий WaitAsync(2 с) обязан вернуть true (сигнал в латче или
-    /// доставлен); false — сигнал потерян.
+    /// Checks for lost wakeups. In each round four threads perform one to three (produced++, Set) pairs while a waiter loops on WaitAsync with
+    /// random timeouts of 0, 1, or 20 ms and cancellation after 0–200 µs. If the waiter missed any produced increment by round end, its next
+    /// WaitAsync(2 s) must return true for a latched or delivered signal. False means a lost wakeup.
     /// </summary>
     private static Outcome VerifyEventNoLostWakeups(string variant, Func<IEvent> factory)
     {
@@ -176,11 +175,11 @@ internal static class Verifier
         go.SignalAndWait();
         foreach (var t in threads)
             t.Join();
-        return new Outcome("AutoResetEvent: нет потерянных пробуждений", variant, lost == 0,
-            $"раундов {Rounds}, Set {produced}, потеряно {lost}, {sw.Elapsed.TotalSeconds:F1} с");
+        return new Outcome("AutoResetEvent: no lost wakeups", variant, lost == 0,
+            $"{Rounds} rounds, {produced} Set calls, {lost} lost wakeups, {sw.Elapsed.TotalSeconds:F1} s");
     }
 
-    /// <summary>Ping-pong: 100 000 кругов, каждый WaitAsync(5 с) обязан вернуть true.</summary>
+    /// <summary>Runs 100,000 ping-pong trips. Every WaitAsync(5 s) must return true.</summary>
     private static Outcome VerifyEventPingPong(string variant, Func<IEvent> factory)
     {
         const int RoundTrips = 100_000;
@@ -210,7 +209,7 @@ internal static class Verifier
         ping.Set();
         echo.GetAwaiter().GetResult();
         return new Outcome("AutoResetEvent: ping-pong", variant, failures == 0 && echoFailures == 0,
-            $"кругов {RoundTrips}, таймаутов {failures + echoFailures}, {sw.Elapsed.TotalSeconds:F1} с");
+            $"{RoundTrips} round trips, {failures + echoFailures} timeouts, {sw.Elapsed.TotalSeconds:F1} s");
     }
 
     // ---------------------------------------------------------------- CompletionSink
@@ -222,16 +221,16 @@ internal static class Verifier
 
     private static IEnumerable<(string, SinkFactory)> SinkVariants() =>
     [
-        ("(а) Lock (копия)", static (t, s) => new LockCompletionSink(t, s, AckBatchSize, AckFlushInterval, new MonoClock(TimeProvider.System))),
-        ("(б) Cheap lock", static (t, s) => new CheapLockCompletionSink(t, s, AckBatchSize, AckFlushInterval, new MonoClock(TimeProvider.System))),
-        ("(в) Lock-free", static (t, s) => new LockFreeCompletionSink(t, s, AckBatchSize, AckFlushInterval, new MonoClock(TimeProvider.System))),
-        ("(в') Lock-free, триггер ==", static (t, s) => new LockFreeCompletionSink(t, s, AckBatchSize, AckFlushInterval, new MonoClock(TimeProvider.System),
+        ("(a) Lock (copy)", static (t, s) => new LockCompletionSink(t, s, AckBatchSize, AckFlushInterval, new MonoClock(TimeProvider.System))),
+        ("(b) Cheap lock", static (t, s) => new CheapLockCompletionSink(t, s, AckBatchSize, AckFlushInterval, new MonoClock(TimeProvider.System))),
+        ("(c) Lock-free", static (t, s) => new LockFreeCompletionSink(t, s, AckBatchSize, AckFlushInterval, new MonoClock(TimeProvider.System))),
+        ("(c') Lock-free, == trigger", static (t, s) => new LockFreeCompletionSink(t, s, AckBatchSize, AckFlushInterval, new MonoClock(TimeProvider.System),
             exactTrigger: true)),
     ];
 
     /// <summary>
-    /// Ни одного потерянного ack: 8 потоков × 25 007 Complete (не кратно пакету — остаётся хвост), затем без Stop каждая
-    /// запись должна уйти ровно один раз в пределах 1 с (хвост — по таймеру окна). 5 повторов.
+    /// Checks for lost acknowledgments. Eight threads each issue 25,007 Complete calls, leaving a partial batch. Without Stop, every entry must be
+    /// sent exactly once within one second, including the tail flushed by the window timer. Runs five times.
     /// </summary>
     private static Outcome VerifySinkNoLostAcks(string variant, SinkFactory factory)
     {
@@ -263,19 +262,19 @@ internal static class Verifier
             var missing = sent.Count(c => c == 0);
             var duplicated = sent.Count(c => c > 1);
             if (rejected != 0 || missing != 0 || duplicated != 0)
-                problems.Add($"повтор {repeat}: отклонено {rejected}, не отправлено {missing}, дважды {duplicated}");
+                problems.Add($"run {repeat}: {rejected} rejected, {missing} unsent, {duplicated} duplicates");
             sink.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
         }
-        return new Outcome("CompletionSink: нет потерянных ack", variant, problems.Count == 0,
+        return new Outcome("CompletionSink: no lost acknowledgments", variant, problems.Count == 0,
             problems.Count == 0
-                ? $"{Repeats}×{Threads * PerThread} ack, все ровно один раз; хвост ушёл за ≤ {maxTail.TotalMilliseconds:F0} мс"
+                ? $"{Repeats}×{Threads * PerThread} acknowledgments, each sent exactly once. The final batch flushed within {maxTail.TotalMilliseconds:F0} ms"
                 : string.Join("; ", problems));
     }
 
     /// <summary>
-    /// Корректный Stop: 8 потоков непрерывно делают Complete, на ~10 мс — StopAsync, после его завершения ещё по 2 000
-    /// Complete. Принятый (true) ack отправлен ровно один раз и до завершения StopAsync; отклонённый (false) — ни разу;
-    /// после StopAsync отправок нет. 40 повторов.
+    /// Checks shutdown while eight threads call Complete continuously. Calls StopAsync at about 10 ms, then makes another 2,000 calls per thread
+    /// after it returns. Every accepted acknowledgment (true) must be sent exactly once before StopAsync completes, rejected ones (false) never, and
+    /// no sends afterward. Runs 40 times.
     /// </summary>
     private static Outcome VerifySinkStop(string variant, SinkFactory factory)
     {
@@ -337,12 +336,12 @@ internal static class Verifier
                     rejectedTotal++;
             }
             if (lostAccepted + duplicated + sentRejected + sentAfterStop != 0)
-                problems.Add($"повтор {repeat}: принятых не отправлено {lostAccepted}, дважды {duplicated}, " +
-                             $"отправлено отклонённых {sentRejected}, отправок после Stop {sentAfterStop}");
+                problems.Add($"run {repeat}: {lostAccepted} accepted but unsent, {duplicated} duplicates, " +
+                             $"{sentRejected} rejected but sent, {sentAfterStop} sends after Stop");
         }
-        return new Outcome("CompletionSink: корректный Stop", variant, problems.Count == 0,
+        return new Outcome("CompletionSink: Stop correctness", variant, problems.Count == 0,
             problems.Count == 0
-                ? $"{Repeats} гонок Stop/Complete: принято {acceptedTotal}, отклонено {rejectedTotal}, нарушений 0"
+                ? $"{Repeats} Stop/Complete races: {acceptedTotal} accepted, {rejectedTotal} rejected, 0 violations"
                 : string.Join("; ", problems.Take(3)));
     }
 
@@ -368,10 +367,10 @@ internal static class Verifier
     // ---------------------------------------------------------------- SlotAllocator
 
     /// <summary>
-    /// Занятость не уходит в минус и не превышает лимит: диспетчер (Available + Take) и 7 освобождающих, лимиты малы
-    /// (Workers 8; q0 Reserved 2; q1 Reserved 1, MaxConcurrency 4) — пул почти всё время исчерпан. 300 000 Take.
-    /// Проверки: счётчики аллокатора после каждого Take/Release в [0, лимит]; независимый счётчик «удерживаемых» слотов
-    /// (растёт после Take, падает до Release) не больше лимитов; в конце всё нулевое.
+    /// Checks occupancy under tight limits with one Available/Take dispatcher and seven release threads. Workers = 8, q0 reserves 2, q1 reserves 1
+    /// with MaxConcurrency = 4, and the pool stays nearly full. Across 300,000 Take calls, every Take/Release must keep allocator counters within
+    /// [0, limit]. An independent count of held slots increments after Take and decrements before Release and must obey the limits. All counts must
+    /// finish at zero.
     /// </summary>
     private static Outcome VerifySlots(string variant, Func<int, IReadOnlyList<SlotQueue>, ISlotAllocator> factory)
     {
@@ -395,9 +394,9 @@ internal static class Verifier
         {
             var (r, s, total) = allocator.Counters(names[q]);
             if (r < 0 || s < 0 || total < 0)
-                violations.Add($"{where}: отрицательный счётчик ({r}, {s}, {total})");
+                violations.Add($"{where}: negative counter ({r}, {s}, {total})");
             if (r > queues[q].Reserved || total > Workers || (checkSum && queues[q].MaxConcurrency is int max && r + s > max))
-                violations.Add($"{where}: превышен лимит ({r}, {s}, {total})");
+                violations.Add($"{where}: limit exceeded ({r}, {s}, {total})");
         }
 
         var sw = Stopwatch.StartNew();
@@ -421,7 +420,7 @@ internal static class Verifier
                     {
                         Interlocked.Increment(ref exceptions);
                     }
-                    Check("после Release", slot.Queue, checkSum: false);
+                    Check("after Release", slot.Queue, checkSum: false);
                     Interlocked.Increment(ref released);
                     spin.Reset();
                 }
@@ -444,7 +443,7 @@ internal static class Verifier
                 spinD.SpinOnce(sleep1Threshold: -1);
                 if (sw.Elapsed > TimeSpan.FromSeconds(60))
                 {
-                    violations.Add("диспетчер не продвигается (возможна утечка слотов)");
+                    violations.Add("dispatcher made no progress (possible slot leak)");
                     break;
                 }
                 continue;
@@ -464,8 +463,8 @@ internal static class Verifier
             var hr = reserved ? Interlocked.Increment(ref heldReserved[q]) : Volatile.Read(ref heldReserved[q]);
             var hs = reserved ? Volatile.Read(ref heldShared) : Interlocked.Increment(ref heldShared);
             if (hr > queues[q].Reserved || hs > Workers || (queues[q].MaxConcurrency is int max && hq > max))
-                violations.Add($"удерживается сверх лимита: q{q} {hq}, reserved {hr}, shared {hs}");
-            Check("после Take", q, checkSum: true);
+                violations.Add($"slots held above limit: q{q} {hq}, reserved {hr}, shared {hs}");
+            Check("after Take", q, checkSum: true);
             rings[taken % Releasers].Enqueue((q, reserved));
             taken++;
         }
@@ -476,22 +475,22 @@ internal static class Verifier
         {
             var (r, s, total) = allocator.Counters(names[q]);
             if (r != 0 || s != 0 || total != 0)
-                violations.Add($"в конце q{q}: ({r}, {s}, {total}) ≠ 0");
+                violations.Add($"final counts for q{q}: ({r}, {s}, {total}) ≠ 0");
         }
         if (exceptions != 0)
-            violations.Add($"исключений Take/Release: {exceptions}");
-        return new Outcome("SlotAllocator: 0 ≤ занятость ≤ лимит", variant, violations.IsEmpty,
+            violations.Add($"Take/Release exceptions: {exceptions}");
+        return new Outcome("SlotAllocator: 0 ≤ slots in use ≤ limit", variant, violations.IsEmpty,
             violations.IsEmpty
-                ? $"Take/Release {Total}/{released}, нарушений 0, {sw.Elapsed.TotalSeconds:F1} с"
-                : $"нарушений {violations.Count}: {string.Join("; ", violations.Take(3))}");
+                ? $"Take/Release {Total}/{released}, 0 violations, {sw.Elapsed.TotalSeconds:F1} s"
+                : $"{violations.Count} violations: {string.Join("; ", violations.Take(3))}");
     }
 
     // ---------------------------------------------------------------- ExecutionTable
 
     /// <summary>
-    /// Снимок не теряет записей, существовавших всё время: 500 постоянных записей, 6 потоков непрерывно добавляют и
-    /// удаляют свои (в том числе с более ранними рубежами); 20 000 раз каждый вариант снимка обязан содержать все
-    /// постоянные, а минимум по перечислению — быть не больше минимума постоянных и не меньше минимума всех возможных.
+    /// Checks that snapshots retain all 500 permanent entries while six threads add and remove their own, including earlier deadlines. Across 20,000
+    /// snapshots per variant, each must contain every permanent entry. The enumerated minimum must fall between the minimum possible deadline and
+    /// the minimum permanent deadline.
     /// </summary>
     private static Outcome VerifySnapshots()
     {
@@ -539,17 +538,17 @@ internal static class Verifier
         Volatile.Write(ref stop, true);
         foreach (var t in churners)
             t.Join();
-        return new Outcome("ExecutionTable: снимок без потерь", "Snapshot / без Count / минимум",
+        return new Outcome("ExecutionTable: snapshot retains persistent entries", "Snapshot / without Count / minimum",
             missCurrent + missWithoutCount + badMin == 0,
-            $"{Checks} снимков: потеряно постоянных {missCurrent}/{missWithoutCount}, неверный минимум {badMin}");
+            $"{Checks} snapshots: persistent entries missed {missCurrent}/{missWithoutCount}, incorrect minima {badMin}");
     }
 
     // ---------------------------------------------------------------- LeaseKeeper
 
     /// <summary>
-    /// Рубеж не пропускается: поток диспетчера регистрирует 1 000 000 записей со случайными рубежами (часто раньше
-    /// взведённого), 2 потока делают Rearm с паузами 0–~2 мкс, 3 потока удаляют записи. Пока запись в таблице и отслеживается,
-    /// таймер обязан быть взведён не позже её рубежа: проверяется сразу после Register и перед удалением.
+    /// Checks for missed deadlines. A dispatcher registers 1,000,000 entries with random deadlines, often earlier than the armed deadline. Two
+    /// threads rearm at intervals of 0–about 2 µs and three remove entries. For every tracked entry in the table, the timer must be armed at or
+    /// before its deadline immediately after Register and before removal.
     /// </summary>
     private static Outcome VerifyDeadlines(string variant, Func<ExecutionTable, MonoClock, TimeSpan, ILeaseDeadlines> factory,
         bool expectedToFail)
@@ -619,9 +618,9 @@ internal static class Verifier
             t.Join();
         deadlines.Stop();
         var violations = afterRegister + beforeRemove;
-        return new Outcome("LeaseKeeper: рубеж не пропускается", variant, violations == 0,
-            $"{Total} Register на фоне Rearm: таймер позже рубежа — сразу после Register {afterRegister}, " +
-            $"перед удалением {beforeRemove}; {sw.Elapsed.TotalSeconds:F1} с", expectedToFail);
+        return new Outcome("LeaseKeeper: no missed deadlines", variant, violations == 0,
+            $"{Total} Register calls during Rearm. Timer set past deadline immediately after Register: {afterRegister}, " +
+            $"before removal: {beforeRemove}. Elapsed: {sw.Elapsed.TotalSeconds:F1} s", expectedToFail);
     }
 
     private static void RunThreads(int count, Action<int> body)

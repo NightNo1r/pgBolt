@@ -1,6 +1,6 @@
 namespace PgBolt.Postgres.Client;
 
-/// <summary>In-process сигнал resolver'у: подписчики в copy-on-write массиве, Signal без блокировок и аллокаций.</summary>
+/// <summary>Signals the local resolver using a copy-on-write subscriber array. Signal takes no locks and allocates no memory.</summary>
 public sealed class InProcessCompletionSignal : ICompletionSignal
 {
     private readonly Lock _gate = new();

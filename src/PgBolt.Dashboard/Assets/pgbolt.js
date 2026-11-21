@@ -1,7 +1,7 @@
 // PgBolt dashboard: локальное время, polling только на видимой вкладке, уведомления, «выбрать все». Без eval и inline-скриптов.
 (function () {
     'use strict';
-    var relative = new Intl.RelativeTimeFormat('ru', { numeric: 'auto' });
+    var relative = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
     var units = [['day', 86400], ['hour', 3600], ['minute', 60], ['second', 1]];
 
     function ago(date) {

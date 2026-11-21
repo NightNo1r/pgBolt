@@ -7,8 +7,8 @@ using PgBolt.Postgres.Storage;
 namespace PgBolt.Postgres.Client.Workflows;
 
 /// <summary>
-/// Fluent-построитель workflow: синхронный, не потокобезопасный граф узлов; id — при создании шага;
-/// запись — SubmitAsync одной транзакцией (PgBoltStore.SubmitWorkflowAsync).
+/// Builds a workflow graph synchronously on one thread. Each step gets an ID when created. SubmitAsync writes the graph in one transaction
+/// through PgBoltStore.SubmitWorkflowAsync.
 /// </summary>
 internal sealed class WorkflowBuilder(PgBoltStore store, JobTypesCache jobTypes, IWakeupSignal wakeup, NpgsqlTransaction? transaction,
     PgBoltInstrumentation instrumentation, PgBoltClientMetrics metrics) : IWorkflow
@@ -50,7 +50,7 @@ internal sealed class WorkflowBuilder(PgBoltStore store, JobTypesCache jobTypes,
         return AddJob(scope, parent, condition, null, jobName, args.GetRawText(), options);
     }
 
-    /// <summary>Атомарно: все элементы сериализуются до добавления первого члена — исключение не оставляет в batch части списка.</summary>
+    /// <summary>Serializes all items before adding the first member, so a failure leaves the entire list out of the batch.</summary>
     internal IReadOnlyList<IJobStep> EnqueueManyIn<TArgs>(WorkflowScope scope, IReadOnlyList<TArgs> args, StepOptions? options)
     {
         EnsureUsable(scope);
@@ -138,7 +138,10 @@ internal sealed class WorkflowBuilder(PgBoltStore store, JobTypesCache jobTypes,
             throw new ArgumentOutOfRangeException(nameof(condition), condition, "Unknown continuation condition.");
     }
 
-    /// <summary>Значения опций, RunAt/Delay только без родителя и вне ждущих batch, UniqueKey не у членов и без повторов в графе.</summary>
+    /// <summary>
+    /// Validates step options. RunAt and Delay require a parentless step outside a waiting batch. UniqueKey is disallowed on members and must be
+    /// unique in the graph.
+    /// </summary>
     private void ValidateOptions(WorkflowScope scope, WorkflowNode? parent, StepOptions? options)
     {
         if (options is null)
@@ -202,7 +205,7 @@ internal sealed class WorkflowBuilder(PgBoltStore store, JobTypesCache jobTypes,
     }
 }
 
-/// <summary>Методы узла: продолжения добавляются в область узла, где бы их ни вызвали.</summary>
+/// <summary>Node methods add continuations to the node's scope regardless of the calling scope.</summary>
 internal abstract class NodeStep(WorkflowBuilder workflow, WorkflowNode node) : INodeStep
 {
     public IJobStep ContinueWith<TArgs>(TArgs args, ContinuationCondition condition = ContinuationCondition.OnSuccess,
@@ -231,7 +234,7 @@ internal sealed class BatchStep(WorkflowBuilder workflow, BatchNode node) : Node
 
 internal sealed class ExternalStep(WorkflowBuilder workflow, ExternalNode node) : NodeStep(workflow, node);
 
-/// <summary>Тело batch: всё добавляется в его область (члены batch).</summary>
+/// <summary>Steps added in a batch body become members of that batch.</summary>
 internal sealed class BatchBuilder(WorkflowBuilder workflow, BatchNode batch) : IBatchBuilder
 {
     public IJobStep Enqueue<TArgs>(TArgs args, StepOptions? options = null) => workflow.EnqueueIn(batch.Body, args, options, null, default);

@@ -6,7 +6,7 @@ public sealed class MigrationRunner(NpgsqlDataSource dataSource, string schema)
 {
     private readonly string _schema = SchemaName.Validate(schema);
 
-    /// <summary>Применяет недостающие миграции в одной транзакции под advisory xact lock. Возвращает число применённых.</summary>
+    /// <summary>Applies missing migrations in one transaction under a transaction-level advisory lock. Returns the number applied.</summary>
     public async Task<int> MigrateAsync(CancellationToken ct = default)
     {
         await using var conn = await dataSource.OpenConnectionAsync(ct);

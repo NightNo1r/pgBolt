@@ -37,7 +37,7 @@ namespace PgBolt.Generators.Analysis
             "This assembly has job executors or enqueue calls but no [assembly: PgBoltJsonContext(typeof(...))]",
             Category, DiagnosticSeverity.Error, isEnabledByDefault: true, customTags: WellKnownDiagnosticTags.CompilationEnd);
 
-        /// <summary>Наибольший TimeoutSeconds, не превышающий предел таймеров .NET (2³² − 2 мс = 4294967,294 с).</summary>
+        /// <summary>Largest TimeoutSeconds supported by .NET timers (2³² − 2 ms, or 4294967.294 s).</summary>
         public const int MaxTimeoutSeconds = 4294967;
 
         public static readonly DiagnosticDescriptor InvalidTimeout = new(

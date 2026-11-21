@@ -17,7 +17,7 @@ public sealed partial class PgBoltStore
 
     private string TriggerSql => field ??= Render(TriggerTemplate);
 
-    /// <summary>Scheduled → Enqueued сейчас (§5.8). Возвращает очередь для wakeup или null.</summary>
+    /// <summary>Moves a Scheduled job to Enqueued immediately (§5.8). Returns the queue to wake, or null.</summary>
     public Task<string?> TriggerAsync(Guid jobId, CancellationToken ct) =>
         QueryAsync(TriggerSql, ps =>
         {

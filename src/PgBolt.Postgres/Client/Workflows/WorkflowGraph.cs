@@ -1,21 +1,21 @@
 namespace PgBolt.Postgres.Client.Workflows;
 
-/// <summary>Область построителя (§5.2): корень workflow или тело batch. Тело открыто только на время лямбды batch.</summary>
+/// <summary>Builder scope (§5.2), either the workflow root or a batch body. A batch body stays open only during its callback.</summary>
 internal sealed class WorkflowScope(BatchNode? batch)
 {
     public BatchNode? Batch { get; } = batch;
     public bool Open { get; set; } = batch is null;
 }
 
-/// <summary>Узел графа: задача, batch или существующий родитель (After).</summary>
+/// <summary>A graph node representing a job, batch, or existing parent selected by After.</summary>
 internal abstract class WorkflowNode(Guid id, WorkflowScope scope)
 {
     public Guid Id { get; } = id;
 
-    /// <summary>Область, в которой узел создан; продолжения узла добавляются в неё же.</summary>
+    /// <summary>Scope in which the node was created and to which its continuations belong.</summary>
     public WorkflowScope Scope { get; } = scope;
 
-    /// <summary>У узла есть дети в графе: у задачи — notify = true (§6.1 п. 2).</summary>
+    /// <summary>The node has children in the graph. For a job, this sets notify = true (§6.1, step 2).</summary>
     public bool HasChildren { get; set; }
 
     public abstract bool IsBatch { get; }
@@ -27,7 +27,7 @@ internal sealed class JobNode(Guid id, WorkflowScope scope, WorkflowNode? parent
     public WorkflowNode? Parent { get; } = parent;
     public ContinuationCondition Condition { get; } = condition;
 
-    /// <summary>Типизированный шаг; null — динамический (JobName, умолчания из job_types при SubmitAsync).</summary>
+    /// <summary>Typed step metadata. Null denotes a dynamic step whose JobName defaults are loaded from job_types at submission.</summary>
     public JobDescriptor? Descriptor { get; } = descriptor;
 
     public string? JobName { get; } = jobName;
@@ -49,12 +49,12 @@ internal sealed class BatchNode : WorkflowNode
     public WorkflowNode? Parent { get; }
     public ContinuationCondition Condition { get; }
 
-    /// <summary>§6.1 п. 1: state = 1 у batch-продолжений и у вложенных в них на любой глубине.</summary>
+    /// <summary>Batch continuations and all batches nested inside them have state = 1 (§6.1, step 1).</summary>
     public bool Awaiting { get; }
 
     public WorkflowScope Body { get; }
 
-    /// <summary>Прямые члены: задачи и вложенные batches (total).</summary>
+    /// <summary>Direct members counted in total, including jobs and nested batches.</summary>
     public int Members { get; set; }
 
     public override bool IsBatch => true;

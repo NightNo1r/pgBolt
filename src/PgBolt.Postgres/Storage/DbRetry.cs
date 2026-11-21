@@ -2,7 +2,7 @@ using Npgsql;
 
 namespace PgBolt.Postgres.Storage;
 
-/// <summary>Повтор statement'а при 40P01/40001 вне пользовательской транзакции (§9).</summary>
+/// <summary>Retries a statement on 40P01 or 40001 outside a caller-provided transaction (§9).</summary>
 internal static class DbRetry
 {
     public const int MaxAttempts = 3;

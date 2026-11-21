@@ -4,17 +4,17 @@
    ни скрытого op на форме: htmx применяет их поверх значения нажатой кнопки или отправляет вместе с ним. *@
 @using PgBolt.Postgres.Client
 <form class="pgbolt-actions" @attributes='Post("limit")'>
-    <input type="number" name="value" min="1" placeholder="лимит" aria-label="лимит">
-    <button type="submit" name="op" value="set">Задать лимит</button>
-    @Button("limit", "unlimited", "Без лимита")
-    @Button("limit", "pause", "Пауза")
-    @Button("limit", "reset", "Сбросить к значению из кода")
+    <input type="number" name="value" min="1" placeholder="limit" aria-label="limit">
+    <button type="submit" name="op" value="set">Set limit</button>
+    @Button("limit", "unlimited", "Unlimited")
+    @Button("limit", "pause", "Pause")
+    @Button("limit", "reset", "Restore configured default")
 </form>
 <form class="pgbolt-actions" @attributes='Post("weight")'>
-    <input type="number" name="value" min="1" max="@QueueSettingsManager.MaxWeight" placeholder="вес" aria-label="вес">
-    <button type="submit" name="op" value="set">Задать вес</button>
-    @Button("weight", "none", "Без веса")
-    @Button("weight", "reset", "Сбросить к значению из кода")
+    <input type="number" name="value" min="1" max="@QueueSettingsManager.MaxWeight" placeholder="weight" aria-label="weight">
+    <button type="submit" name="op" value="set">Set weight</button>
+    @Button("weight", "none", "Unweighted")
+    @Button("weight", "reset", "Restore configured default")
 </form>
 
 @code {

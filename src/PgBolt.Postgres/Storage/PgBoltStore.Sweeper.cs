@@ -43,7 +43,7 @@ public sealed partial class PgBoltStore
 
     private string SweepSql => field ??= Render(SweepTemplate);
 
-    /// <summary>Сбрасывает истёкшие lease (§5.6). Можно запускать на всех серверах одновременно.</summary>
+    /// <summary>Resets expired leases (§5.6). Safe to run on all servers concurrently.</summary>
     public Task<int> SweepExpiredLeasesAsync(int batchSize, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);

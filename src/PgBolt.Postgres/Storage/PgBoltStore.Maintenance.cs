@@ -32,8 +32,8 @@ public sealed partial class PgBoltStore
     private string RemoveDeadServersSql => field ??= Render(RemoveDeadServersTemplate);
 
     /// <summary>
-    /// Захват периодической задачи (часть 2 §5.7): upsert строки, если её срок наступил. Возвращает last_run_at захвата (UTC) —
-    /// токен владения для <see cref="CompleteMaintenanceAsync"/>; null — задачу держит другой под.
+    /// Claims a due periodic task by upserting its row (Part 2 §5.7). Returns the claim's UTC last_run_at as the ownership token for
+    /// <see cref="CompleteMaintenanceAsync"/>, or null when another pod holds the task.
     /// </summary>
     public Task<DateTime?> TryClaimMaintenanceAsync(string name, TimeSpan interval, CancellationToken ct)
     {
@@ -46,8 +46,8 @@ public sealed partial class PgBoltStore
     }
 
     /// <summary>
-    /// Результат запуска (§5.7): только пока строку не захватил другой под (last_run_at = claimedAt). retryDelay не null —
-    /// next_run_at сокращается до now() + retryDelay. Возвращает false, если строка перезахвачена.
+    /// Records the result if the claim still belongs to this pod (last_run_at = claimedAt, §5.7). A non-null retryDelay shortens next_run_at to
+    /// now() + retryDelay. Returns false if another pod has reclaimed it.
     /// </summary>
     public async Task<bool> CompleteMaintenanceAsync(string name, DateTime claimedAt, string? error, TimeSpan? retryDelay, CancellationToken ct)
     {
@@ -61,7 +61,7 @@ public sealed partial class PgBoltStore
         }, ct) == 1;
     }
 
-    /// <summary>Уборка строк упавших серверов (§5.6): только heartbeat_at &lt; now() − olderThan.</summary>
+    /// <summary>Removes stale server rows only when heartbeat_at &lt; now() − olderThan (§5.6).</summary>
     public Task<int> RemoveDeadServersAsync(TimeSpan olderThan, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(olderThan, TimeSpan.Zero);

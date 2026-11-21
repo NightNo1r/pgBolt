@@ -1,8 +1,8 @@
-<h1>Типы задач</h1>
+<h1>Job types</h1>
 <div class="pgbolt-table-wrap">
     <table>
         <thead>
-            <tr><th>Тип</th><th>Очередь</th><th>Попытки</th><th>Приоритет</th><th>Опубликовал</th><th>Виден</th>@if (Context.CanAct) { <th></th> }</tr>
+            <tr><th>Type</th><th>Queue</th><th>Attempts</th><th>Priority</th><th>Published by</th><th>Last seen</th>@if (Context.CanAct) { <th></th> }</tr>
         </thead>
         <tbody>
             @foreach (var t in Types)
@@ -16,7 +16,7 @@
                     <td><Time Utc="t.LastSeenAt" /></td>
                     @if (Context.CanAct)
                     {
-                        <td><a href="types/enqueue?name=@Uri.EscapeDataString(t.Name)">Поставить</a></td>
+                        <td><a href="types/enqueue?name=@Uri.EscapeDataString(t.Name)">Enqueue</a></td>
                     }
                 </tr>
             }

@@ -5,8 +5,8 @@ using PgBolt.Postgres.Recurring;
 namespace PgBolt.Postgres.Storage;
 
 /// <summary>
-/// Тик расписаний (часть 4 §5.2): захват FOR UPDATE SKIP LOCKED, планирование в .NET, enqueue групп одним NpgsqlBatch и
-/// сдвиг курсоров — в одной транзакции, поэтому на срабатывание в кластере ставится не больше одной задачи.
+/// Claims schedules with FOR UPDATE SKIP LOCKED, plans occurrences in .NET, enqueues groups in one NpgsqlBatch, and advances cursors in the same
+/// transaction. At most one job per occurrence is enqueued cluster-wide (Part 4 §5.2).
 /// </summary>
 public sealed partial class PgBoltStore
 {
@@ -43,15 +43,14 @@ public sealed partial class PgBoltStore
     private string TickUpdateSql => field ??= Render(TickUpdateTemplate);
 
     /// <summary>
-    /// Строка захвата как есть: значения, которые могут не читаться в .NET-типы или не проходить проверку enqueue (строка
-    /// записана SQL'ем в обход API), читаются в «сырые» типы и проверяются в <see cref="ToTickRow"/> — внутри обработки строки,
-    /// чтобы такая строка была ошибкой строки, а не откатом тика (§2 «Ошибка строки», §5.2 п. 2).
+    /// Raw claimed schedule row. Direct SQL can store values that .NET cannot represent or enqueue rejects. Reads raw values and validates them in
+    /// <see cref="ToTickRow"/> during per-row processing so invalid data fails one row without rolling back the tick (§2, Row Errors, §5.2, step 2).
     /// </summary>
     private sealed record ClaimedRow(string Id, string Type, string ArgsJson, string Cron, string TimeZone, short Misfire,
         NpgsqlInterval CatchUpWindow, short Overlap, DateTime? NextFireAt, string? Queue, short? Priority, int? MaxAttempts,
         int?[]? RetryDelays, bool UnknownType)
     {
-        /// <summary>Исключение — ошибка строки: после проверки EnqueueBatch.Validate не может бросить из-за данных этой строки.</summary>
+        /// <summary>Reports exceptions as row errors. After validation, EnqueueBatch.Validate cannot fail on this row's data.</summary>
         public TickRow ToTickRow()
         {
             if (UnknownType)
@@ -99,8 +98,8 @@ public sealed partial class PgBoltStore
     private readonly record struct CursorUpdate(string Id, DateTime? Next, DateTime? Wake, DateTime? FiredAt, Guid? JobId, string? Error);
 
     /// <summary>
-    /// Только для тестов (§10): вызывается в транзакции тика с захваченными строками — после enqueue и обновления курсоров,
-    /// перед COMMIT. Позволяет удержать тик и проверить конкуренцию с API и синхронизацией. В рабочем коде — null.
+    /// Test callback (§10) invoked inside the tick transaction after enqueue and cursor updates, before COMMIT. Holds the claimed rows so tests can
+    /// exercise concurrent API calls and synchronization. Null in production.
     /// </summary>
     internal Func<CancellationToken, Task>? TickBeforeCommit { get; set; }
 
@@ -228,7 +227,9 @@ public sealed partial class PgBoltStore
         return (rows, dbNow);
     }
 
-    /// <summary>id → created. Id свежие, поэтому !created — конфликт по unique_key (жив предыдущий запуск), без запроса разрешения.</summary>
+    /// <summary>
+    /// Maps ID to created. Fresh IDs mean !created indicates a unique_key conflict with a live previous run, without a conflict lookup.
+    /// </summary>
     private async Task<Dictionary<Guid, bool>> EnqueueFiresAsync(NpgsqlConnection conn, NpgsqlTransaction tx, List<PlannedRow> planned,
         CancellationToken ct)
     {

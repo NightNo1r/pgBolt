@@ -4,16 +4,14 @@
 namespace PgBolt.Benchmarks.Copies;
 
 /// <summary>
-/// Lock-free latched auto-reset событие (§4.3) для одного ожидающего за раз (цикл диспетчера, цикл resolver'а) и любого
-/// числа вызывающих Set. Set без ожидающего сохраняется до следующего WaitAsync (повторные схлопываются); Set будит
-/// ровно одного ожидающего. WaitAsync не бросает на таймаут: true — событие установлено (в том числе латч), false —
-/// истёк таймаут. Второй одновременный WaitAsync — InvalidOperationException.
+/// Lock-free latched auto-reset event (§4.3) for one waiter at a time (dispatcher or resolver loop) and any number of Set callers. With no
+/// waiter, Set latches a signal for the next WaitAsync and repeated calls coalesce. Otherwise it wakes one waiter. WaitAsync returns true on a
+/// signal, including a latched one, and false on timeout. A second concurrent WaitAsync throws InvalidOperationException.
 /// </summary>
 /// <remarks>
-/// Всё состояние — одна ячейка: <c>null</c> (пусто), <see cref="Signaled"/> (латч) или TaskCompletionSource ожидающего;
-/// переходы — CAS. Ожидающего из ячейки снимает ровно один победитель CAS: Set (и завершает его) или сам ожидающий
-/// по таймауту/отмене. Поэтому сигнал на границе таймаута или отмены не теряется и не доставляется дважды, а снятые
-/// ожидающие не накапливаются.
+/// One cell holds <c>null</c> (empty), <see cref="Signaled"/> (latched), or the waiter's TaskCompletionSource. State changes use CAS. Exactly
+/// one CAS winner removes the waiter, either Set to complete it or the waiter itself on timeout or cancellation. A signal at that boundary is
+/// neither lost nor delivered twice, and removed waiters cannot accumulate.
 /// </remarks>
 internal sealed class CasAsyncAutoResetEvent
 {
@@ -82,6 +80,6 @@ internal sealed class CasAsyncAutoResetEvent
 
     private bool TryConsumeLatch() => ReferenceEquals(Interlocked.CompareExchange(ref _state, null, Signaled), Signaled);
 
-    /// <summary>true — ожидающий снят этим вызовом; false — его уже забрал Set.</summary>
+    /// <summary>Returns true if this call removed the waiter, or false if Set already claimed it.</summary>
     private bool Retire(TaskCompletionSource waiter) => ReferenceEquals(Interlocked.CompareExchange(ref _state, null, waiter), waiter);
 }

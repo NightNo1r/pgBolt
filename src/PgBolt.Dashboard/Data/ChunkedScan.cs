@@ -1,19 +1,18 @@
 namespace PgBolt.Dashboard.Data;
 
-/// <summary>Результат порции: подходящие строки и последний просмотренный ключ (Scanned &lt; PortionSize — данные кончились).</summary>
+/// <summary>Matching rows and the last key scanned. Scanned &lt; PortionSize indicates the end of the data.</summary>
 internal sealed record Portion<T>(IReadOnlyList<T> Matches, int Scanned, ListKey? LastScanned);
 
-/// <summary>Страница обхода: Next — ключ продолжения (null — данных больше нет), Incomplete — исчерпан бюджет.</summary>
+/// <summary>A page of scan results. Next is the continuation key, or null at the end. Incomplete means the scan exhausted its budget.</summary>
 internal sealed record ScanResult<T>(IReadOnlyList<T> Rows, ListKey? Next, bool Incomplete);
 
-/// <summary>Обход порциями с бюджетом (§6.3).</summary>
+/// <summary>Scans in chunks within a time budget (§6.3).</summary>
 internal static class ChunkedScan
 {
     public const int PortionSize = 2000;
 
     /// <summary>
-    /// Порции от курсора, пока страница не заполнена, порция не вернула меньше <see cref="PortionSize"/> ключей или не исчерпан
-    /// бюджет (проверяется между порциями). need порции — недостающие строки плюс одна: лишнее совпадение значит «данные есть».
+    /// Scans from the cursor until the page fills, a chunk returns fewer than <see cref="PortionSize"/> keys, or the budget expires between chunks. Requests one extra match to detect another page.
     /// </summary>
     public static async Task<ScanResult<T>> RunAsync<T>(ListKey? after, int pageSize, Func<ListKey?, int, CancellationToken, Task<Portion<T>>> next,
         Func<T, ListKey> keyOf, TimeSpan budget, TimeProvider time, CancellationToken ct)

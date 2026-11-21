@@ -7,10 +7,9 @@ using PgBolt.Benchmarks.Infrastructure;
 namespace PgBolt.Benchmarks.Benchmarks;
 
 /// <summary>
-/// 1 поток диспетчера (Available + Take, как цикл выборки) и N потоков, освобождающих слоты (Release, как завершение
-/// задач). Слоты передаются освобождающим через SPSC-кольца (без Interlocked, одинаково для обоих вариантов).
-/// Очереди: q0 (Reserved 16), q1 (Reserved 16, MaxConcurrency 128); общий пул Workers = 256. 200 000 пар Take/Release
-/// на вызов; результат — время на пару (агрегированно).
+/// One dispatcher calls Available and Take as in the fetch loop, while N threads release slots as jobs finish. SPSC rings transfer slots without
+/// Interlocked in both variants. Queues q0 and q1 each reserve 16 slots. q1 also has MaxConcurrency 128. The shared pool has 256 workers.
+/// Reports aggregate time per pair across 200,000 Take/Release pairs per invocation.
 /// </summary>
 [Config(typeof(BenchConfig))]
 public class SlotAllocatorBenchmarks
@@ -26,7 +25,7 @@ public class SlotAllocatorBenchmarks
     private Action<int> _runLock = null!, _runInterlocked = null!;
     private volatile bool _dispatchDone;
 
-    /// <summary>Число освобождающих потоков (всего потоков — на один больше: 2, 4, 8, 12).</summary>
+    /// <summary>Number of release threads. The dispatcher adds one more, for totals of 2, 4, 8, or 12.</summary>
     [Params(1, 3, 7, 11)]
     public int Releasers { get; set; }
 
@@ -121,7 +120,7 @@ public class SlotAllocatorBenchmarks
     }
 }
 
-/// <summary>long посередине 256-байтного объекта — без ложного разделения кэш-линий (128 байт на Apple M).</summary>
+/// <summary>A long in the middle of a 256-byte object avoids false sharing (128-byte cache lines on Apple M).</summary>
 [StructLayout(LayoutKind.Explicit, Size = 256)]
 internal sealed class PaddedLong
 {

@@ -6,8 +6,8 @@ using PgBolt.Dashboard.Endpoints;
 namespace PgBolt.Dashboard.Security;
 
 /// <summary>
-/// §5.3: контекст запроса в Items, затем локальность без авторизации, политика действий и CSRF для POST. Ассеты проходят
-/// проверку локальности, но политика действий для них не вычисляется (ResolveAsync пропускается).
+/// Stores the context in Items, checks locality for unauthenticated groups, then checks action policy and CSRF for
+/// POST (§5.3). Assets undergo the locality check but skip ResolveAsync.
 /// </summary>
 internal sealed class DashboardAccessFilter(PgBoltDashboardOptions options) : IEndpointFilter
 {
@@ -20,15 +20,15 @@ internal sealed class DashboardAccessFilter(PgBoltDashboardOptions options) : IE
         var policyProvider = http.RequestServices.GetService<IAuthorizationPolicyProvider>();
         var hasFallback = policyProvider is not null && await policyProvider.GetFallbackPolicyAsync() is not null;
         if (!options.AllowAnonymousRemote && !DashboardAccess.HasAuthorization(metadata, hasFallback) && !DashboardAccess.IsLocal(http))
-            return await DashboardView.ErrorAsync(http, 403, "доступ только с локальных запросов: настройте авторизацию группы dashboard");
+            return await DashboardView.ErrorAsync(http, 403, "Local requests only. Configure authorization on the dashboard route group.");
         if (dashboard is null)
             return await next(context);   // ассет: только GET, CanAct не нужен
         if (HttpMethods.IsPost(http.Request.Method))
         {
             if (!dashboard.CanAct)
-                return await DashboardView.ErrorAsync(http, 403, "действия недоступны: режим только для чтения или нет прав ActionsPolicy");
+                return await DashboardView.ErrorAsync(http, 403, "Actions are unavailable in read-only mode or without ActionsPolicy permission");
             if (!DashboardAccess.IsAllowedPost(http.Request))
-                return await DashboardView.ErrorAsync(http, 403, "запрос отклонён проверкой CSRF");
+                return await DashboardView.ErrorAsync(http, 403, "Request rejected by CSRF protection");
         }
         return await next(context);
     }

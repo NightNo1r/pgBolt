@@ -5,7 +5,7 @@ namespace PgBolt.Benchmarks.Copies;
 // из StopAsync, IsWatched, DeadlineOf, ArmAtMost, RearmDeadlineTimer, DueIn. Опущено: heartbeat-цикл и CheckDeadlines
 // (используют те же RearmDeadlineTimer/_table). Таймер — из MonoClock.Time (в бенчмарке — заглушка StubTimeProvider).
 
-/// <summary>Общий контракт вариантов: регистрация (ArmAtMost) и перевзвод (Rearm).</summary>
+/// <summary>Shared deadline variant contract for registration (ArmAtMost) and rearming (Rearm).</summary>
 internal interface ILeaseDeadlines
 {
     void Start();
@@ -17,7 +17,7 @@ internal interface ILeaseDeadlines
     void Stop();
 }
 
-/// <summary>Текущий вариант: ArmAtMost и RearmDeadlineTimer под _timerLock.</summary>
+/// <summary>Current implementation. ArmAtMost and RearmDeadlineTimer run under _timerLock.</summary>
 internal sealed class LockLeaseDeadlines : ILeaseDeadlines
 {
     private readonly ExecutionTable _table;

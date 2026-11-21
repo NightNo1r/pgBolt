@@ -126,7 +126,7 @@ public sealed class AccessEndpointTests(PostgresFixture pg)
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.StartsWith("<!DOCTYPE html>", body, StringComparison.Ordinal);
         Assert.Contains("<base href=\"/pgbolt/\"", body, StringComparison.Ordinal);
-        Assert.Contains("доступ только с локальных запросов", body, StringComparison.Ordinal);
+        Assert.Contains("Local requests only", body, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -1,14 +1,14 @@
 namespace PgBolt.Postgres.Client;
 
 /// <summary>
-/// Пробуждение resolver'а процесса после записи сигналов завершения (часть 5 §6.4): финализация с подписчиками,
-/// CancelBatchAsync, синтетические сигналы SubmitAsync. Сигнал не гарантирован — resolver страхуется интервалом.
+/// Wakes the local resolver after completion signals are written by finalization with subscribers, CancelBatchAsync, or SubmitAsync for
+/// synthetic signals (Part 5 §6.4). Periodic polling covers missed signals.
 /// </summary>
 public interface ICompletionSignal
 {
     void Signal();
 
-    /// <summary>callback вызывается синхронно из Signal; должен быть дешёвым и не блокировать.</summary>
-    /// <returns>Подписка; Dispose отписывает (идемпотентно).</returns>
+    /// <summary>Signal invokes the callback synchronously. Keep it lightweight and nonblocking.</summary>
+    /// <returns>A subscription. Dispose unsubscribes and is idempotent.</returns>
     IDisposable Subscribe(Action callback);
 }

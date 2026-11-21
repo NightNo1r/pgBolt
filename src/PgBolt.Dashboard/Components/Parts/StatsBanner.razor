@@ -1,10 +1,10 @@
 @switch (Freshness.Kind)
 {
     case StatsFreshnessKind.NotRunning:
-        <div class="pgbolt-banner">снимок не обновляется: ни один процесс не выполняет обслуживание (<code>RunMaintenance</code>)</div>
+        <div class="pgbolt-banner">The snapshot is stale. No process is running maintenance (<code>RunMaintenance</code>)</div>
         break;
     case StatsFreshnessKind.Failing:
-        <div class="pgbolt-banner">последний проход снимка статистики завершился ошибкой:<pre>@Freshness.Error</pre></div>
+        <div class="pgbolt-banner">Last statistics snapshot failed:<pre>@Freshness.Error</pre></div>
         break;
 }
 

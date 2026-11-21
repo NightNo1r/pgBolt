@@ -10,7 +10,7 @@ public delegate Task JobInvoker(IServiceProvider services, ReadOnlyMemory<byte> 
 public sealed record JobExecutorRegistration(
     JobDescriptor Descriptor, Type ArgsType, Type JobType, JsonTypeInfo ArgsTypeInfo, JobInvoker Invoke);
 
-/// <summary>Исполнители, зарегистрированные сгенерированными PgBoltJobRegistry.Register (§7).</summary>
+/// <summary>Job executors registered by generated PgBoltJobRegistry.Register methods (§7).</summary>
 public sealed class JobRegistry
 {
     private readonly Dictionary<string, JobExecutorRegistration> _byName = new(StringComparer.Ordinal);
@@ -20,7 +20,7 @@ public sealed class JobRegistry
     public bool TryGet(string name, [MaybeNullWhen(false)] out JobExecutorRegistration registration) =>
         _byName.TryGetValue(name, out registration);
 
-    /// <summary>Записи для job_types: схема аргументов строится JsonSchemaExporter из JsonTypeInfo (§7).</summary>
+    /// <summary>Records for job_types. JsonSchemaExporter builds the argument schema from JsonTypeInfo (§7).</summary>
     public IReadOnlyList<JobTypeRecord> ToJobTypeRecords() =>
         _byName.Values
             .OrderBy(r => r.Descriptor.Name, StringComparer.Ordinal)
@@ -33,7 +33,7 @@ public sealed class JobRegistry
                 r.Descriptor.RetryDelaysSeconds))
             .ToList();
 
-    /// <returns>true — добавлено; false — такая же регистрация уже есть.</returns>
+    /// <returns>True if added. False if an identical registration already exists.</returns>
     internal bool TryAdd(JobExecutorRegistration registration)
     {
         if (!_byName.TryGetValue(registration.Descriptor.Name, out var existing))

@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace PgBolt.Postgres.Diagnostics;
 
-/// <summary>Источник трассировки PgBolt, значение атрибута <c>messaging.system</c> и имена атрибутов span'ов и метрик.</summary>
+/// <summary>PgBolt trace source, <c>messaging.system</c> value, and span and metric attribute names.</summary>
 internal static class PgBoltTelemetry
 {
     public const string System = "pgbolt";
@@ -10,8 +10,7 @@ internal static class PgBoltTelemetry
     public static ActivitySource Source { get; } = new(PgBoltDiagnostics.ActivitySourceName, PgBoltInstrumentation.Version);
 
     /// <summary>
-    /// Id текущего span'а для колонки <c>trace_parent</c>: только в формате W3C. Родитель в формате Hierarchical даёт
-    /// Hierarchical-ребёнка, такой id в колонку не пишется.
+    /// Current span ID for <c>trace_parent</c>, stored only in W3C format. A hierarchical parent produces a hierarchical child whose ID is omitted.
     /// </summary>
     public static string? CurrentTraceParent() =>
         Activity.Current is { IdFormat: ActivityIdFormat.W3C } activity ? activity.Id : null;

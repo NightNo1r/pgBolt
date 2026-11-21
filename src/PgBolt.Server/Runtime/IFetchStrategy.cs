@@ -2,16 +2,16 @@ using PgBolt.Postgres.Storage;
 
 namespace PgBolt.Server.Runtime;
 
-/// <summary>Стратегия выборки задач очереди; <c>LimitReached</c> — кластерный лимит очереди исчерпан.</summary>
+/// <summary>Fetch strategy for a queue. <c>LimitReached</c> means the queue's cluster-wide limit is exhausted.</summary>
 internal interface IFetchStrategy
 {
     Task<LimitedDequeueResult> FetchAsync(string queue, int max, CancellationToken ct);
 }
 
 /// <summary>
-/// Выборка поверх PgBoltStore.DequeueAsync; очереди из <see cref="QueueSettingsSnapshot.Limits"/> —
-/// поверх DequeueLimitedAsync, который сериализует выдачу advisory lock'ом и учитывает кластерный лимит.
-/// Снимок читается при каждом вызове, поэтому смена настроек действует со следующей выборки.
+/// Fetches through PgBoltStore.DequeueAsync. Queues in <see cref="QueueSettingsSnapshot.Limits"/> use
+/// DequeueLimitedAsync, which serializes fetches with an advisory lock and enforces the cluster-wide limit. Each call
+/// reads the snapshot so settings changes apply on the next fetch.
 /// </summary>
 internal sealed class DequeueFetchStrategy(IServerStore store, Guid serverId, TimeSpan lease, Func<QueueSettingsSnapshot> settings) : IFetchStrategy
 {

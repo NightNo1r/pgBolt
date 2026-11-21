@@ -1,9 +1,9 @@
 namespace PgBolt.Postgres.Storage;
 
 /// <summary>
-/// Хранимые коды части 5 (§2.4, §4): jobs.continuation = queue.await_condition = batches.condition; completions.kind
-/// (2/3/4 — исход, 5 Activated, 6 CancelMembers, 7 Subscribed; в SQL — литералами); batches.state (Active/Awaiting;
-/// терминальные совпадают с jobs.state и с kind исхода).
+/// Persisted workflow codes (Part 5 §2.4, §4). jobs.continuation = queue.await_condition = batches.condition. completions.kind uses SQL literals
+/// 2/3/4 for outcomes, 5 for Activated, 6 for CancelMembers, and 7 for Subscribed. batches.state includes Active and Awaiting. Terminal codes
+/// match jobs.state and completion outcome kinds.
 /// </summary>
 internal static class WorkflowCodes
 {
@@ -27,7 +27,7 @@ internal static class WorkflowCodes
         _ => throw new ArgumentOutOfRangeException(nameof(condition), condition, "Unknown continuation condition."),
     };
 
-    /// <summary>1/3 → OnSuccess, 2/4 → OnAnyFinished, 5 и NULL → null (§5.3).</summary>
+    /// <summary>Maps 1/3 to OnSuccess, 2/4 to OnAnyFinished, and 5 or NULL to null (§5.3).</summary>
     public static ContinuationCondition? Condition(short? code) => code switch
     {
         OnSuccessJob or OnSuccessBatch => ContinuationCondition.OnSuccess,
@@ -35,11 +35,11 @@ internal static class WorkflowCodes
         _ => null,
     };
 
-    /// <summary>Родитель-задача: только коды 1, 2.</summary>
+    /// <summary>Only codes 1 and 2 identify a parent job.</summary>
     public static JobId? ParentJob(short? code, Guid? parentId) =>
         code is OnSuccessJob or OnAnyFinishedJob && parentId is { } parent ? new JobId(parent) : null;
 
-    /// <summary>Родитель-batch: только коды 3, 4 (у члена batch-продолжения, код 5, — null).</summary>
+    /// <summary>Only codes 3 and 4 identify a parent batch. Code 5, a member of a batch continuation, returns null.</summary>
     public static BatchId? ParentBatch(short? code, Guid? parentId) =>
         code is OnSuccessBatch or OnAnyFinishedBatch && parentId is { } parent ? new BatchId(parent) : null;
 }

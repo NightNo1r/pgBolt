@@ -3,7 +3,7 @@ using PgBolt.Postgres.Client;
 
 namespace PgBolt.Postgres.Storage;
 
-/// <summary>SQL горячего пути. Каждая операция — один round trip; один partial-файл на операцию.</summary>
+/// <summary>Hot-path SQL, organized by operation in partial files. Each operation takes one round trip.</summary>
 public sealed partial class PgBoltStore
 {
     private const int MaxStatementAttempts = DbRetry.MaxAttempts;
@@ -17,7 +17,10 @@ public sealed partial class PgBoltStore
     {
     }
 
-    /// <param name="retryOnConflict">false — только для тестов, проверяющих отсутствие deadlock.</param>
+    /// <param name="dataSource">PostgreSQL data source.</param>
+    /// <param name="schema">Schema containing the PgBolt tables.</param>
+    /// <param name="usePreparedStatements">Whether to prepare storage statements.</param>
+    /// <param name="retryOnConflict">Set to false only in tests that verify deadlock avoidance.</param>
     internal PgBoltStore(NpgsqlDataSource dataSource, string schema, bool usePreparedStatements, bool retryOnConflict)
     {
         _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
@@ -55,10 +58,10 @@ public sealed partial class PgBoltStore
             return await read(reader, c);
         }, ct);
 
-    /// <summary>In-process сигнал resolver'у (часть 5 §6.3); null — не подавать (хранилище без DI, тесты).</summary>
+    /// <summary>In-process resolver wakeup (Part 5 §6.3). Null disables signaling for stores without DI and in tests.</summary>
     internal ICompletionSignal? Completions { get; init; }
 
-    /// <summary>§6.3: statement финализации записал сигналы — разбудить resolver процесса.</summary>
+    /// <summary>Wakes the local resolver when a finalization statement writes signals (§6.3).</summary>
     private void SignalCompletions(long signals)
     {
         if (signals > 0)
@@ -66,9 +69,9 @@ public sealed partial class PgBoltStore
     }
 
     /// <summary>
-    /// QueryAsync autocommit-statement'а финализации (§6.3): делегат возвращает результат и число записанных сигналов, сигнал
-    /// подаётся после завершения QueryAsync. Внутри делегата ридер открыт, а коммит неявной транзакции наступает только на Sync
-    /// после строк результата: resolver, разбуженный раньше, сигнала не увидит и прождёт ResolverInterval.
+    /// Runs an autocommit finalization statement with QueryAsync (§6.3). The delegate returns the result and the number of signals written. Wake the
+    /// resolver only after QueryAsync completes. The reader remains open inside the delegate, and the implicit transaction commits at Sync after
+    /// result rows. A resolver woken earlier would miss the signal and wait for ResolverInterval.
     /// </summary>
     private async Task<T> QueryAndSignalAsync<T>(string sql, Action<NpgsqlParameterCollection> bind,
         Func<NpgsqlDataReader, CancellationToken, Task<(T Result, long Signals)>> read, CancellationToken ct)

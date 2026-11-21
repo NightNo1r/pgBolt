@@ -4,9 +4,9 @@
 namespace PgBolt.Benchmarks.Copies;
 
 /// <summary>
-/// Latched auto-reset событие (§4.3): Set без ожидающего сохраняется до следующего WaitAsync; Set будит ровно одного
-/// ожидающего. WaitAsync не бросает на таймаут: true — событие установлено (в том числе латч), false — истёк таймаут.
-/// Ожидающий, снятый по таймауту или отмене, удаляется из очереди: простаивающий цикл не копит их.
+/// Latched auto-reset event (§4.3). With no waiter, Set holds a signal for the next WaitAsync. Otherwise it wakes exactly one waiter. WaitAsync
+/// returns true on a signal, including a latched one, and false on timeout. Waiters are removed on timeout or cancellation to prevent
+/// accumulation in idle loops.
 /// </summary>
 internal sealed class LockAsyncAutoResetEvent
 {
@@ -14,7 +14,7 @@ internal sealed class LockAsyncAutoResetEvent
     private readonly LinkedList<TaskCompletionSource> _waiters = new();
     private bool _signaled;
 
-    /// <summary>Число ожидающих в очереди (тесты).</summary>
+    /// <summary>Number of queued waiters, used by tests.</summary>
     internal int WaiterCount
     {
         get
@@ -75,7 +75,7 @@ internal sealed class LockAsyncAutoResetEvent
         _signaled = true;
     }
 
-    /// <summary>true — ожидающий снят этим вызовом; false — его уже завершил Set (сигнал доставлен).</summary>
+    /// <summary>Returns true if this call removed the waiter, or false if Set already signaled and completed it.</summary>
     private bool Retire(LinkedListNode<TaskCompletionSource> node, bool passOn)
     {
         lock (_lock)

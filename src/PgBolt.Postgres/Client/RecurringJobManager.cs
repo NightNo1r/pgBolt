@@ -5,7 +5,7 @@ using PgBolt.Postgres.Storage;
 
 namespace PgBolt.Postgres.Client;
 
-/// <summary>Runtime API расписаний. Валидация — до обращения к БД.</summary>
+/// <summary>Runtime API for recurring schedules. Validates before accessing the database.</summary>
 internal sealed class RecurringJobManager(PgBoltStore store, JobTypesCache jobTypes, IWakeupSignal wakeup,
     PgBoltInstrumentation instrumentation, PgBoltClientMetrics metrics) : IRecurringJobManager
 {
@@ -41,8 +41,8 @@ internal sealed class RecurringJobManager(PgBoltStore store, JobTypesCache jobTy
     public async ValueTask<RecurringJobInfo?> GetAsync(string id, CancellationToken ct = default) => await store.GetRecurringAsync(id, ct);
 
     /// <summary>
-    /// Обычный путь клиента (включая разрешение конфликта) со scheduled_at = now() БД; строку расписания не меняет
-    /// (иначе порядок блокировок был бы обратен тику). paused не учитывается.
+    /// Uses the normal client enqueue path, including conflict resolution, and sets scheduled_at to the database's now(). Leaves the schedule row
+    /// untouched to preserve the tick's lock order. Ignores paused.
     /// </summary>
     public async ValueTask<EnqueueResult?> TriggerAsync(string id, CancellationToken ct = default)
     {

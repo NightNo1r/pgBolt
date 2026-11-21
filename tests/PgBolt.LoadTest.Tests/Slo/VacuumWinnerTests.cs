@@ -64,7 +64,7 @@ public sealed class VacuumWinnerTests
 
         var choice = VacuumWinner.Choose(current, failsDirect);
         Assert.Same(current, choice.Winner);
-        Assert.Contains("расхождение режимов", choice.Reason);
+        Assert.Contains("modes disagree", choice.Reason);
         Assert.Same(current, VacuumWinner.Choose(current, worseInDirect).Winner);
     }
 

@@ -44,10 +44,15 @@ public sealed partial class PgBoltStore
     private string ReleaseSql => field ??= Render(ReleaseTemplate);
 
     /// <summary>
-    /// Возвращает задачу в очередь без траты попытки (attempt − 1, ready = true); при запрошенной отмене финализирует
-    /// её как Cancelled с attempt последней реально запускавшейся попытки (часть 3 §7.1). Fencing по lease_id.
+    /// Returns a job to the queue without consuming an attempt (attempt − 1, ready = true). If cancellation was requested, finalizes as Cancelled
+    /// with the last attempt that actually started (Part 3 §7.1). Fences updates by lease_id.
     /// </summary>
-    /// <param name="ran">true — выполнение было прервано shutdown'ом; false — задача не запускалась.</param>
+    /// <param name="jobId">Job being released.</param>
+    /// <param name="leaseId">Lease token for this execution.</param>
+    /// <param name="serverId">Server that holds the lease.</param>
+    /// <param name="ran">True if shutdown interrupted execution. False if the job never started.</param>
+    /// <param name="message">Optional message for the cancellation event.</param>
+    /// <param name="ct">Token for cancelling the operation.</param>
     public Task<ReleaseOutcome> ReleaseAsync(Guid jobId, Guid leaseId, Guid serverId, bool ran, string? message, CancellationToken ct) =>
         QueryAndSignalAsync<ReleaseOutcome>(ReleaseSql, ps =>
         {

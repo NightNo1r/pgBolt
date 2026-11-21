@@ -18,12 +18,12 @@ public sealed class ReportWriterTests : IDisposable
     private static ReportModel Model() => new(
         OptionsParser.Parse(["sustained", "--mode", "direct"]).Options!, LoadMode.Direct,
         new DateTime(2026, 10, 17, 12, 30, 0), "load_0123456789ab",
-        [("PostgreSQL", "17.6"), ("CPU", "Apple M3, 8 ядер")],
+        [("PostgreSQL", "17.6"), ("CPU", "Apple M3, 8 cores")],
         [
-            new(1, "Пропускная способность", "≥ 95 %", "мин. 99 %", Verdict.Pass, null),
-            new(2, "Задержка старта немедленных", "p99 ≤ 500 мс", "p99 900 мс", Verdict.Fail, "ограничено стендом"),
-            new(4, "Backlog готовых: каждый срез", "≤ rate", "макс. 10", Verdict.Pass, null),
-            new(4, "Backlog готовых: рост за окно замера", "≤ первой + rate", "отрезок короче 2 мин", Verdict.NoData, null),
+            new(1, "Throughput", "≥ 95%", "min 99%", Verdict.Pass, null),
+            new(2, "Immediate job start latency", "p99 ≤ 500 ms", "p99 900 ms", Verdict.Fail, "harness-limited"),
+            new(4, "Ready backlog per sample", "≤ rate", "max 10", Verdict.Pass, null),
+            new(4, "Ready backlog growth over the measurement window", "≤ first + rate", "interval shorter than 2 min", Verdict.NoData, null),
         ],
         SloTestData.Sustained(), StatementsSummary.NoData, new SamplerSummary(1, 2, 3),
         new PgBoltCounters(0, new Dictionary<string, long> { ["ack"] = 2 }, 6_000_000), 0, 0, [], Aborted: false);
@@ -47,18 +47,18 @@ public sealed class ReportWriterTests : IDisposable
 
         foreach (var section in new[]
                  {
-                     "## Параметры прогона", "## Окружение", "## SLO", "## Задержка старта",
-                     "## Пропускная способность по окнам 10 с", "## Enqueue", "## Загрузка CPU стенда",
-                     "## pg_stat_statements", "## Bloat и autovacuum", "## Checkpoint'ы", "## Ожидания LockManager",
-                     "## Корректность и счётчики PgBolt", "## Срез", "## Предупреждения",
+                     "## Run parameters", "## Environment", "## SLO", "## Start latency",
+                     "## Throughput per 10 s window", "## Enqueue", "## Harness CPU usage",
+                     "## pg_stat_statements", "## Bloat and autovacuum", "## Checkpoints", "## LockManager waits",
+                     "## Correctness and PgBolt counters", "## Sampler", "## Warnings",
                  })
             Assert.Contains(section, text);
         Assert.Contains("| PostgreSQL | 17.6 |", text);
-        Assert.Contains("| 1 | Пропускная способность | ≥ 95 % | мин. 99 % | PASS |  |", text);
-        Assert.Contains("| 2 | Задержка старта немедленных | p99 ≤ 500 мс | p99 900 мс | FAIL | ограничено стендом |", text);
-        Assert.Contains("| 4 | Backlog готовых: каждый срез |", text);
-        Assert.Contains("| 4 | Backlog готовых: рост за окно замера | ≤ первой + rate | отрезок короче 2 мин | нет данных |  |", text);
-        Assert.DoesNotContain("прерван", text);
+        Assert.Contains("| 1 | Throughput | ≥ 95% | min 99% | PASS |  |", text);
+        Assert.Contains("| 2 | Immediate job start latency | p99 ≤ 500 ms | p99 900 ms | FAIL | harness-limited |", text);
+        Assert.Contains("| 4 | Ready backlog per sample |", text);
+        Assert.Contains("| 4 | Ready backlog growth over the measurement window | ≤ first + rate | interval shorter than 2 min | no data |  |", text);
+        Assert.DoesNotContain("aborted", text);
     }
 
     [Fact]
@@ -69,8 +69,8 @@ public sealed class ReportWriterTests : IDisposable
 
         Assert.NotEqual(first, second);
         Assert.EndsWith("-sustained-direct-2.md", second);
-        Assert.DoesNotContain("прерван", await File.ReadAllTextAsync(first, TestContext.Current.CancellationToken));
-        Assert.Contains("прерван", await File.ReadAllTextAsync(second, TestContext.Current.CancellationToken));
+        Assert.DoesNotContain("aborted", await File.ReadAllTextAsync(first, TestContext.Current.CancellationToken));
+        Assert.Contains("aborted", await File.ReadAllTextAsync(second, TestContext.Current.CancellationToken));
         Assert.True(File.Exists(Path.ChangeExtension(second, ".csv")));
     }
 
@@ -90,7 +90,7 @@ public sealed class ReportWriterTests : IDisposable
 
         Assert.Contains("| 5 | 55 |  | 500 | 0 |", text);
         Assert.Contains("| 66 | 660 |  | 100 | 0 |", text);
-        Assert.DoesNotMatch(@"(?m)^\| (5|66) \|.*\| да \|$", text);
+        Assert.DoesNotMatch(@"(?m)^\| (5|66) \|.*\| yes \|$", text);
     }
 
     [Fact]
@@ -119,11 +119,11 @@ public sealed class ReportWriterTests : IDisposable
         var text = await File.ReadAllTextAsync(await ReportWriter.WriteAsync(_dir, model), TestContext.Current.CancellationToken);
 
         Assert.Matches(@"(?m)^\| 0 \| 0 \|  \| ", text);
-        Assert.Matches(@"(?m)^\| 1 \| 10 \| да \| .*\|  \|$", text);
+        Assert.Matches(@"(?m)^\| 1 \| 10 \| yes \| .*\|  \|$", text);
         Assert.Matches(@"(?m)^\| 2 \| 20 \|  \| ", text);
-        Assert.Matches(@"(?m)^\| 3 \| 30 \| да \| .*\| да \|$", text);
-        Assert.Contains("| Окон недогруза | 1 из 2 |", text);
-        Assert.Contains("| Прогрев | нет |", text);
+        Assert.Matches(@"(?m)^\| 3 \| 30 \| yes \| .*\| yes \|$", text);
+        Assert.Contains("| Underloaded windows | 1 of 2 |", text);
+        Assert.Contains("| Warmup | none |", text);
         Assert.Contains("| ramp-step-duration |", text);
     }
 
@@ -150,9 +150,9 @@ public sealed class ReportWriterTests : IDisposable
         var text = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
 
         Assert.Equal(Path.Combine(_dir, "20261017-1230-partitions-direct-prepared-p60-extra.md"), path);
-        Assert.Contains("## Блокировки statement'ов", text);
-        Assert.Contains("| dequeue | generic | 9 | 25 | измерение |", text);
-        Assert.Contains("| ack | custom | 0 | 6 | измерение |", text);
+        Assert.Contains("## Statement locks", text);
+        Assert.Contains("| dequeue | generic | 9 | 25 | measured |", text);
+        Assert.Contains("| ack | custom | 0 | 6 | measured |", text);
     }
 
     [Fact]
@@ -162,8 +162,8 @@ public sealed class ReportWriterTests : IDisposable
 
         var text = await File.ReadAllTextAsync(await ReportWriter.WriteAsync(_dir, model), TestContext.Current.CancellationToken);
 
-        Assert.Contains("| Повторные (лишние) выполнения | 3 |", text);
-        Assert.Contains("| Пропущенные выполнения | нет данных |", text);
+        Assert.Contains("| Duplicate (extra) executions | 3 |", text);
+        Assert.Contains("| Missing executions | no data |", text);
     }
 
     [Fact]
@@ -184,7 +184,7 @@ public sealed class ReportWriterTests : IDisposable
 
         var text = await File.ReadAllTextAsync(await ReportWriter.WriteAsync(_dir, model), TestContext.Current.CancellationToken);
 
-        Assert.Contains("| Размер БД в конце прогона, МБ | 12.0 |", text);
+        Assert.Contains("| Database size at end of run, MiB | 12.0 |", text);
     }
 
     [Fact]
@@ -198,18 +198,18 @@ public sealed class ReportWriterTests : IDisposable
         ];
 
         var path = await ReportWriter.WriteSummaryAsync(_dir, new DateTime(2026, 10, 17, 12, 30, 0), options, results,
-            7_808, ["предупреждение"]);
+            7_808, ["warning"]);
         var text = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
 
         Assert.Equal(Path.Combine(_dir, "20261017-1230-partitions-summary.md"), path);
-        Assert.Contains("| Ёмкость таблицы блокировок | 7808 |", text);
+        Assert.Contains("| Lock table capacity | 7808 |", text);
         Assert.Contains("| direct | extra | 60 | FAIL | PASS | 120.5 |  | 3 | 0.50 | 7 |  |", text);
-        Assert.Contains("| bouncer | extra | 200 | нет данных | нет данных | нет данных |  | нет данных | нет данных | нет данных | TimeoutException: x |", text);
-        Assert.Contains("| direct | extra | 60 | dequeue | generic | 9 | 25 | измерение | 0.250 | 1.500 |", text);
-        Assert.Contains("| direct | extra | 15 | ack | custom | 0 | 6 | измерение | нет данных | нет данных |", text);
+        Assert.Contains("| bouncer | extra | 200 | no data | no data | no data |  | no data | no data | no data | TimeoutException: x |", text);
+        Assert.Contains("| direct | extra | 60 | dequeue | generic | 9 | 25 | measured | 0.250 | 1.500 |", text);
+        Assert.Contains("| direct | extra | 15 | ack | custom | 0 | 6 | measured | no data | no data |", text);
         // Порог P: наименьшее P, с которого режим и набор индексов нарушают SLO 1 или 2.
         Assert.Matches(@"(?m)^\| direct \| extra \| 60 \|\r?$", text);
-        Assert.Matches(@"(?m)^\| bouncer \| extra \| нет \|\r?$", text);
-        Assert.Contains("- предупреждение", text);
+        Assert.Matches(@"(?m)^\| bouncer \| extra \| none \|\r?$", text);
+        Assert.Contains("- warning", text);
     }
 }

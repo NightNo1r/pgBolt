@@ -5,7 +5,7 @@ using PgBolt.Postgres.Recurring;
 
 namespace PgBolt.Postgres.Storage;
 
-/// <summary>Расписания: runtime API (часть 4 §4.2) и общие команды вставки/изменения для синхронизации (§6.2).</summary>
+/// <summary>Runtime schedule API (Part 4 §4.2) and shared insert and update commands used by synchronization (§6.2).</summary>
 public sealed partial class PgBoltStore
 {
     private const string InsertRecurringTemplate = """
@@ -75,9 +75,9 @@ public sealed partial class PgBoltStore
     private string GetRecurringForTriggerSql => field ??= Render(GetRecurringForTriggerTemplate);
 
     /// <summary>
-    /// §4.2 AddOrUpdate: транзакция в два round-trip'а. Курсор — after(max(db_now, last_fire_at)) по строке под FOR UPDATE:
-    /// срабатывание, уже поставленное тиком по старому cron, не повторится. Пустой RETURNING вставки — строку создали
-    /// параллельно: повтор с начала видит её под блокировкой.
+    /// AddOrUpdate takes two round trips in one transaction (§4.2). Under FOR UPDATE, sets the cursor to after(max(db_now, last_fire_at)) so an
+    /// occurrence already enqueued under the old cron is not repeated. An empty INSERT RETURNING means a concurrent insert won. Restart to see the
+    /// row under lock.
     /// </summary>
     internal Task<RecurringUpsertResult> UpsertRecurringAsync(RecurringDefinition d, CancellationToken ct)
     {
@@ -129,7 +129,8 @@ public sealed partial class PgBoltStore
     internal async Task<bool> PauseRecurringAsync(string id, CancellationToken ct) =>
         await NonQueryAsync(PauseRecurringSql, ps => P.Add(ps, "id", id), ct) == 1;
 
-    /// <summary>§4.2: wake_at = LEAST(wake_at, now()), кроме NULL (LEAST игнорирует NULL и оживил бы строку без курсора).</summary>
+    /// <summary>Sets wake_at = LEAST(wake_at, now()) except when NULL (§4.2). LEAST ignores NULL and would reactivate a row without a
+    /// cursor.</summary>
     internal async Task<bool> ResumeRecurringAsync(string id, CancellationToken ct) =>
         await NonQueryAsync(ResumeRecurringSql, ps => P.Add(ps, "id", id), ct) == 1;
 
@@ -152,8 +153,8 @@ public sealed partial class PgBoltStore
         }, ct);
 
     /// <summary>
-    /// §4.2 Trigger: catch_up_window, cron и таймзона не читаются — Trigger'у они не нужны. retry_delays нужен задаче, поэтому
-    /// нечитаемое значение — InvalidOperationException, как у GetAsync (тик такую строку тоже не ставит, §5.2 п. 2).
+    /// Trigger skips catch_up_window, cron, and time zone because it uses none of them (§4.2). It needs retry_delays to enqueue, so an unreadable
+    /// value throws InvalidOperationException as in GetAsync. The scheduler tick also skips the invalid row (§5.2, step 2).
     /// </summary>
     internal Task<RecurringTriggerRow?> GetRecurringForTriggerAsync(string id, CancellationToken ct) =>
         QueryAsync<RecurringTriggerRow?>(GetRecurringForTriggerSql, ps => P.Add(ps, "id", id), async (r, c) =>
@@ -162,7 +163,7 @@ public sealed partial class PgBoltStore
                     r.GetNullableValue<int>(4), ReadRetryDelays(id, r.GetNullable<int?[]>(5)), (OverlapPolicy)r.GetInt16(6), r.GetBoolean(7))
                 : null, ct);
 
-    /// <summary>INSERT … ON CONFLICT (id) DO NOTHING RETURNING id: строка результата — вставлено.</summary>
+    /// <summary>INSERT … ON CONFLICT (id) DO NOTHING RETURNING id returns a row only after a successful insert.</summary>
     internal NpgsqlBatchCommand InsertRecurringCommand(RecurringDefinition d, string? owner, DateTime? cursor)
     {
         var cmd = new NpgsqlBatchCommand(InsertRecurringSql);
@@ -170,7 +171,9 @@ public sealed partial class PgBoltStore
         return cmd;
     }
 
-    /// <summary>UPDATE полей определения строки этого владельца; recalc — курсор и wake_at = cursor (смена cron / таймзоны).</summary>
+    /// <summary>
+    /// Updates definition fields for this owner's row. When cron or time zone changes, recalc resets the cursor and sets wake_at to it.
+    /// </summary>
     internal NpgsqlBatchCommand UpdateRecurringCommand(RecurringDefinition d, string? owner, bool recalc, DateTime? cursor)
     {
         var cmd = new NpgsqlBatchCommand(UpdateRecurringSql);
@@ -182,8 +185,8 @@ public sealed partial class PgBoltStore
     internal static DateTime Later(DateTime a, DateTime? b) => b is { } v && v > a ? v : a;
 
     /// <summary>
-    /// Строка, записанная SQL'ем в обход API, может хранить значения, которые не представимы в контракте (§5.2 п. 2): interval
-    /// с месяцами или вне TimeSpan, NULL-элементы retry_delays. Вместо InvalidCastException Npgsql — понятная ошибка.
+    /// Direct SQL writes may store values outside the contract, such as intervals containing months or exceeding TimeSpan, or NULL elements in
+    /// retry_delays (§5.2, step 2). Reports a descriptive error in place of an Npgsql InvalidCastException.
     /// </summary>
     private static TimeSpan ReadCatchUpWindow(string id, NpgsqlInterval value) =>
         value.ToTimeSpanOrNull() ?? throw Unreadable(id, "catch_up_window",

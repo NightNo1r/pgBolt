@@ -9,9 +9,9 @@ using PgBolt.LoadTest.Slo;
 namespace PgBolt.LoadTest.Scenarios;
 
 /// <summary>
-/// Autovacuum <c>queue</c> под нагрузкой B: на каждый режим новая схема с reloptions из <c>--queue-reloptions</c>,
-/// прогрев, фаза 1 (стационарная), фаза 2 (удержание xmin открытой транзакцией), фаза 3 (восстановление), без
-/// дренажа. Окно замера — фазы 1–3. Код — наибольший по режимам.
+/// Measures <c>queue</c> autovacuum under profile B. Each mode gets a fresh schema with reloptions from <c>--queue-reloptions</c>, warmup,
+/// steady state (phase 1), an open transaction holding xmin (phase 2), and recovery (phase 3), without draining. Measurement spans phases 1–3.
+/// Returns the highest exit code across modes.
 /// </summary>
 internal sealed class Vacuum : IScenario
 {
@@ -72,8 +72,8 @@ internal sealed class Vacuum : IScenario
     }
 
     /// <summary>
-    /// Прямое соединение стенда с открытой транзакцией <c>REPEATABLE READ</c> и выполненным <c>SELECT</c>: снимок
-    /// держит xmin, и vacuum не убирает мёртвые строки, пока соединение не закрыто.
+    /// Direct harness connection holding an open <c>REPEATABLE READ</c> transaction after a <c>SELECT</c>. The snapshot pins xmin, preventing vacuum
+    /// from removing the affected dead tuples until the connection closes.
     /// </summary>
     internal static async Task<NpgsqlConnection> HoldXminAsync(string connectionString, string schema,
         CancellationToken ct)
@@ -94,8 +94,8 @@ internal sealed class Vacuum : IScenario
     }
 
     /// <summary>
-    /// Запрос в транзакции удержания: если сервер оборвал сессию (<c>idle_in_transaction_session_timeout</c>, сбой
-    /// соединения), фаза 2 прошла без удержания xmin и её итог ничего не говорит — исключение, прогон прерывается.
+    /// Probes the transaction holding xmin. If the server closed the session due to <c>idle_in_transaction_session_timeout</c> or a disconnect,
+    /// phase 2 lost its xmin hold and its result is invalid. Throws to abort the run.
     /// </summary>
     internal static async Task EnsureHeldAsync(NpgsqlConnection hold, CancellationToken ct)
     {
@@ -104,8 +104,8 @@ internal sealed class Vacuum : IScenario
     }
 
     /// <summary>
-    /// Входы выбора параметров autovacuum: выполнены ли SLO 7–9, пик
-    /// <c>pg_total_relation_size(queue)</c> в фазе 1 и p99 немедленных фазы 1; без срезов или задач фазы 1 — <c>null</c>.
+    /// Inputs for autovacuum tuning: compliance with SLOs 7–9, peak phase 1 <c>pg_total_relation_size(queue)</c>, and phase 1 immediate-job p99.
+    /// Returns <c>null</c> without phase 1 samples or jobs.
     /// </summary>
     private static ModeOutcome? Outcome(RunData data, IReadOnlyList<SloVerdict> verdicts, LatencySummary? phase1Immediate)
     {

@@ -13,7 +13,7 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public static class PgBoltServerServiceCollectionExtensions
 {
-    /// <summary>Добавляет виртуальный сервер (§3.1). Требует AddPgBolt; первый вызов регистрирует единственный hosted service.</summary>
+    /// <summary>Adds a virtual server (§3.1). Requires AddPgBolt. The first call registers a single hosted service.</summary>
     public static IServiceCollection AddPgBoltServer(this IServiceCollection services, string name, Action<PgBoltServerOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -59,7 +59,7 @@ public static class PgBoltServerServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>Глобальный фильтр для всех серверов процесса; выполняется раньше фильтров сервера (§3.6).</summary>
+    /// <summary>Adds a global filter for all servers in this process. It runs before server-specific filters (§3.6).</summary>
     public static IServiceCollection AddPgBoltJobFilter<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] T>(
         this IServiceCollection services) where T : class, IJobFilter
     {
@@ -69,7 +69,7 @@ public static class PgBoltServerServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>Общие настройки обработки процесса (§3.1); порядок относительно AddPgBoltServer не важен.</summary>
+    /// <summary>Configures process-wide job processing (§3.1). Can be called before or after AddPgBoltServer.</summary>
     public static IServiceCollection ConfigurePgBoltProcessing(this IServiceCollection services, Action<PgBoltProcessingOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(services);

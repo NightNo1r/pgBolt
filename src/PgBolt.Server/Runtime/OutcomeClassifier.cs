@@ -3,7 +3,10 @@ using System.Text;
 
 namespace PgBolt.Server.Runtime;
 
-/// <summary>Классификация исхода попытки по ошибке и причине отмены (успех при завершении самим исполнителем обрабатывает CompletionSink).</summary>
+/// <summary>
+/// Classifies the outcome of an attempt from the error and cancellation reason. CompletionSink handles success when the
+/// executor completes the job itself.
+/// </summary>
 internal static class OutcomeClassifier
 {
     private const int MaxTextBytes = 8192;
@@ -34,8 +37,8 @@ internal static class OutcomeClassifier
         RetryOrFail(execution, error, retry, error.Message, JobEventKind.NoExecutor, JobEventKind.NoExecutor);
 
     /// <summary>
-    /// Обрезает до 8 КБ — 8192 байт UTF-8, по границе кодовой точки: суррогатная пара не разрывается, одиночные
-    /// суррогаты исходного текста заменяются на U+FFFD (строгий UTF-8 энкодер Npgsql отверг бы их при каждой отправке).
+    /// Truncates to 8 KiB (8192 UTF-8 bytes) at a code point boundary, preserving surrogate pairs. Replaces unpaired
+    /// surrogates with U+FFFD so Npgsql's strict UTF-8 encoder can send the text on every attempt.
     /// </summary>
     public static string Truncate(string? text)
     {
@@ -57,7 +60,10 @@ internal static class OutcomeClassifier
         return text[..length];
     }
 
-    /// <summary>Одиночный суррогат → U+FFFD (3 байта UTF-8, 1 символ UTF-16). Без одиночных суррогатов — та же строка.</summary>
+    /// <summary>
+    /// Replaces each unpaired surrogate with U+FFFD (3 UTF-8 bytes, 1 UTF-16 code unit). Returns the original string when
+    /// no replacements are needed.
+    /// </summary>
     private static string ReplaceLoneSurrogates(string text)
     {
         var i = text.AsSpan().IndexOfAnyInRange('\uD800', '\uDFFF');

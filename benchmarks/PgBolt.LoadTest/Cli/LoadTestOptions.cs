@@ -4,19 +4,17 @@ internal enum QueueProfile { Standard, Limited }
 
 internal enum Scenario { Sustained, Ramp, Partitions, Vacuum }
 
-/// <summary>Способ подключения нагрузки к БД; <c>*Prepared</c> — с авто-подготовкой statement'ов Npgsql.</summary>
+/// <summary>Database connection mode for the load. <c>*Prepared</c> enables Npgsql automatic statement preparation.</summary>
 internal enum LoadMode { Direct, Bouncer, DirectPrepared, BouncerPrepared }
 
-/// <summary>Набор индексов таблицы <c>jobs</c> в сценарии <c>partitions</c>.</summary>
+/// <summary>Index set for the <c>jobs</c> table in the <c>partitions</c> scenario.</summary>
 internal enum IndexSet { Current, Extra }
 
-/// <summary>Штатные параметры PostgreSQL или параметры исходных замеров стенда.</summary>
+/// <summary>Stock PostgreSQL settings or the settings used in the original load measurements.</summary>
 internal enum PostgresProfile { Bench, Stock }
 
-/// <summary>
-/// Параметры прогона. Значения свойств по умолчанию — для сценариев, где они не переопределены;
-/// остальные значения по умолчанию подставляет <see cref="OptionsParser"/>.
-/// </summary>
+/// <summary>Run options. Property defaults apply to scenarios without overrides. <see cref="OptionsParser"/> supplies remaining
+/// defaults.</summary>
 internal sealed record LoadTestOptions
 {
     public required Scenario Scenario { get; init; }

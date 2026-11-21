@@ -48,7 +48,7 @@ internal sealed partial class DashboardStore
     private string SucceededPortion(string after) => Portion(SucceededKeysTemplate.Replace("{after}", after, StringComparison.Ordinal),
         last: "id", desc: "id", m: SucceededMatches, morder: "m.o1 DESC");
 
-    /// <summary>Failed: события 2, 3, 7 и jobs.state = 3; Cancelled: событие 4 и state = 4 (предикаты частичных индексов).</summary>
+    /// <summary>Failed rows match events 2, 3 or 7 and jobs.state = 3. Cancelled rows match event 4 and state = 4. These predicates match the partial indexes.</summary>
     private string TerminalEventsPortion(bool failed, string after) => Portion(
         TerminalEventsKeysTemplate.Replace("{kinds}", failed ? "IN (2, 3, 7)" : "= 4", StringComparison.Ordinal)
             .Replace("{after}", after, StringComparison.Ordinal),
@@ -62,6 +62,6 @@ internal sealed partial class DashboardStore
     private string CancelledPortionSql => field ??= TerminalEventsPortion(failed: false, "");
     private string CancelledAfterPortionSql => field ??= TerminalEventsPortion(failed: false, TerminalEventsAfter);
 
-    /// <summary>Ключ строки Failed / Cancelled: (at, job_id), at события = jobs.finished_at.</summary>
+    /// <summary>Key for a failed or cancelled row: (at, job_id), where the event timestamp equals jobs.finished_at.</summary>
     private static ListKey TerminalEventKey(JobListRow r) => new(r.Id, r.FinishedAt);
 }

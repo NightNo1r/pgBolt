@@ -3,42 +3,43 @@ using System.Text.Json;
 
 namespace PgBolt;
 
-/// <summary>Условие продолжения (часть 5 §2.2): по исходу родителя — задачи или batch.</summary>
+/// <summary>Determines whether a continuation runs based on the outcome of its parent job or batch (Part 5 §2.2).</summary>
 public enum ContinuationCondition
 {
-    /// <summary>Запуск после Succeeded; Failed — ждать requeue родителя; Cancelled — каскадная отмена.</summary>
+    /// <summary>
+    /// Runs after Succeeded. A Failed parent leaves the continuation waiting for a requeue. A Cancelled parent cancels the continuation.
+    /// </summary>
     OnSuccess,
 
-    /// <summary>Запуск после любого терминального исхода.</summary>
+    /// <summary>Runs after any terminal outcome.</summary>
     OnAnyFinished,
 }
 
 public sealed record WorkflowOptions
 {
     /// <summary>
-    /// Запись графа в транзакции пользователя: только NpgsqlTransaction с уровнем READ COMMITTED (core §5.1). Любое исключение
-    /// SubmitAsync откатывает записи графа до точки сохранения pgbolt_workflow — транзакция остаётся рабочей и не содержит строк
-    /// графа. Коммитить сразу после SubmitAsync: After на задачу в queue держит блокировку её строки, на терминальную — строки
-    /// jobs до коммита: до него Pending-родитель не берётся в работу, heartbeat, ack и fail сервера, выполняющего родителя, ждут
-    /// (ожидание дольше LeaseDuration − HeartbeatInterval — «heartbeat потерян» и отмена всех выполнений сервера), RequeueAsync
-    /// родителя ждёт, а отмена batch родителя стоит на его строке (часть 5 §6.2, §6.5).
+    /// Writes the graph in a caller-provided NpgsqlTransaction using READ COMMITTED (core §5.1). If SubmitAsync throws, graph writes roll back to
+    /// the pgbolt_workflow savepoint and the transaction remains usable. Commit immediately after SubmitAsync. After locks the parent's queue row,
+    /// or its jobs row if terminal, until commit. This blocks dequeue of a Pending parent, heartbeat, ack, and fail for a running parent, and
+    /// RequeueAsync. A heartbeat delayed longer than LeaseDuration − HeartbeatInterval causes that server to cancel all its executions. Cancellation
+    /// of the parent's batch also waits on the locked row (Part 5 §6.2, §6.5).
     /// </summary>
     public DbTransaction? Transaction { get; init; }
 }
 
-/// <summary>EnqueueOptions без Transaction (часть 5 §5.1). Значения [Job] (или job_types) — умолчания.</summary>
+/// <summary>EnqueueOptions for a workflow step, without Transaction (Part 5 §5.1). Defaults come from [Job] or job_types.</summary>
 public sealed record StepOptions
 {
     public string? Queue { get; init; }
     public short? Priority { get; init; }
 
-    /// <summary>Только у корневых задач и членов batch без родителя; взаимоисключимо с Delay.</summary>
+    /// <summary>Run time for root jobs and members of parentless batches. Mutually exclusive with Delay.</summary>
     public DateTimeOffset? RunAt { get; init; }
 
-    /// <summary>Только у корневых задач и членов batch без родителя; отсчитывается от now() сервера БД.</summary>
+    /// <summary>Delay from the database server's now() for root jobs and members of parentless batches.</summary>
     public TimeSpan? Delay { get; init; }
 
-    /// <summary>Не у членов batch; префикс pgbolt: зарезервирован; ключ уникален в пределах графа.</summary>
+    /// <summary>Unique within the graph. Batch members cannot specify a key. The pgbolt: prefix is reserved.</summary>
     public string? UniqueKey { get; init; }
 
     public int? MaxAttempts { get; init; }
@@ -46,58 +47,62 @@ public sealed record StepOptions
 }
 
 /// <summary>
-/// Общий набор методов workflow и тела batch (часть 5 §5.1). Шаги описывают граф синхронно; запись — SubmitAsync. Построитель
-/// не потокобезопасный (§5.2): workflow, его шаги и тела batch вызываются из одного потока.
+/// Methods shared by a workflow and a batch body (Part 5 §5.1). Steps build the graph synchronously. SubmitAsync writes it. Access the workflow,
+/// its steps, and its batch bodies from a single thread (§5.2).
 /// </summary>
 public interface IWorkflowScope
 {
-    /// <remarks>Метаданные TArgs генератор регистрирует по месту вызова, как для EnqueueAsync.</remarks>
+    /// <remarks>The generator registers TArgs metadata at the call site, as it does for EnqueueAsync.</remarks>
     IJobStep Enqueue<TArgs>(TArgs args, StepOptions? options = null);
 
     IJobStep Enqueue(string jobName, JsonElement args, StepOptions? options = null);
 
     /// <summary>
-    /// Batch в этой области; его члены добавляются только внутри <paramref name="build"/>. Исключение <paramref name="build"/>
-    /// (включая ArgumentException пустого batch) делает workflow непригодным: недостроенный batch уже в графе, поэтому
-    /// дальнейшие вызовы методов workflow и его шагов, включая SubmitAsync, — InvalidOperationException; описывать граф заново.
+    /// Starts a batch in this scope. Add its members inside <paramref name="build"/>. If <paramref name="build"/> throws, including
+    /// ArgumentException for an empty batch, the incomplete batch remains in the graph. Subsequent calls on the workflow or its steps, including
+    /// SubmitAsync, throw InvalidOperationException. Build a new graph to retry.
     /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="build"/> — null (workflow остаётся пригодным).</exception>
-    /// <exception cref="ArgumentException">Batch без членов (в том числе вложенный); workflow непригоден.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="build"/> is null. The workflow remains usable.</exception>
+    /// <exception cref="ArgumentException">The batch or a nested batch has no members. The workflow is unusable.</exception>
     /// <exception cref="InvalidOperationException">
-    /// Область закрыта (вызов у закрытого batch), workflow уже отправлен или непригоден после ошибки построения batch.
+    /// The batch scope is closed, the workflow was submitted, or an earlier batch construction failed.
     /// </exception>
     IBatchStep StartBatch(Action<IBatchBuilder> build);
 }
 
-/// <summary>Граф продолжений и batches (часть 5 §5.1); не потокобезопасный (§5.2), одноразовый: после SubmitAsync не используется.</summary>
+/// <summary>
+/// Single-use graph of continuations and batches (Part 5 §5.1). Access it from one thread (§5.2) and discard it after SubmitAsync.
+/// </summary>
 public interface IWorkflow : IWorkflowScope
 {
     /// <summary>
-    /// Продолжения существующей задачи. Задачи нет (или удалена retention'ом, или это id batch) — ParentNotFoundException при
-    /// SubmitAsync. В пользовательской транзакции блокирует строку родителя до её коммита (см. WorkflowOptions.Transaction);
-    /// если родитель — член batch, CancelMembers этого batch стоит на ней, остальные члены отменяются после освобождения.
+    /// Adds continuations to an existing job. SubmitAsync throws ParentNotFoundException if the job never existed, retention removed it, or the ID
+    /// identifies a batch. A caller-provided transaction holds the parent row lock until commit (see WorkflowOptions.Transaction). If the parent is
+    /// a batch member, CancelMembers waits for the lock before cancelling the remaining members.
     /// </summary>
     INodeStep After(JobId existing);
 
     /// <summary>
-    /// Продолжения существующего batch. OnSuccess к Failed-batch ждёт requeue его Failed-членов: они хранятся, пока существует
-    /// строка batch (часть 5 §7.1). Нет batch (или это id задачи) — ParentNotFoundException при SubmitAsync.
+    /// Adds continuations to an existing batch. An OnSuccess continuation of a Failed batch waits for its Failed members to be requeued. Those
+    /// members are retained while the batch row exists (Part 5 §7.1). SubmitAsync throws ParentNotFoundException if the batch is missing or the ID
+    /// identifies a job.
     /// </summary>
     INodeStep After(BatchId existing);
 
     /// <summary>
-    /// Пишет граф одной транзакцией. После вызова — успешного или нет — повторный вызов и любые методы workflow и его шагов —
-    /// InvalidOperationException. Исключения приходят через возвращённый ValueTask; при любом исключении записи графа откатаны
-    /// (в пользовательской транзакции — до точки сохранения, см. WorkflowOptions.Transaction).
+    /// Writes the graph in one transaction. After submission, successful or otherwise, further calls on the workflow or its steps throw
+    /// InvalidOperationException. The returned ValueTask reports exceptions. Any exception rolls back graph writes, using a savepoint in a
+    /// caller-provided transaction (see WorkflowOptions.Transaction).
     /// </summary>
-    /// <exception cref="ArgumentException">Workflow без шагов или After(id) без продолжений.</exception>
-    /// <exception cref="UnknownJobException">Динамический шаг (Enqueue / ContinueWith по имени) с задачей, не опубликованной в job_types.</exception>
-    /// <exception cref="ParentNotFoundException">Родителя After нет: не создавался, другого вида или удалён retention'ом.</exception>
-    /// <exception cref="UniqueKeyConflictException">UniqueKey шага занят активной задачей.</exception>
-    /// <exception cref="NotSupportedException">Транзакция WorkflowOptions.Transaction не READ COMMITTED.</exception>
+    /// <exception cref="ArgumentException">The workflow has no steps, or After(id) has no continuations.</exception>
+    /// <exception cref="UnknownJobException">A dynamic step (Enqueue or ContinueWith by name) refers to a job type absent from
+    /// job_types.</exception>
+    /// <exception cref="ParentNotFoundException">The After parent never existed, has the wrong kind, or was removed by retention.</exception>
+    /// <exception cref="UniqueKeyConflictException">An active job already uses a step's UniqueKey.</exception>
+    /// <exception cref="NotSupportedException">WorkflowOptions.Transaction uses an isolation level other than READ COMMITTED.</exception>
     /// <exception cref="InvalidOperationException">
-    /// Повторный вызов; вызов внутри лямбды batch; workflow непригоден после исключения лямбды StartBatch / ContinueWithBatch.
-    /// ParentNotFoundException и UniqueKeyConflictException — наследники InvalidOperationException: перехватывать их раньше.
+    /// Submission was repeated, called inside a batch callback, or attempted after a StartBatch or ContinueWithBatch callback threw. Catch
+    /// ParentNotFoundException and UniqueKeyConflictException before this base exception.
     /// </exception>
     ValueTask<WorkflowResult> SubmitAsync(CancellationToken ct = default);
 }
@@ -105,13 +110,13 @@ public interface IWorkflow : IWorkflowScope
 public interface IBatchBuilder : IWorkflowScope
 {
     /// <summary>
-    /// Члены batch по одному на элемент, в порядке списка. Атомарен: исключение (сериализации любого элемента, проверки
-    /// <paramref name="options"/>) не добавляет ни одного члена.
+    /// Adds one batch member per item, in list order. If any item fails serialization or <paramref name="options"/> fails validation, no members are
+    /// added.
     /// </summary>
     IReadOnlyList<IJobStep> EnqueueMany<TArgs>(IReadOnlyList<TArgs> args, StepOptions? options = null);
 }
 
-/// <summary>Узел графа: задача, batch или существующий узел (After). Продолжения добавляются в область этого узла.</summary>
+/// <summary>A job, a batch, or an existing node selected by After. Its continuations belong to the same scope.</summary>
 public interface INodeStep
 {
     IJobStep ContinueWith<TArgs>(TArgs args, ContinuationCondition condition = ContinuationCondition.OnSuccess,
@@ -121,20 +126,20 @@ public interface INodeStep
         ContinuationCondition condition = ContinuationCondition.OnSuccess, StepOptions? options = null);
 
     /// <summary>
-    /// Batch-продолжение этого узла в его области; члены добавляются только внутри <paramref name="build"/>. Исключение
-    /// <paramref name="build"/> (включая ArgumentException пустого batch) делает workflow непригодным: недостроенный batch уже
-    /// в графе, поэтому дальнейшие вызовы методов workflow и его шагов, включая SubmitAsync, — InvalidOperationException.
+    /// Adds a batch continuation in this node's scope. Add its members inside <paramref name="build"/>. If <paramref name="build"/> throws,
+    /// including ArgumentException for an empty batch, the incomplete batch remains in the graph. Subsequent calls on the workflow or its steps,
+    /// including SubmitAsync, throw InvalidOperationException.
     /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="build"/> — null (workflow остаётся пригодным).</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Неизвестное значение <paramref name="condition"/> (workflow остаётся пригодным).</exception>
-    /// <exception cref="ArgumentException">Batch без членов (в том числе вложенный); workflow непригоден.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="build"/> is null. The workflow remains usable.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The <paramref name="condition"/> value is unknown. The workflow remains usable.</exception>
+    /// <exception cref="ArgumentException">The batch or a nested batch has no members. The workflow is unusable.</exception>
     /// <exception cref="InvalidOperationException">
-    /// Область узла закрыта (член закрытого batch), workflow уже отправлен или непригоден после ошибки построения batch.
+    /// The node belongs to a closed batch, the workflow was submitted, or an earlier batch construction failed.
     /// </exception>
     IBatchStep ContinueWithBatch(Action<IBatchBuilder> build,
         ContinuationCondition condition = ContinuationCondition.OnSuccess);
 
-    /// <summary>Делегирует workflow: <see cref="IWorkflow.SubmitAsync"/>, те же исключения.</summary>
+    /// <summary>Delegates submission to <see cref="IWorkflow.SubmitAsync"/> and reports the same exceptions.</summary>
     /// <inheritdoc cref="IWorkflow.SubmitAsync" path="/exception"/>
     ValueTask<WorkflowResult> SubmitAsync(CancellationToken ct = default);
 }
@@ -149,5 +154,5 @@ public interface IBatchStep : INodeStep
     BatchId Id { get; }
 }
 
-/// <summary>Id всех задач и batch графа в порядке создания шагов.</summary>
+/// <summary>IDs of all jobs and batches in the graph, in step creation order.</summary>
 public sealed record WorkflowResult(IReadOnlyList<JobId> Jobs, IReadOnlyList<BatchId> Batches);

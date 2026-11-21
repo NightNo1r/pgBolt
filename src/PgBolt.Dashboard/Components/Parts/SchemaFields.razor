@@ -59,9 +59,9 @@
 @code {
     [Parameter] public IReadOnlyList<FormField> Fields { get; set; } = [];
 
-    /// <summary>Отправленные значения (повтор формы с ошибками); null — пустая форма.</summary>
+    /// <summary>Submitted values for redisplaying a form with errors. Null indicates an empty form.</summary>
     [Parameter] public IFormCollection? Values { get; set; }
 
-    /// <summary>Ошибки по имени поля формы (args.{Path}).</summary>
+    /// <summary>Errors keyed by form field name (args.{Path}).</summary>
     [Parameter] public IReadOnlyList<FieldError> Errors { get; set; } = [];
 }

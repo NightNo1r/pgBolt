@@ -3,16 +3,14 @@ using PgBolt.Benchmarks.Copies;
 namespace PgBolt.Benchmarks.Alternatives;
 
 /// <summary>
-/// Lock-free аллокатор: счётчики — Interlocked. Take и Available вызывает только поток диспетчера (единственный, кто
-/// увеличивает счётчики); Release — любые потоки: Decrement счётчика очереди, затем общего.
+/// Lock-free allocator using Interlocked counters. Only the dispatcher calls Take and Available and increments counters. Any thread can Release,
+/// decrementing the queue counter before the shared counter.
 /// </summary>
 /// <remarks>
-/// Почему не превышаются лимиты: счётчики растут только в Take (один поток), Release лишь уменьшает их — любое
-/// прочитанное диспетчером значение не меньше истинного, свободных слотов он видит не больше, чем есть. Промежуточное
-/// состояние Release (очередь уже освобождена, общий счётчик ещё нет) занижает свободный общий пул (консервативно),
-/// а ограничение MaxConcurrency считается по счётчикам очереди. Отрицательный счётчик после Decrement — двойной Release:
-/// откат и InvalidOperationException, как в продукте. План выборки (Plan) читал бы счётчики так же — без атомарного
-/// снимка, только консервативно.
+/// Only Take increases counters, and Release can only decrease them. Any count the dispatcher reads is at least the true count, so it never
+/// overestimates free slots. Between the two Release decrements it may conservatively undercount free shared slots. Queue counters enforce
+/// MaxConcurrency. A negative decrement means a duplicate Release, which rolls back and throws InvalidOperationException as in production. Plan
+/// would read the same conservative counters without an atomic snapshot.
 /// </remarks>
 internal sealed class InterlockedSlotAllocator : ISlotAllocator
 {
@@ -30,10 +28,10 @@ internal sealed class InterlockedSlotAllocator : ISlotAllocator
             _queues.Add(q.Name, new QueueSlots(q.Reserved, q.MaxConcurrency));
     }
 
-    /// <summary>Только поток диспетчера.</summary>
+    /// <summary>Dispatcher thread only.</summary>
     public int Available(string queue) => AvailableCore(Get(queue));
 
-    /// <summary>Только поток диспетчера.</summary>
+    /// <summary>Dispatcher thread only.</summary>
     public bool Take(string queue)
     {
         var slots = Get(queue);
