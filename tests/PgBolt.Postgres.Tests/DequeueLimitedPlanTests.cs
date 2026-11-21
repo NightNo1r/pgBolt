@@ -11,13 +11,15 @@ namespace PgBolt.Postgres.Tests;
 [Trait("Category", "Slow")]
 public sealed class DequeueLimitedPlanTests(PostgresFixture pg) : StoreTestBase(pg, ConnectionMode.Direct)
 {
+    private const int SeedTimeoutSeconds = 120;
+
     protected override Task<TestDb> CreateDbAsync() => TestDb.CreateAsync(Pg, ConnectionMode.Direct, partitionDaysAhead: 9);
 
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
         // id как у UUIDv7: миллисекунды внутри суток d (партиция jobs того же дня), затем уникальный g.
-        await Db.ExecAsync("""
+        await using var seed = Db.Admin.CreateCommand(Db.Sql("""
             INSERT INTO {schema}.jobs (id, type, queue, priority, args, state, max_attempts, created_at)
             SELECT (lpad(to_hex(((extract(epoch FROM (now() AT TIME ZONE 'UTC')::date + d) * 1000)::bigint + g)), 12, '0')
                     || '7' || lpad(to_hex(d * 1000000 + g), 19, '0'))::uuid,
@@ -26,7 +28,11 @@ public sealed class DequeueLimitedPlanTests(PostgresFixture pg) : StoreTestBase(
             INSERT INTO {schema}.queue (job_id, queue, priority, run_at, ready, max_attempts)
             SELECT id, 'q', 0, now() - interval '1 minute', true, 3 FROM {schema}.jobs WHERE queue = 'q';
             ANALYZE {schema}.jobs, {schema}.queue;
-            """);
+            """));
+        // Массовая загрузка на общем раннере может занять больше стандартных 30 секунд.
+        seed.CommandTimeout = SeedTimeoutSeconds;
+        await seed.ExecuteNonQueryAsync(Ct);
+
         Assert.Equal(300_000L, await CountAsync("queue"));
         Assert.Equal(1_400_000L, await CountAsync("jobs"));
     }
